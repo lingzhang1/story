@@ -1,0 +1,21 @@
+version: 0.2
+
+# Throwaway buildspec used by the ad-hoc CodeBuild project to build the
+# Story API image and push it to ECR — so App Runner has an image to pull.
+# Not part of the app; lives only in the CodeBuild source zip.
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to ECR...
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
+      - REPO_URI="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME"
+  build:
+    commands:
+      - echo Building image...
+      - docker build -f apps/api/Dockerfile -t "$REPO_URI:latest" .
+  post_build:
+    commands:
+      - echo Pushing image...
+      - docker push "$REPO_URI:latest"
+      - echo Done.

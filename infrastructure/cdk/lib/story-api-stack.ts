@@ -30,17 +30,18 @@ export class StoryApiStack extends cdk.Stack {
     const { environment } = props;
 
     // --- ECR repository for the App Runner image -------------------------
-    const repository = new ecr.Repository(this, "StoryApiRepo", {
-      imageScanOnPush: true,
-      // Keep the repo removable in non-prod; production would override.
-      removalPolicy:
-        environment === "production"
-          ? cdk.RemovalPolicy.RETAIN
-          : cdk.RemovalPolicy.DESTROY,
-      lifecycleRules: [
-        { maxImageCount: 10, description: "Retain only the 10 newest images" },
-      ],
-    });
+    // Stable, deterministic name so the image can be built + pushed (via
+    // CodeBuild or local Docker) BEFORE App Runner is created — App Runner
+    // requires an image to exist at service-create time. The repo itself is
+    // created out-of-band (aws ecr create-repository) and referenced here by
+    // name, so this stack owns only App Runner + roles and can be deployed
+    // once, after the image is in place.
+    const repositoryName = `story-${environment}-api`;
+    const repository = ecr.Repository.fromRepositoryName(
+      this,
+      "StoryApiRepo",
+      repositoryName
+    );
 
     // --- App Runner access role (pull image from ECR) --------------------
     const accessRole = new iam.Role(this, "StoryApiAccessRole", {

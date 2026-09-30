@@ -14,8 +14,18 @@ function synth(): Template {
 describe("StoryApiStack (Milestone A)", () => {
   const template = synth();
 
-  test("provisions exactly one ECR repository", () => {
-    template.resourceCountIs("AWS::ECR::Repository", 1);
+  test("references the ECR repo by stable name (created out-of-band, not in-template)", () => {
+    // The repo is created out-of-band so the image can be pushed before
+    // App Runner is created; the stack references it by name. Therefore the
+    // template creates NO ECR repository resource itself...
+    template.resourceCountIs("AWS::ECR::Repository", 0);
+    // ...and App Runner pulls from an image identifier containing the
+    // stable repo name `story-test-api`.
+    const services = template.findResources("AWS::AppRunner::Service");
+    const svc = Object.values(services)[0] as any;
+    const imageId =
+      svc.Properties.SourceConfiguration.ImageRepository.ImageIdentifier;
+    expect(JSON.stringify(imageId)).toContain("story-test-api");
   });
 
   test("provisions an App Runner service", () => {
