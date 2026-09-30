@@ -1,0 +1,26 @@
+{
+  "name": "story-cdk",
+  "version": "0.1.0",
+  "description": "Story AWS infrastructure (CDK, TypeScript) — Milestone A: ECR + App Runner only",
+  "private": true,
+  "bin": {
+    "story": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "cdk synth",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "aws-cdk": "2.1143.0",
+    "aws-cdk-lib": "2.160.0",
+    "constructs": "^10.3.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.5",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.4.5"
+  }
+}

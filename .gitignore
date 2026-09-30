@@ -1,0 +1,42 @@
+# === Nested existing repos — tracked in their own repos, not here ===
+/specs/
+/prototypes/
+/StorySpecs/
+/demos/
+
+# === OS ===
+.DS_Store
+
+# === Python ===
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# === Node / CDK ===
+node_modules/
+infrastructure/cdk/cdk.out/
+infrastructure/cdk/**/*.js
+infrastructure/cdk/**/*.d.ts
+!infrastructure/cdk/jest.config.js
+
+# === Xcode / iOS ===
+apps/ios/**/build/
+apps/ios/**/DerivedData/
+apps/ios/**/*.xcuserstate
+apps/ios/**/xcuserdata/
+apps/ios/**/.swiftpm/
+
+# === env / secrets ===
+.env
+.env.*
+!.env.example
+
+# === KiroCrew session settings (not project source) ===
+.kiro/

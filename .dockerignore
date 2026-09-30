@@ -1,0 +1,45 @@
+# The Story API image is built from the repo root:
+#   docker build -f apps/api/Dockerfile -t story-api .
+# Exclude everything the runtime container does not need
+# (04-aws-infrastructure.md §43).
+
+# iOS source — never in the backend image
+apps/ios/
+
+# Infrastructure / CDK
+infrastructure/
+
+# Specs, prototypes, demos, evals — reference/dev only
+specs/
+StorySpecs/
+prototypes/
+demos/
+evals/
+scripts/
+
+# Tests and test fixtures
+**/tests/
+contracts/openapi/openapi.json
+
+# Python caches / virtualenvs
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node / CDK build output
+**/node_modules/
+infrastructure/cdk/cdk.out/
+
+# VCS / OS / env
+.git/
+.gitignore
+**/.DS_Store
+.env
+.env.*

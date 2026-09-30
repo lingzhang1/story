@@ -1,0 +1,25 @@
+[project]
+name = "story"
+version = "0.1.0"
+description = "Story monorepo — backend, engines, and contracts (Python side)"
+requires-python = ">=3.12"
+# Runtime deps live in apps/api/pyproject.toml. This root project exists so
+# `pytest` runs from the repo root with the engine/contracts/app packages
+# all importable (see conftest.py, which puts the right directories on
+# sys.path — the simplest working approach for the walking skeleton).
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/api/tests", "contracts/tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

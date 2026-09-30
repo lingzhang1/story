@@ -1,0 +1,23 @@
+[project]
+name = "story-api"
+version = "0.1.0"
+description = "Story API — FastAPI orchestration layer (Milestone A walking skeleton)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]

@@ -1,0 +1,241 @@
+{
+  "$defs": {
+    "AssetDTO": {
+      "additionalProperties": false,
+      "description": "Wire shape of an Asset.\n\nLOCAL-FIRST: `local_uri` is a device-local reference the client owns.\nThe backend never receives the bytes; this DTO carries the reference\nstring only, never a cloud URL and never the media itself.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "local_uri": {
+          "title": "Local Uri",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "local_uri",
+        "duration_seconds",
+        "source",
+        "created_at"
+      ],
+      "title": "AssetDTO",
+      "type": "object"
+    },
+    "CreativeIntentDTO": {
+      "additionalProperties": false,
+      "description": "Wire shape of a derived CreativeIntent.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "raw_text": {
+          "title": "Raw Text",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "theme": {
+          "title": "Theme",
+          "type": "string"
+        },
+        "tone": {
+          "title": "Tone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "raw_text",
+        "theme",
+        "tone",
+        "summary",
+        "created_at"
+      ],
+      "title": "CreativeIntentDTO",
+      "type": "object"
+    },
+    "GeneratedOutputDTO": {
+      "additionalProperties": false,
+      "description": "Wire shape of a GeneratedOutput (metadata only \u2014 no media).",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "moment_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Moment Ids",
+          "type": "array"
+        },
+        "story_id": {
+          "format": "uuid",
+          "title": "Story Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "story_id",
+        "title",
+        "duration_seconds",
+        "created_at"
+      ],
+      "title": "GeneratedOutputDTO",
+      "type": "object"
+    },
+    "MomentDTO": {
+      "additionalProperties": false,
+      "description": "Wire shape of a Moment (embeds its Asset).",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/AssetDTO"
+        },
+        "caption": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Caption"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "story_id": {
+          "format": "uuid",
+          "title": "Story Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "story_id",
+        "asset",
+        "source",
+        "created_at"
+      ],
+      "title": "MomentDTO",
+      "type": "object"
+    },
+    "StoryStatus": {
+      "description": "Wire copy of the domain status enum (network-facing).",
+      "enum": [
+        "active",
+        "completed"
+      ],
+      "title": "StoryStatus",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire shape of a Story aggregate.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "creative_intent": {
+      "$ref": "#/$defs/CreativeIntentDTO"
+    },
+    "generated_outputs": {
+      "items": {
+        "$ref": "#/$defs/GeneratedOutputDTO"
+      },
+      "title": "Generated Outputs",
+      "type": "array"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "moments": {
+      "items": {
+        "$ref": "#/$defs/MomentDTO"
+      },
+      "title": "Moments",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/StoryStatus"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "status",
+    "creative_intent",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "Story",
+  "type": "object"
+}
