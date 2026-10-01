@@ -40,3 +40,8 @@ apps/ios/**/.swiftpm/
 
 # === KiroCrew session settings (not project source) ===
 .kiro/
+
+# === Xcode user state (per-user, not shared) ===
+*.xcuserstate
+**/xcuserdata/
+**/*.xcuserdatad/
