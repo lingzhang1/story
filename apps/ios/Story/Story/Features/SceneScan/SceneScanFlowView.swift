@@ -1,29 +1,44 @@
 import SwiftUI
+import SwiftData
 
-// SceneScanFlowView — the Scene Scan user flow (Milestone C2).
+// SceneScanFlowView — the DIRECT consumer flow (Milestone C3B).
 //
-// intro -> scanning (live capture) -> analyzing -> success | failed.
-// It PRESENTS the scene observations the backend returns; it does NOT create
-// Moments, write SwiftData, or suggest shot ideas/directions. On failure it
-// shows the error and offers retry — it NEVER fabricates observations.
+//   intro
+//     -> scanning (live capture)
+//     -> analyzing      ("Looking at your scene…")      [SceneUnderstanding]
+//     -> planning       ("Finding the best way to capture this…") [Director]
+//     -> recommendation (ONE Director recommendation + shot guidance)
+//     -> camera (real capture) -> Moment -> dismiss
+//
+// The user experiences Story's CONCLUSION, not its pipeline. Raw
+// SceneUnderstanding / StoryPlan / beats are hidden behind a DEBUG disclosure
+// (§3, §4). On failure we surface a recoverable retry and NEVER fabricate a
+// scene read or a recommendation (§8). No real Shot Validation (that is C4);
+// after capture we use the existing accepted-capture behavior.
 struct SceneScanFlowView: View {
-    enum ScanState {
+    enum FlowState {
         case intro
         case scanning
-        case analyzing
-        case success(SceneUnderstandingContractDTO)
-        case failed(String)
+        case analyzing                                   // SceneUnderstanding in flight
+        case planning(SceneUnderstandingContractDTO)     // Director in flight
+        case recommendation(SceneUnderstandingContractDTO, DirectorOutputDTO)
+        case failed(String, retry: RetryKind)
     }
+    enum RetryKind { case rescan, replan(SceneUnderstandingContractDTO) }
 
-    // One capture session identity per flow instance.
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var story: StoryModel
+
     let captureSessionId: UUID = UUID()
-    let storyId: UUID?
     let mode: String = "shoot_moment"
 
-    @Environment(\.dismiss) private var dismiss
-    @State private var state: ScanState = .intro
+    @State private var state: FlowState = .intro
+    @State private var showCamera = false
+    @State private var lastScanToRecommendationMs: Int?
 
-    private let service = SceneUnderstandingService()
+    private let sceneService = SceneUnderstandingService()
+    private let directorService = StoryDirectorService()
 
     private let bg = Color(red: 0.04, green: 0.04, blue: 0.043)
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
@@ -33,11 +48,12 @@ struct SceneScanFlowView: View {
         ZStack {
             bg.ignoresSafeArea()
             switch state {
-            case .intro:     introView
-            case .scanning:  Color.clear
-            case .analyzing: analyzingView
-            case .success(let dto): successView(dto)
-            case .failed(let message): failedView(message)
+            case .intro:                      introView
+            case .scanning:                   Color.clear
+            case .analyzing:                  statusView("Looking at your scene…")
+            case .planning:                   statusView("Finding the best way to capture this…")
+            case .recommendation(let su, let out): recommendationView(su, out)
+            case .failed(let message, let retry): failedView(message, retry)
             }
         }
         .fullScreenCover(isPresented: scanningBinding) {
@@ -47,14 +63,19 @@ struct SceneScanFlowView: View {
             )
             .ignoresSafeArea()
         }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraCaptureView(
+                onFinish: { url, dur in handleCapture(tempURL: url, duration: dur) },
+                onCancel: { showCamera = false }
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private var scanningBinding: Binding<Bool> {
         Binding(
             get: { if case .scanning = state { return true } else { return false } },
-            set: { presenting in
-                if !presenting, case .scanning = state { state = .intro }
-            }
+            set: { presenting in if !presenting, case .scanning = state { state = .intro } }
         )
     }
 
@@ -70,207 +91,199 @@ struct SceneScanFlowView: View {
                 .font(.system(size: 18, weight: .light))
                 .foregroundStyle(ink.opacity(0.7))
             Spacer()
-            Button { state = .scanning } label: {
-                Text("Start Scan")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(gold)
-                    .foregroundStyle(.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
+            primaryButton("Start Scan") { state = .scanning }
             Button("Cancel") { dismiss() }
-                .foregroundStyle(.gray)
-                .frame(maxWidth: .infinity)
+                .foregroundStyle(.gray).frame(maxWidth: .infinity)
         }
         .padding(24)
     }
 
-    // MARK: - analyzing
+    // MARK: - status (analyzing / planning) — consumer language, never jargon
 
-    private var analyzingView: some View {
+    private func statusView(_ label: String) -> some View {
         VStack(spacing: 20) {
-            ProgressView()
-                .tint(gold)
-                .scaleEffect(1.4)
-            Text("Reading the scene…")
+            ProgressView().tint(gold).scaleEffect(1.4)
+            Text(label)
                 .font(.system(size: 20, weight: .light, design: .serif))
                 .foregroundStyle(ink)
+                .multilineTextAlignment(.center)
         }
+        .padding(32)
     }
 
-    // MARK: - success (read-only observations)
+    // MARK: - recommendation (the Director's ONE strong next action)
 
-    private func successView(_ dto: SceneUnderstandingContractDTO) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(dto.summary)
-                    .font(.system(size: 22, weight: .light, design: .serif))
-                    .foregroundStyle(ink)
-
-                if !dto.environmentTags.isEmpty {
-                    section("Environment") {
-                        chipFlow(dto.environmentTags)
-                    }
+    private func recommendationView(_ su: SceneUnderstandingContractDTO,
+                                    _ out: DirectorOutputDTO) -> some View {
+        // The shot the Director wants captured now (capture_shot/retry_shot carry it;
+        // otherwise fall back to the plan's first shot for guidance display).
+        let shot = out.decision.shot ?? out.plan.shots.first
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                // What Story is trying to capture (concept = the point of view).
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Here's your shot")
+                        .font(.headline).foregroundStyle(gold)
+                    Text(out.concept.title)
+                        .font(.system(size: 26, weight: .light, design: .serif))
+                        .foregroundStyle(ink)
                 }
 
-                if !dto.subjects.isEmpty {
-                    section("Subjects") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(dto.subjects.enumerated()), id: \.offset) { _, subject in
-                                HStack(spacing: 8) {
-                                    chip(subject.label)
-                                    if let prominence = subject.prominence {
-                                        Text(prominence.rawValue)
-                                            .font(.caption)
-                                            .foregroundStyle(ink.opacity(0.6))
-                                    }
-                                    if let note = subject.note {
-                                        Text(note)
-                                            .font(.caption)
-                                            .foregroundStyle(ink.opacity(0.6))
-                                    }
-                                }
-                            }
+                // The user-facing instruction — the primary content.
+                if let shot {
+                    Text(shot.instruction)
+                        .font(.system(size: 20, weight: .light, design: .serif))
+                        .foregroundStyle(ink)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Light, optional guidance rows — no filmmaking jargon dump.
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let action = shot.subjectAction, !action.isEmpty {
+                            guidanceRow("Subject", action)
+                        }
+                        if let motion = shot.cameraMotion, !motion.isEmpty {
+                            guidanceRow("You", friendlyMotion(motion))
+                        }
+                        if let dur = shot.targetDurationSeconds {
+                            guidanceRow("Hold", "about \(Int(dur.rounded())) seconds")
                         }
                     }
+                    .padding(.top, 2)
                 }
 
-                if let operatorSpace = dto.operatorSpace {
-                    section("Operator space") { chip(operatorSpace.rawValue) }
-                }
+                Spacer(minLength: 12)
 
-                if let lighting = dto.lighting {
-                    section("Lighting") { chip(lighting) }
-                }
+                primaryButton("Open Camera") { showCamera = true }
+                Button("Rescan") { state = .intro }
+                    .foregroundStyle(gold).frame(maxWidth: .infinity)
+                Button("Cancel") { dismiss() }
+                    .foregroundStyle(.gray).frame(maxWidth: .infinity)
 
-                if !dto.motionOpportunities.isEmpty {
-                    section("Motion opportunities") {
-                        bullets(dto.motionOpportunities)
-                    }
-                }
-
-                if !dto.compositionOpportunities.isEmpty {
-                    section("Composition opportunities") {
-                        bullets(dto.compositionOpportunities)
-                    }
-                }
-
-                if !dto.constraints.isEmpty {
-                    section("Constraints") {
-                        bullets(dto.constraints)
-                    }
-                }
-
-                VStack(spacing: 12) {
-                    Button { dismiss() } label: {
-                        Text("Done")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(gold)
-                            .foregroundStyle(.black)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    Button("Rescan") { state = .intro }
-                        .foregroundStyle(gold)
-                        .frame(maxWidth: .infinity)
-                }
-                .padding(.top, 8)
+                #if DEBUG
+                DirectorDebugPanel(story: story,
+                                   creativeIntent: CreativeIntentContractDTO(from: story),
+                                   scene: su,
+                                   output: out,
+                                   scanToRecommendationMs: lastScanToRecommendationMs)
+                    .padding(.top, 16)
+                #endif
             }
             .padding(24)
+            .padding(.top, 8)
         }
     }
 
-    // MARK: - failed
+    private func guidanceRow(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(k).font(.caption).foregroundStyle(gold)
+                .frame(width: 60, alignment: .leading)
+            Text(v).font(.subheadline).foregroundStyle(ink.opacity(0.85))
+        }
+    }
 
-    private func failedView(_ message: String) -> some View {
+    /// Translate contract camera_motion into plain operator language.
+    private func friendlyMotion(_ motion: String) -> String {
+        switch motion.lowercased() {
+        case "static", "none", "hold": return "hold still"
+        case "pan": return "slowly turn the phone"
+        case "tilt": return "slowly tip the phone up or down"
+        case "follow", "track": return "follow them smoothly"
+        case "push_in", "dolly_in": return "step slowly toward them"
+        default: return motion.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    // MARK: - failed (recoverable)
+
+    private func failedView(_ message: String, _ retry: RetryKind) -> some View {
         VStack(spacing: 20) {
             Spacer()
             Text(message)
                 .font(.system(size: 20, weight: .light, design: .serif))
-                .foregroundStyle(ink)
-                .multilineTextAlignment(.center)
+                .foregroundStyle(ink).multilineTextAlignment(.center)
             Spacer()
-            Button { state = .intro } label: {
-                Text("Try Again")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(gold)
-                    .foregroundStyle(.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            primaryButton("Try Again") {
+                switch retry {
+                case .rescan: state = .intro
+                case .replan(let su): runDirector(su)
+                }
             }
             Button("Cancel") { dismiss() }
-                .foregroundStyle(.gray)
-                .frame(maxWidth: .infinity)
+                .foregroundStyle(.gray).frame(maxWidth: .infinity)
         }
         .padding(24)
     }
 
-    // MARK: - frame handling
+    // MARK: - pipeline
 
     private func handleFrames(_ frames: [UIImage]) {
         state = .analyzing
+        let scanStart = Date()
         Task {
             do {
                 let selected = SceneFrameProcessor.select(from: frames, max: 5)
-                let dto = try await service.analyze(
-                    frames: selected,
-                    captureSessionId: captureSessionId,
-                    mode: mode,
-                    storyId: storyId)
-                await MainActor.run { state = .success(dto) }
+                let su = try await sceneService.analyze(
+                    frames: selected, captureSessionId: captureSessionId,
+                    mode: mode, storyId: story.id)
+                await MainActor.run { runDirector(su, scanStart: scanStart) }
             } catch {
-                let message = (error as? LocalizedError)?.errorDescription
-                    ?? "Something went wrong. Please try again."
-                await MainActor.run { state = .failed(message) }
-            }
-        }
-    }
-
-    // MARK: - presentation helpers
-
-    private func section<Content: View>(_ title: String,
-                                        @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(gold)
-            content()
-        }
-    }
-
-    private func chip(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(gold.opacity(0.15))
-            .foregroundStyle(gold)
-            .clipShape(Capsule())
-    }
-
-    private func chipFlow(_ items: [String]) -> some View {
-        // Simple wrapping row of chips.
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 8)],
-                  alignment: .leading, spacing: 8) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                chip(item)
-            }
-        }
-    }
-
-    private func bullets(_ items: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                HStack(alignment: .top, spacing: 8) {
-                    Text("•").foregroundStyle(gold)
-                    Text(item)
-                        .font(.body)
-                        .foregroundStyle(ink.opacity(0.85))
+                await MainActor.run {
+                    state = .failed(errorText(error, "Something went wrong reading the scene."),
+                                    retry: .rescan)
                 }
             }
+        }
+    }
+
+    private func runDirector(_ su: SceneUnderstandingContractDTO, scanStart: Date? = nil) {
+        state = .planning(su)
+        let start = scanStart ?? Date()
+        Task {
+            do {
+                let out = try await directorService.initialize(
+                    creativeIntent: CreativeIntentContractDTO(from: story),
+                    sceneUnderstanding: su,
+                    targetDurationSeconds: story.intentTargetDurationSeconds)
+                let ms = Int(Date().timeIntervalSince(start) * 1000)
+                await MainActor.run {
+                    lastScanToRecommendationMs = ms
+                    state = .recommendation(su, out)
+                }
+            } catch {
+                await MainActor.run {
+                    state = .failed(errorText(error, "Story couldn't plan this shot."),
+                                    retry: .replan(su))
+                }
+            }
+        }
+    }
+
+    private func handleCapture(tempURL: URL, duration: Double) {
+        let useCases = StoryUseCases(repository: StoryRepository(context: context))
+        do {
+            let relativePath = try MediaStore.shared.adoptCapturedFile(tempURL: tempURL)
+            _ = try useCases.shootMoment(for: story, relativePath: relativePath,
+                                         durationSeconds: duration)
+            showCamera = false
+            dismiss()
+        } catch {
+            print("Failed to save moment: \(error)")
+            showCamera = false
+        }
+    }
+
+    private func errorText(_ error: Error, _ fallback: String) -> String {
+        (error as? LocalizedError)?.errorDescription ?? fallback
+    }
+
+    // MARK: - shared
+
+    private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.headline)
+                .frame(maxWidth: .infinity).padding()
+                .background(gold).foregroundStyle(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         }
     }
 }

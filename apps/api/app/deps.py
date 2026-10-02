@@ -86,10 +86,12 @@ def get_story_director_engine() -> StoryDirectorEngine:
 
     Task-specific, config-driven model (STORY_DIRECTOR_MODEL), independent of the
     Creative Intent / Scene Understanding / Shot Validation models. Default
-    us.anthropic.claude-sonnet-4-5 (strong reasoning; Anthropic access confirmed).
+    amazon.nova-pro-v1:0 (on-demand-invocable, no Anthropic use-case gate; passed
+    the C3A offline quality gate). Switch to a Claude id via STORY_DIRECTOR_MODEL
+    once the account's Anthropic use-case form is confirmed — config, no code change.
     Set STORY_DIRECTOR_MOCK=1 for the dev/offline mock (never a silent fallback).
     """
     if os.environ.get("STORY_DIRECTOR_MOCK") == "1":
         return MockStoryDirectorEngine()
-    model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    model = os.environ.get("STORY_DIRECTOR_MODEL", "amazon.nova-pro-v1:0")
     return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))

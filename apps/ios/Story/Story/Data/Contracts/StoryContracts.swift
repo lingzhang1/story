@@ -293,6 +293,21 @@ struct DirectorStateDTO: Codable, Equatable {
     }
 }
 
+/// The Story Director's output envelope — the response of
+/// POST /v1/director/initialize (and /next). Composed from the frozen
+/// contracts; this is a transport shape, not a new canonical contract.
+struct DirectorOutputDTO: Codable, Equatable {
+    var concept: StoryConceptContractDTO
+    var plan: StoryPlanContractDTO
+    var directorState: DirectorStateDTO
+    var decision: DirectorDecisionDTO
+
+    enum CodingKeys: String, CodingKey {
+        case concept, plan, decision
+        case directorState = "director_state"
+    }
+}
+
 // MARK: - CaptureSession (02 §14) — composes the above
 
 struct CaptureSessionContractDTO: Codable, Equatable {

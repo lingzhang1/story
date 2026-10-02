@@ -48,3 +48,8 @@ apps/ios/**/.swiftpm/
 
 # Eval harness run artifacts (regenerated; not source)
 evals/results/
+
+# C3B device test media (local-first; originals stay on device, never committed)
+evals/story_director/dir_gear_prep/
+evals/story_director/dir_home_doorway/
+evals/story_director/dir_tmb_pretrip_home/
