@@ -1,0 +1,22 @@
+{
+  "id": "ci_conflict_002",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "make it minimalist but also packed with lots happening"
+  },
+  "expected_properties": [
+    "preserves the tension (minimalist vs busy) rather than silently resolving"
+  ],
+  "forbidden_properties": [
+    "drops one side without acknowledgement"
+  ],
+  "tags": [
+    "conflicting",
+    "ambiguous",
+    "uncertainty"
+  ],
+  "failure_labels": [
+    "INTENT_MISREAD"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "ci_neg_002",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a product video but NOT salesy or corporate"
+  },
+  "expected_properties": [
+    "constraints preserve 'not salesy','not corporate'"
+  ],
+  "forbidden_properties": [
+    "drops the negative constraint"
+  ],
+  "tags": [
+    "negative_constraints"
+  ],
+  "failure_labels": [
+    "INTENT_MISREAD"
+  ]
+}

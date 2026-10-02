@@ -1,0 +1,21 @@
+{
+  "id": "ci_equiv3_b",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "grandma in the kitchen \u2014 cozy, close, tender"
+  },
+  "expected_properties": [
+    "feeling intimate/warm/cozy",
+    "subject grandma cooking",
+    "semantically similar to ci_equiv3_a"
+  ],
+  "forbidden_properties": [
+    "feeling epic/energetic"
+  ],
+  "tags": [
+    "equivalent_phrasings",
+    "person_emphasis",
+    "tone"
+  ]
+}

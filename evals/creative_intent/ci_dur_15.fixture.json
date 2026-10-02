@@ -1,0 +1,18 @@
+{
+  "id": "ci_dur_15",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a 15 second reel of the concert"
+  },
+  "expected_properties": [
+    "target_duration_seconds about 15",
+    "subject concert"
+  ],
+  "forbidden_properties": [
+    "invents a far-off duration"
+  ],
+  "tags": [
+    "duration"
+  ]
+}

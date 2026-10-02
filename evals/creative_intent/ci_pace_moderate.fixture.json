@@ -1,0 +1,18 @@
+{
+  "id": "ci_pace_moderate",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a steady, flowing walkthrough of the museum"
+  },
+  "expected_properties": [
+    "pace moderate or slow",
+    "subject museum"
+  ],
+  "forbidden_properties": [
+    "pace fast"
+  ],
+  "tags": [
+    "pacing"
+  ]
+}

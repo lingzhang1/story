@@ -1,0 +1,21 @@
+{
+  "id": "ci_vague_002",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "idk just make it nice"
+  },
+  "expected_properties": [
+    "minimal honest intent, summary only or near-empty"
+  ],
+  "forbidden_properties": [
+    "invents feeling/emphasis/pace from nothing",
+    "fabricates a subject"
+  ],
+  "tags": [
+    "vague"
+  ],
+  "failure_labels": [
+    "INTENT_INVENTED"
+  ]
+}

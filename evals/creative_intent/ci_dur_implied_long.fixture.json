@@ -1,0 +1,18 @@
+{
+  "id": "ci_dur_implied_long",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a full documentary-length recap of our whole road trip"
+  },
+  "expected_properties": [
+    "summary conveys a longer piece",
+    "subject road trip"
+  ],
+  "forbidden_properties": [
+    "sets a tiny duration like 7s"
+  ],
+  "tags": [
+    "duration"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "ci_subj_env_003",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "capture my dog running on the beach, he's the star"
+  },
+  "expected_properties": [
+    "emphasis person/subject (the dog)",
+    "subject the dog on the beach"
+  ],
+  "forbidden_properties": [
+    "emphasis landscape-dominant"
+  ],
+  "tags": [
+    "subject_emphasis",
+    "person_emphasis"
+  ]
+}

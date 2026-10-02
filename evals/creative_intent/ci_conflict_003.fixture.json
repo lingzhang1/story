@@ -1,0 +1,21 @@
+{
+  "id": "ci_conflict_003",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a short epic \u2014 like 3 seconds but grand and sweeping"
+  },
+  "expected_properties": [
+    "keeps both 'very short' and 'epic/grand'",
+    "target_duration_seconds about 3 if captured"
+  ],
+  "forbidden_properties": [
+    "drops the epic feeling to fit the duration",
+    "drops the duration"
+  ],
+  "tags": [
+    "conflicting",
+    "duration",
+    "tone"
+  ]
+}

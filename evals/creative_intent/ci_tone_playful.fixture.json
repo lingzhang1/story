@@ -1,0 +1,18 @@
+{
+  "id": "ci_tone_playful",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a goofy, playful video of the puppy"
+  },
+  "expected_properties": [
+    "feeling playful",
+    "subject puppy"
+  ],
+  "forbidden_properties": [
+    "feeling somber"
+  ],
+  "tags": [
+    "tone"
+  ]
+}

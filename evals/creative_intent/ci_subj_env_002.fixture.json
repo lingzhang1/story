@@ -1,0 +1,19 @@
+{
+  "id": "ci_subj_env_002",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a video about the vast empty desert, no people at all"
+  },
+  "expected_properties": [
+    "emphasis environment/scale",
+    "subject desert",
+    "constraints preserve 'no people'"
+  ],
+  "forbidden_properties": [
+    "invents a person subject"
+  ],
+  "tags": [
+    "landscape_emphasis"
+  ]
+}

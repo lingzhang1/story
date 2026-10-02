@@ -1,0 +1,19 @@
+{
+  "id": "ci_subj_env_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "focus on the food, not the people, at the night market"
+  },
+  "expected_properties": [
+    "emphasis detail/food/environment",
+    "constraints preserve 'not people'",
+    "subject night market"
+  ],
+  "forbidden_properties": [
+    "emphasis person"
+  ],
+  "tags": [
+    "subject_emphasis"
+  ]
+}

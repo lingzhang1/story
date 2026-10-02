@@ -1,0 +1,19 @@
+{
+  "id": "ci_pace_slow",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "slow, meditative shots of the tea ceremony"
+  },
+  "expected_properties": [
+    "pace slow",
+    "feeling calm/meditative",
+    "subject tea ceremony"
+  ],
+  "forbidden_properties": [
+    "pace fast"
+  ],
+  "tags": [
+    "pacing"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "ci_neg_004",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "show the city, keep faces mostly out of it"
+  },
+  "expected_properties": [
+    "subject city",
+    "constraints preserve 'keep faces out'",
+    "emphasis environment"
+  ],
+  "forbidden_properties": [
+    "emphasis person",
+    "drops the faces-out constraint"
+  ],
+  "tags": [
+    "negative_constraints",
+    "landscape_emphasis"
+  ]
+}

@@ -129,7 +129,7 @@ private struct IntentChips: View {
     private var labeledChips: [String] {
         var chips: [String] = []
         chips += story.intentDesiredFeeling
-        chips += story.intentEmphasis.map { "✦ \($0)" }
+        chips += story.intentEmphasis
         if let p = story.intentPace, !p.isEmpty { chips.append("pace: \(p)") }
         if let d = story.intentTargetDurationSeconds { chips.append("\(Int(d))s") }
         if chips.isEmpty { chips = ["(minimal — add more direction for a richer read)"] }

@@ -1,0 +1,26 @@
+{
+  "id": "ci_beautiful_tough_regression",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "A 60s video showcasing a beautiful but tough hiking trip to Mont Blanc over 8 days"
+  },
+  "expected_properties": [
+    "subject references the Mont Blanc hiking trip",
+    "target_duration_seconds about 60",
+    "constraints/summary preserve 'beautiful but tough'"
+  ],
+  "forbidden_properties": [
+    "same value appears in both desired_feeling and emphasis",
+    "uses 'beautiful'/'tough' as a mood tag rather than a descriptor",
+    "generates shots"
+  ],
+  "tags": [
+    "regression",
+    "negative_constraints",
+    "duration"
+  ],
+  "failure_labels": [
+    "INTENT_MISREAD"
+  ]
+}

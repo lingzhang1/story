@@ -1,0 +1,21 @@
+{
+  "id": "ci_equiv3_a",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "an intimate warm video of grandma cooking"
+  },
+  "expected_properties": [
+    "feeling intimate/warm",
+    "subject grandma cooking",
+    "emphasis person"
+  ],
+  "forbidden_properties": [
+    "feeling epic/energetic"
+  ],
+  "tags": [
+    "equivalent_phrasings",
+    "person_emphasis",
+    "tone"
+  ]
+}

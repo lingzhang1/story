@@ -23,13 +23,18 @@ FIELD GUIDANCE
   "our last morning in Kyoto"). Omit if genuinely unknown.
 - desired_feeling: a few small-vocabulary tone words (energetic, calm, intimate,
   playful, epic, dreamy, nostalgic, cinematic, raw). Only what is expressed or
-  clearly implied.
+  clearly implied. These are MOODS, not plot descriptors — "beautiful", "tough",
+  "fun" describe the trip, not a tone; prefer the closest real mood word (e.g.
+  "tough" → leave out or "raw"; "beautiful" → "cinematic"/"serene" only if implied)
+  or omit rather than inventing one.
 - style_tags: visual-character tags when implied (scenic, urban, handheld,
   slow-build). Keep short.
 - pace: one of slow | moderate | fast — ONLY when expressed or clearly implied;
   otherwise omit (do not guess).
-- emphasis: what should receive creative attention (person, environment, scale,
-  relationship, detail, journey, atmosphere). Multiple allowed.
+- emphasis: WHAT the Story should center on — subjects and structure, NOT moods:
+  person, environment, scale, relationship, detail, journey, atmosphere. Multiple
+  allowed. NEVER repeat a value that is already in desired_feeling or style_tags;
+  the three lists must not overlap.
 - creative_constraints: important positive OR negative preferences in the user's
   own spirit — e.g. "authentic, not staged", "epic but not cheesy", "focus on the
   environment, not us". Preserve meaningful nuance; keep each concise.

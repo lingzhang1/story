@@ -1,0 +1,21 @@
+{
+  "id": "ci_equiv2_b",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "skatepark video \u2014 make it fast, hyped, and playful"
+  },
+  "expected_properties": [
+    "pace fast",
+    "feeling energetic/playful",
+    "subject skatepark",
+    "semantically similar to ci_equiv2_a"
+  ],
+  "forbidden_properties": [
+    "pace slow"
+  ],
+  "tags": [
+    "equivalent_phrasings",
+    "pacing"
+  ]
+}

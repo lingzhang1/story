@@ -1,0 +1,18 @@
+{
+  "id": "ci_tone_dreamy",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a dreamy, surreal video of the fog over the bay"
+  },
+  "expected_properties": [
+    "feeling dreamy",
+    "subject fog over the bay"
+  ],
+  "forbidden_properties": [
+    "feeling energetic"
+  ],
+  "tags": [
+    "tone"
+  ]
+}

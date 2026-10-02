@@ -148,6 +148,24 @@ def run_deterministic_checks(component: str, payload: dict[str, Any]) -> list[Ch
     if component == "story_director":
         results += check_director_envelope(payload)
         results += check_forbidden_instruction_keywords(payload)
+    elif component == "creative_intent":
+        results.append(check_schema_valid(component, payload))
+        results.append(check_creative_intent_no_overlap(payload))
     else:
         results.append(check_schema_valid(component, payload))
     return results
+
+
+def check_creative_intent_no_overlap(payload: dict[str, Any]) -> CheckResult:
+    """desired_feeling / style_tags / emphasis must not share values — a value
+    repeated across lists is the duplicate-chip regression (found on-device:
+    'beautiful'/'tough' appeared as both feeling and emphasis)."""
+    feeling = {s.lower() for s in payload.get("desired_feeling", []) if isinstance(s, str)}
+    style = {s.lower() for s in payload.get("style_tags", []) if isinstance(s, str)}
+    emphasis = {s.lower() for s in payload.get("emphasis", []) if isinstance(s, str)}
+    dupes = (feeling & emphasis) | (feeling & style) | (style & emphasis)
+    return CheckResult(
+        "creative_intent_lists_disjoint",
+        not dupes,
+        "" if not dupes else f"value(s) repeated across feeling/style/emphasis: {sorted(dupes)}",
+    )

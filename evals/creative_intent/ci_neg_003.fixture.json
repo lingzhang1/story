@@ -1,0 +1,19 @@
+{
+  "id": "ci_neg_003",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "romantic but please don't make it cheesy or cliche"
+  },
+  "expected_properties": [
+    "feeling romantic/intimate",
+    "constraints preserve 'not cheesy','not cliche'"
+  ],
+  "forbidden_properties": [
+    "drops the negative half"
+  ],
+  "tags": [
+    "negative_constraints",
+    "tone"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "ci_tone_somber",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a solemn, reflective tribute video for grandpa"
+  },
+  "expected_properties": [
+    "feeling reflective/somber",
+    "subject tribute for grandpa",
+    "emphasis person"
+  ],
+  "forbidden_properties": [
+    "feeling energetic/playful"
+  ],
+  "tags": [
+    "tone",
+    "person_emphasis"
+  ]
+}

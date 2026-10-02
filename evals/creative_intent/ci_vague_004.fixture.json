@@ -1,0 +1,20 @@
+{
+  "id": "ci_vague_004",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "something for instagram"
+  },
+  "expected_properties": [
+    "summary present",
+    "may infer vertical format at most"
+  ],
+  "forbidden_properties": [
+    "invents subject/feeling with no basis",
+    "generates shots"
+  ],
+  "tags": [
+    "vague",
+    "duration"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "ci_vague_003",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "a video of my trip"
+  },
+  "expected_properties": [
+    "subject references a trip",
+    "leaves tone/pace empty (none stated)"
+  ],
+  "forbidden_properties": [
+    "invents a specific destination",
+    "invents a mood"
+  ],
+  "tags": [
+    "vague"
+  ]
+}
