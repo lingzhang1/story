@@ -1,0 +1,65 @@
+{
+  "id": "dir_tmb_home_ordinary_intent",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_home_intent_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "one ordinary day of my life",
+      "desired_feeling": [
+        "calm"
+      ],
+      "emphasis": [
+        "everyday"
+      ]
+    },
+    "scene_understanding": {
+      "summary": "A room with a hiking backpack on a chair, wooden floor, a window and a bookshelf.",
+      "environment_tags": [
+        "indoor",
+        "room"
+      ],
+      "operator_space": "moderate",
+      "lighting": "bright daylight",
+      "subjects": [
+        {
+          "label": "red backpack",
+          "prominence": "high"
+        },
+        {
+          "label": "chair",
+          "prominence": "medium"
+        },
+        {
+          "label": "window",
+          "prominence": "medium"
+        },
+        {
+          "label": "bookshelf",
+          "prominence": "medium"
+        }
+      ],
+      "composition_opportunities": [
+        "the window provides a natural frame",
+        "the bookshelf is a strong vertical line"
+      ]
+    }
+  },
+  "expected_properties": [
+    "concept is an everyday/observational point of view (materially different from the TMB-adventure concept on the same scene)",
+    "uses the real room"
+  ],
+  "forbidden_properties": [
+    "adventure/epic/journey framing not supported by this intent",
+    "generic wide->medium->close template with no scene justification",
+    "unsafe movement (backward near edge/road, into traffic, climbing)",
+    "a shot that references a scene feature not in SceneUnderstanding",
+    "exposes raw reasoning / JSON as user instruction",
+    "music selection or an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_home_intent_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}

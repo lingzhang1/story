@@ -30,6 +30,12 @@ from scene_understanding import (
     SCHEMA_VERSION as SU_SCHEMA_VERSION,
     SceneUnderstandingEngine,
 )
+from story_director import (
+    PROMPT_VERSION as DIR_PROMPT_VERSION,
+    SCHEMA_VERSION as DIR_SCHEMA_VERSION,
+    DirectorOutput,
+    StoryDirectorEngine,
+)
 from director_engine import DirectorEngine  # noqa: F401  (available for future shoot endpoint)
 from edit_engine import EditEngine
 from model_gateway import ProviderError, StructuredOutputError
@@ -41,6 +47,7 @@ from app.deps import (
     get_director_engine,  # noqa: F401
     get_edit_engine,
     get_scene_understanding_engine,
+    get_story_director_engine,
     get_story_engine,
 )
 from app.store import InMemoryStoryStore
@@ -58,6 +65,24 @@ class ResolveCreativeIntentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     raw_text: str = Field(min_length=1, description="User's free-form creative direction")
+
+
+class DirectorInitializeRequest(BaseModel):
+    """POST /v1/director/initialize body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    creative_intent: dict = Field(..., description="A CreativeIntent contract object")
+    scene_understanding: dict = Field(..., description="A SceneUnderstanding contract object")
+    capture_constraints: dict | None = Field(default=None)
+
+
+class DirectorNextRequest(BaseModel):
+    """POST /v1/director/next body — prior plan/state + Story progress."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prior: dict = Field(..., description="Prior concept/plan/director_state + progress descriptors")
 
 SERVICE_NAME = "story-api"
 SERVICE_VERSION = "0.1.0"  # Milestone A
@@ -204,6 +229,63 @@ def create_app() -> FastAPI:
                    "success": True, "subject_count": len(scene.subjects)},
         )
         return scene
+
+    def _director_log(op: str, out, started, correlation_id):
+        log.info(
+            "director_resolved",
+            extra={
+                "operation": op, "correlation_id": correlation_id,
+                "prompt_version": DIR_PROMPT_VERSION, "schema_version": DIR_SCHEMA_VERSION,
+                "latency_ms": round((time.monotonic() - started) * 1000), "success": True,
+                "decision_action": out.decision.action.value,
+                "beat_count": len(out.plan.beats), "shot_count": len(out.plan.shots),
+            },
+        )
+
+    def _director_fail(op, e, started, correlation_id, kind):
+        log.warning(
+            "director_failed",
+            extra={"operation": op, "correlation_id": correlation_id,
+                   "prompt_version": DIR_PROMPT_VERSION, "schema_version": DIR_SCHEMA_VERSION,
+                   "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": False, kind: True, "error": str(e)[:300]},
+        )
+        raise HTTPException(status_code=503, detail=f"director_unavailable: {kind}; retry")
+
+    @app.post("/v1/director/initialize", response_model=DirectorOutput, status_code=200)
+    def director_initialize(
+        body: DirectorInitializeRequest,
+        engine: StoryDirectorEngine = Depends(get_story_director_engine),
+    ) -> DirectorOutput:
+        """CreativeIntent + SceneUnderstanding + constraints -> concept + plan +
+        state + first decision. 503 on failure — never a fabricated plan."""
+        cid = str(uuid4())
+        started = time.monotonic()
+        try:
+            out = engine.initialize(body.creative_intent, body.scene_understanding, body.capture_constraints)
+        except StructuredOutputError as e:
+            _director_fail("initialize", e, started, cid, "structured_output_failed")
+        except ProviderError as e:
+            _director_fail("initialize", e, started, cid, "provider_error")
+        _director_log("initialize", out, started, cid)
+        return out
+
+    @app.post("/v1/director/next", response_model=DirectorOutput, status_code=200)
+    def director_next(
+        body: DirectorNextRequest,
+        engine: StoryDirectorEngine = Depends(get_story_director_engine),
+    ) -> DirectorOutput:
+        """Prior plan/state + Story progress -> updated state + one decision."""
+        cid = str(uuid4())
+        started = time.monotonic()
+        try:
+            out = engine.next(body.prior)
+        except StructuredOutputError as e:
+            _director_fail("next", e, started, cid, "structured_output_failed")
+        except ProviderError as e:
+            _director_fail("next", e, started, cid, "provider_error")
+        _director_log("next", out, started, cid)
+        return out
 
     @app.post("/v1/stories", response_model=StoryDTO, status_code=201)
     def create_story(

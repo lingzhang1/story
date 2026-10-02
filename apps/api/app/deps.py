@@ -26,6 +26,11 @@ from scene_understanding import (
     RealSceneUnderstandingEngine,
     SceneUnderstandingEngine,
 )
+from story_director import (
+    MockStoryDirectorEngine,
+    RealStoryDirectorEngine,
+    StoryDirectorEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -74,3 +79,17 @@ def get_scene_understanding_engine() -> SceneUnderstandingEngine:
         return MockSceneUnderstandingEngine()
     model = os.environ.get("STORY_SCENE_MODEL", "amazon.nova-pro-v1:0")
     return RealSceneUnderstandingEngine(BedrockModelGateway(model_id=model))
+
+
+def get_story_director_engine() -> StoryDirectorEngine:
+    """Provide the Story Director — the most intelligence-sensitive component.
+
+    Task-specific, config-driven model (STORY_DIRECTOR_MODEL), independent of the
+    Creative Intent / Scene Understanding / Shot Validation models. Default
+    us.anthropic.claude-sonnet-4-5 (strong reasoning; Anthropic access confirmed).
+    Set STORY_DIRECTOR_MOCK=1 for the dev/offline mock (never a silent fallback).
+    """
+    if os.environ.get("STORY_DIRECTOR_MOCK") == "1":
+        return MockStoryDirectorEngine()
+    model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))

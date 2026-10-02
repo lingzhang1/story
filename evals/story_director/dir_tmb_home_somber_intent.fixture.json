@@ -1,0 +1,62 @@
+{
+  "id": "dir_tmb_home_somber_intent",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_home_intent_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "a solemn, reflective memory",
+      "desired_feeling": [
+        "reflective",
+        "somber"
+      ]
+    },
+    "scene_understanding": {
+      "summary": "A room with a hiking backpack on a chair, wooden floor, a window and a bookshelf.",
+      "environment_tags": [
+        "indoor",
+        "room"
+      ],
+      "operator_space": "moderate",
+      "lighting": "bright daylight",
+      "subjects": [
+        {
+          "label": "red backpack",
+          "prominence": "high"
+        },
+        {
+          "label": "chair",
+          "prominence": "medium"
+        },
+        {
+          "label": "window",
+          "prominence": "medium"
+        },
+        {
+          "label": "bookshelf",
+          "prominence": "medium"
+        }
+      ],
+      "composition_opportunities": [
+        "the window provides a natural frame",
+        "the bookshelf is a strong vertical line"
+      ]
+    }
+  },
+  "expected_properties": [
+    "concept is solemn/reflective; materially different from adventure + ordinary-day on the same scene"
+  ],
+  "forbidden_properties": [
+    "upbeat/energetic/adventure framing",
+    "generic wide->medium->close template with no scene justification",
+    "unsafe movement (backward near edge/road, into traffic, climbing)",
+    "a shot that references a scene feature not in SceneUnderstanding",
+    "exposes raw reasoning / JSON as user instruction",
+    "music selection or an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_home_intent_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}

@@ -1,0 +1,65 @@
+{
+  "id": "dir_tmb_trail",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_tmb_scene_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "8-day Tour du Mont Blanc hike; peaceful and adventurous 60s video; human, mountain, beautiful views.",
+      "desired_feeling": [
+        "peaceful",
+        "adventurous"
+      ],
+      "emphasis": [
+        "person",
+        "environment",
+        "journey"
+      ],
+      "pace": "slow",
+      "target_duration_seconds": 60
+    },
+    "scene_understanding": {
+      "summary": "Open alpine trail leading toward a large mountain, strong depth, one hiker.",
+      "environment_tags": [
+        "mountain",
+        "trail"
+      ],
+      "operator_space": "open",
+      "subjects": [
+        {
+          "label": "hiker",
+          "prominence": "low"
+        },
+        {
+          "label": "mountain",
+          "prominence": "high"
+        }
+      ],
+      "composition_opportunities": [
+        "trail creates a strong line toward the mountain",
+        "scale contrast"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 60
+    }
+  },
+  "expected_properties": [
+    "uses the trail depth and mountain/person scale contrast",
+    "materially different plan from the TMB-home case",
+    "feasible for an open outdoor space"
+  ],
+  "forbidden_properties": [
+    "indoor/room framing",
+    "generic wide->medium->close template with no scene justification",
+    "unsafe movement (backward near edge/road, into traffic, climbing)",
+    "a shot that references a scene feature not in SceneUnderstanding",
+    "exposes raw reasoning / JSON as user instruction",
+    "music selection or an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_tmb_scene_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}

@@ -1,0 +1,108 @@
+{
+  "id": "dir_tmb_progress_enough",
+  "component": "story_director",
+  "phase": "next",
+  "contrast_group": "dir_tmb_progress_axis",
+  "inputs": {
+    "prior": {
+      "creative_intent": {
+        "summary": "8-day Tour du Mont Blanc hike; peaceful and adventurous 60s video; human, mountain, beautiful views.",
+        "desired_feeling": [
+          "peaceful",
+          "adventurous"
+        ],
+        "emphasis": [
+          "person",
+          "environment",
+          "journey"
+        ],
+        "pace": "slow",
+        "target_duration_seconds": 60
+      },
+      "scene_understanding": {
+        "summary": "A room with a hiking backpack on a chair, wooden floor, a window and a bookshelf.",
+        "environment_tags": [
+          "indoor",
+          "room"
+        ],
+        "operator_space": "moderate",
+        "lighting": "bright daylight",
+        "subjects": [
+          {
+            "label": "red backpack",
+            "prominence": "high"
+          },
+          {
+            "label": "chair",
+            "prominence": "medium"
+          },
+          {
+            "label": "window",
+            "prominence": "medium"
+          },
+          {
+            "label": "bookshelf",
+            "prominence": "medium"
+          }
+        ],
+        "composition_opportunities": [
+          "the window provides a natural frame",
+          "the bookshelf is a strong vertical line"
+        ]
+      },
+      "concept": {
+        "title": "Preparation",
+        "summary": "The journey begins at home."
+      },
+      "plan": {
+        "beats": [
+          {
+            "id": "b_prep",
+            "purpose": "show preparation"
+          }
+        ]
+      },
+      "story_state": {
+        "moments": [
+          {
+            "summary": "strong preparation clip",
+            "narrative_role": "preparation"
+          },
+          {
+            "summary": "strong departure clip",
+            "narrative_role": "departure"
+          }
+        ],
+        "director_state": {
+          "beat_progress": [
+            {
+              "beat_id": "b_prep",
+              "status": "fulfilled"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "expected_properties": [
+    "chooses create_now because enough useful material already covers the concept",
+    "does not keep requesting shots"
+  ],
+  "forbidden_properties": [
+    "requests another shot when coverage is already sufficient",
+    "FAILURE_TO_STOP",
+    "generic wide->medium->close template with no scene justification",
+    "unsafe movement (backward near edge/road, into traffic, climbing)",
+    "a shot that references a scene feature not in SceneUnderstanding",
+    "exposes raw reasoning / JSON as user instruction",
+    "music selection or an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_tmb_progress_axis"
+  ],
+  "expected_decision_action": "create_now",
+  "failure_labels": [
+    "PREMATURE_CREATE"
+  ]
+}

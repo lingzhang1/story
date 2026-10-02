@@ -1,0 +1,79 @@
+{
+  "id": "dir_tmb_pretrip_home",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_home_intent_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "8-day Tour du Mont Blanc hike; peaceful and adventurous 60s video; human, mountain, beautiful views.",
+      "desired_feeling": [
+        "peaceful",
+        "adventurous"
+      ],
+      "emphasis": [
+        "person",
+        "environment",
+        "journey"
+      ],
+      "pace": "slow",
+      "target_duration_seconds": 60
+    },
+    "scene_understanding": {
+      "summary": "A room with a hiking backpack on a chair, wooden floor, a window and a bookshelf.",
+      "environment_tags": [
+        "indoor",
+        "room"
+      ],
+      "operator_space": "moderate",
+      "lighting": "bright daylight",
+      "subjects": [
+        {
+          "label": "red backpack",
+          "prominence": "high"
+        },
+        {
+          "label": "chair",
+          "prominence": "medium"
+        },
+        {
+          "label": "window",
+          "prominence": "medium"
+        },
+        {
+          "label": "bookshelf",
+          "prominence": "medium"
+        }
+      ],
+      "composition_opportunities": [
+        "the window provides a natural frame",
+        "the bookshelf is a strong vertical line"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 60
+    }
+  },
+  "expected_properties": [
+    "concept connects this ordinary room to the larger TMB journey (e.g. preparation/departure/anticipation OR a creatively strong equivalent)",
+    "uses only real scene elements (backpack/chair/window/bookshelf)",
+    "beats serve the concept; every shot serves a beat; instructions executable in a room",
+    "decision is one action"
+  ],
+  "forbidden_properties": [
+    "pretends mountains/trail/outdoors are present",
+    "recommends a mountain/summit/trail shot in the room",
+    "treats the backpack as unrelated product footage",
+    "generic object manipulation without narrative purpose",
+    "unsupported physical/safety claims",
+    "generic wide->medium->close template with no scene justification",
+    "unsafe movement (backward near edge/road, into traffic, climbing)",
+    "a shot that references a scene feature not in SceneUnderstanding",
+    "exposes raw reasoning / JSON as user instruction",
+    "music selection or an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_home_intent_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}
