@@ -38,7 +38,7 @@
       "type": "string"
     },
     "DirectorActionType": {
-      "description": "The Director's next action in the DIRECT decision loop\n(05-story-director.md \u00a77, \u00a720). One strongest recommendation at a time.",
+      "description": "The Director's next action in the DIRECT decision loop\n(05-story-director.md \u00a77, \u00a720). One strongest recommendation at a time.\n\nPINNED SEMANTICS (do not blur):\n  capture_shot = capture a NEW Director-selected shot, even if it serves the\n                 SAME still-`partial` beat (e.g. a different composition that\n                 expresses the purpose more strongly).\n  retry_shot   = recapture SUBSTANTIALLY THE SAME requested shot because\n                 EXECUTION/validation failed (blocked subject, too short,\n                 severe shake). NOT \"Director wasn't satisfied\".",
       "enum": [
         "capture_shot",
         "create_now",

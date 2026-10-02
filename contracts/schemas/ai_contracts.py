@@ -137,6 +137,14 @@ class ValidationIssue(str, Enum):
 class DirectorActionType(str, Enum):
     """The Director's next action in the DIRECT decision loop
     (05-story-director.md §7, §20). One strongest recommendation at a time.
+
+    PINNED SEMANTICS (do not blur):
+      capture_shot = capture a NEW Director-selected shot, even if it serves the
+                     SAME still-`partial` beat (e.g. a different composition that
+                     expresses the purpose more strongly).
+      retry_shot   = recapture SUBSTANTIALLY THE SAME requested shot because
+                     EXECUTION/validation failed (blocked subject, too short,
+                     severe shake). NOT "Director wasn't satisfied".
     """
 
     CAPTURE_SHOT = "capture_shot"
