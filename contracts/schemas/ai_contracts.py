@@ -79,6 +79,31 @@ class Pace(str, Enum):
     FAST = "fast"
 
 
+class SubjectProminence(str, Enum):
+    """How visually prominent a scene subject is (04-scene-understanding.md §13).
+
+    Visual prominence, NOT semantic importance.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class OperatorSpace(str, Enum):
+    """Visually apparent room for the camera operator (04-scene-understanding.md §18).
+
+    An observation of visible space — NOT a safety guarantee. Director still
+    applies conservative capture rules regardless of this value.
+    """
+
+    VERY_LIMITED = "very_limited"
+    LIMITED = "limited"
+    MODERATE = "moderate"
+    OPEN = "open"
+    UNKNOWN = "unknown"
+
+
 class CaptureEntryPoint(str, Enum):
     """Where a CaptureSession originated (02 §14)."""
 
@@ -217,19 +242,29 @@ class SceneSubject(_Strict):
 
     label: str
     note: str | None = None
+    prominence: SubjectProminence | None = Field(
+        default=None, description="Visual prominence (04 §13). Not semantic importance."
+    )
 
 
 class SceneUnderstandingContract(_Strict):
     """What Story understands about the user's current environment.
 
-    Describes WHAT IS THERE — not the directing decision (02 §15).
+    Describes WHAT IS THERE — not the directing decision (02 §15, 04-scene-
+    understanding.md §3). Opportunities are OBSERVATIONS; the Director decides
+    what to shoot.
     """
 
     id: UUID
     summary: str
     environment_tags: list[str] = Field(default_factory=list)
     subjects: list[SceneSubject] = Field(default_factory=list)
-    lighting: str | None = None
+    lighting: str | None = Field(
+        default=None, description="Concise lighting description (scalar, 04 §19)."
+    )
+    operator_space: OperatorSpace | None = Field(
+        default=None, description="Visibly apparent operator room (04 §18). Not a safety guarantee."
+    )
     motion_opportunities: list[str] = Field(default_factory=list)
     composition_opportunities: list[str] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
@@ -415,6 +450,8 @@ __all__ = [
     "OutputFormat",
     "MusicEnergy",
     "Pace",
+    "SubjectProminence",
+    "OperatorSpace",
     "CaptureEntryPoint",
     "CreativeIntentSourceType",
     "ValidationRecommendation",

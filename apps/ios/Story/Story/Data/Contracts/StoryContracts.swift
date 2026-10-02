@@ -39,6 +39,18 @@ enum PaceDTO: String, Codable {
     case slow, moderate, fast
 }
 
+enum SubjectProminenceDTO: String, Codable {
+    case high, medium, low
+}
+
+enum OperatorSpaceDTO: String, Codable {
+    case veryLimited = "very_limited"
+    case limited
+    case moderate
+    case open
+    case unknown
+}
+
 enum CaptureEntryPointDTO: String, Codable {
     case createNow = "create_now"
     case shootMoment = "shoot_moment"
@@ -132,6 +144,7 @@ struct MusicDirectionContractDTO: Codable, Equatable {
 struct SceneSubjectDTO: Codable, Equatable {
     var label: String
     var note: String?
+    var prominence: SubjectProminenceDTO?
 }
 
 struct SceneUnderstandingContractDTO: Codable, Equatable {
@@ -140,6 +153,7 @@ struct SceneUnderstandingContractDTO: Codable, Equatable {
     var environmentTags: [String]
     var subjects: [SceneSubjectDTO]
     var lighting: String?
+    var operatorSpace: OperatorSpaceDTO?
     var motionOpportunities: [String]
     var compositionOpportunities: [String]
     var constraints: [String]
@@ -148,6 +162,7 @@ struct SceneUnderstandingContractDTO: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id, summary, subjects, lighting, constraints
         case environmentTags = "environment_tags"
+        case operatorSpace = "operator_space"
         case motionOpportunities = "motion_opportunities"
         case compositionOpportunities = "composition_opportunities"
         case createdAt = "created_at"

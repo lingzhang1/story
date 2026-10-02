@@ -122,23 +122,57 @@ def test_creative_intent_rejects_retired_avoid_field():
 
 
 def test_scene_understanding_round_trips():
+    from contracts.schemas.ai_contracts import OperatorSpace, SubjectProminence
+
     su = SceneUnderstandingContract(
         id=uuid4(),
         summary="Large mountain viewpoint with an open trail and two hikers.",
         environment_tags=["mountain", "ridge", "trail"],
-        subjects=[SceneSubject(label="hiker", note="two people")],
+        subjects=[
+            SceneSubject(label="hiker", note="two people", prominence=SubjectProminence.MEDIUM),
+            SceneSubject(label="mountain range", prominence=SubjectProminence.HIGH),
+        ],
         lighting="soft overcast",
+        operator_space=OperatorSpace.OPEN,
         motion_opportunities=["walk toward ridge"],
         composition_opportunities=["large negative space"],
         constraints=["uneven ground"],
     )
     payload = _roundtrip(SceneUnderstandingContract, su)
     assert payload["subjects"][0]["label"] == "hiker"
+    assert payload["subjects"][0]["prominence"] == "medium"
+    assert payload["operator_space"] == "open"
 
 
 def test_scene_understanding_requires_summary():
     with pytest.raises(ValidationError):
         SceneUnderstandingContract.model_validate({"id": str(uuid4())})
+
+
+def test_scene_understanding_rejects_bad_operator_space():
+    with pytest.raises(ValidationError):
+        SceneUnderstandingContract.model_validate(
+            {"id": str(uuid4()), "summary": "x", "operator_space": "cramped"}
+        )
+
+
+def test_scene_understanding_rejects_bad_prominence():
+    with pytest.raises(ValidationError):
+        SceneUnderstandingContract.model_validate(
+            {
+                "id": str(uuid4()),
+                "summary": "x",
+                "subjects": [{"label": "person", "prominence": "huge"}],
+            }
+        )
+
+
+def test_scene_understanding_rejects_unknown_field():
+    # scene_type was deliberately NOT added; extra="forbid" rejects it.
+    with pytest.raises(ValidationError):
+        SceneUnderstandingContract.model_validate(
+            {"id": str(uuid4()), "summary": "x", "scene_type": "mountain trail"}
+        )
 
 
 # --------------------------------------------------------------------------

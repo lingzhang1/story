@@ -1,5 +1,17 @@
 {
   "$defs": {
+    "OperatorSpace": {
+      "description": "Visually apparent room for the camera operator (04-scene-understanding.md \u00a718).\n\nAn observation of visible space \u2014 NOT a safety guarantee. Director still\napplies conservative capture rules regardless of this value.",
+      "enum": [
+        "very_limited",
+        "limited",
+        "moderate",
+        "open",
+        "unknown"
+      ],
+      "title": "OperatorSpace",
+      "type": "string"
+    },
     "SceneSubject": {
       "additionalProperties": false,
       "description": "A subject detected in the scene.",
@@ -19,6 +31,18 @@
           ],
           "default": null,
           "title": "Note"
+        },
+        "prominence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectProminence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Visual prominence (04 \u00a713). Not semantic importance."
         }
       },
       "required": [
@@ -26,11 +50,21 @@
       ],
       "title": "SceneSubject",
       "type": "object"
+    },
+    "SubjectProminence": {
+      "description": "How visually prominent a scene subject is (04-scene-understanding.md \u00a713).\n\nVisual prominence, NOT semantic importance.",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "SubjectProminence",
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "What Story understands about the user's current environment.\n\nDescribes WHAT IS THERE \u2014 not the directing decision (02 \u00a715).",
+  "description": "What Story understands about the user's current environment.\n\nDescribes WHAT IS THERE \u2014 not the directing decision (02 \u00a715, 04-scene-\nunderstanding.md \u00a73). Opportunities are OBSERVATIONS; the Director decides\nwhat to shoot.",
   "properties": {
     "composition_opportunities": {
       "items": {
@@ -73,6 +107,7 @@
         }
       ],
       "default": null,
+      "description": "Concise lighting description (scalar, 04 \u00a719).",
       "title": "Lighting"
     },
     "motion_opportunities": {
@@ -81,6 +116,18 @@
       },
       "title": "Motion Opportunities",
       "type": "array"
+    },
+    "operator_space": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OperatorSpace"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Visibly apparent operator room (04 \u00a718). Not a safety guarantee."
     },
     "subjects": {
       "items": {
