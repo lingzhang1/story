@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "ShotContract": {
+      "additionalProperties": false,
+      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.",
+      "properties": {
+        "camera_motion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Motion"
+        },
+        "example_asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Example Asset Id"
+        },
+        "framing": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framing"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "instruction": {
+          "title": "Instruction",
+          "type": "string"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "subject_action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject Action"
+        },
+        "target_duration_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Duration Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "order",
+        "instruction"
+      ],
+      "title": "ShotContract",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The directed capture for one concept. MVP: generally 1-3 shots (02 \u00a717).",
+  "properties": {
+    "concept_id": {
+      "format": "uuid",
+      "title": "Concept Id",
+      "type": "string"
+    },
+    "estimated_duration_seconds": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Estimated Duration Seconds"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "shots": {
+      "items": {
+        "$ref": "#/$defs/ShotContract"
+      },
+      "title": "Shots",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "concept_id"
+  ],
+  "title": "StoryPlan",
+  "type": "object"
+}

@@ -1,0 +1,571 @@
+{
+  "$defs": {
+    "CaptureEntryPoint": {
+      "description": "Where a CaptureSession originated (02 \u00a714).",
+      "enum": [
+        "create_now",
+        "shoot_moment",
+        "story_idea"
+      ],
+      "title": "CaptureEntryPoint",
+      "type": "string"
+    },
+    "CreativeIntentContract": {
+      "additionalProperties": false,
+      "description": "Normalized, structured representation of what the user wants to create.\n\nFrozen full shape (02 \u00a74). The Milestone-A code carried a flattened\n{raw_text, theme, tone, summary}; map `raw_text`->`raw_user_description`,\n`summary`->`summary`, and seed `style_tags`/`desired_feeling` from the\nmock `theme`/`tone` until the real engine populates them (reconciliation \u00a73.1).",
+      "properties": {
+        "avoid": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Avoid",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "desired_feeling": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Desired Feeling",
+          "type": "array"
+        },
+        "emphasis": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Emphasis",
+          "type": "array"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "raw_user_description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw User Description"
+        },
+        "source_inputs": {
+          "items": {
+            "$ref": "#/$defs/CreativeIntentSource"
+          },
+          "title": "Source Inputs",
+          "type": "array"
+        },
+        "style_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Style Tags",
+          "type": "array"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_duration_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Duration Seconds"
+        },
+        "target_format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutputFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "summary"
+      ],
+      "title": "CreativeIntentContract",
+      "type": "object"
+    },
+    "CreativeIntentSource": {
+      "additionalProperties": false,
+      "description": "One contributing input to a CreativeIntent.",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "when type=reference_asset",
+          "title": "Asset Id"
+        },
+        "template_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "when type=template",
+          "title": "Template Id"
+        },
+        "type": {
+          "$ref": "#/$defs/CreativeIntentSourceType"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "text value, when type=text",
+          "title": "Value"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "CreativeIntentSource",
+      "type": "object"
+    },
+    "CreativeIntentSourceType": {
+      "enum": [
+        "text",
+        "template",
+        "reference_asset"
+      ],
+      "title": "CreativeIntentSourceType",
+      "type": "string"
+    },
+    "OutputFormat": {
+      "enum": [
+        "vertical",
+        "square",
+        "landscape"
+      ],
+      "title": "OutputFormat",
+      "type": "string"
+    },
+    "SceneSubject": {
+      "additionalProperties": false,
+      "description": "A subject detected in the scene.",
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "SceneSubject",
+      "type": "object"
+    },
+    "SceneUnderstandingContract": {
+      "additionalProperties": false,
+      "description": "What Story understands about the user's current environment.\n\nDescribes WHAT IS THERE \u2014 not the directing decision (02 \u00a715).",
+      "properties": {
+        "composition_opportunities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Composition Opportunities",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "environment_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Environment Tags",
+          "type": "array"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "lighting": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lighting"
+        },
+        "motion_opportunities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Motion Opportunities",
+          "type": "array"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/SceneSubject"
+          },
+          "title": "Subjects",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "summary"
+      ],
+      "title": "SceneUnderstandingContract",
+      "type": "object"
+    },
+    "ShotContract": {
+      "additionalProperties": false,
+      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.",
+      "properties": {
+        "camera_motion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Motion"
+        },
+        "example_asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Example Asset Id"
+        },
+        "framing": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framing"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "instruction": {
+          "title": "Instruction",
+          "type": "string"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "subject_action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject Action"
+        },
+        "target_duration_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Duration Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "order",
+        "instruction"
+      ],
+      "title": "ShotContract",
+      "type": "object"
+    },
+    "StoryConceptContract": {
+      "additionalProperties": false,
+      "description": "A creative idea proposed by the Director Engine (02 \u00a716).",
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "preview_asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preview Asset Id"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "target_narrative_need_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Narrative Need Id"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "summary"
+      ],
+      "title": "StoryConceptContract",
+      "type": "object"
+    },
+    "StoryPlanContract": {
+      "additionalProperties": false,
+      "description": "The directed capture for one concept. MVP: generally 1-3 shots (02 \u00a717).",
+      "properties": {
+        "concept_id": {
+          "format": "uuid",
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "estimated_duration_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Duration Seconds"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "shots": {
+          "items": {
+            "$ref": "#/$defs/ShotContract"
+          },
+          "title": "Shots",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "concept_id"
+      ],
+      "title": "StoryPlanContract",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One directed shooting interaction. May belong to a Story (02 \u00a714).\n\nIf `story_id` is absent, this is a standalone Create Now session.\nHolds the scene/directing/capture state DIRECT needs.",
+  "properties": {
+    "capture_asset_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Capture Asset Ids",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "creative_intent": {
+      "$ref": "#/$defs/CreativeIntentContract"
+    },
+    "entry_point": {
+      "$ref": "#/$defs/CaptureEntryPoint"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "scene_understanding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SceneUnderstandingContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "selected_concept": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StoryConceptContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "story_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Story Id"
+    },
+    "story_plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StoryPlanContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id",
+    "entry_point",
+    "creative_intent"
+  ],
+  "title": "CaptureSession",
+  "type": "object"
+}

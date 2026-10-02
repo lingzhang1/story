@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "AssetQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "exposure": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exposure"
+        },
+        "motion_quality": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Quality"
+        },
+        "sharpness": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sharpness"
+        },
+        "stability": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stability"
+        }
+      },
+      "title": "AssetQuality",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "End Seconds",
+          "type": "number"
+        },
+        "start_seconds": {
+          "minimum": 0.0,
+          "title": "Start Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_seconds",
+        "end_seconds"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Machine-generated description of an Asset (02 \u00a713). MVP fields optional.",
+  "properties": {
+    "actions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Actions",
+      "type": "array"
+    },
+    "asset_id": {
+      "format": "uuid",
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "people_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "People Count"
+    },
+    "quality": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AssetQuality"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "scene_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Scene Tags",
+      "type": "array"
+    },
+    "semantic_description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Semantic Description"
+    },
+    "usable_segments": {
+      "items": {
+        "$ref": "#/$defs/TimeRange"
+      },
+      "title": "Usable Segments",
+      "type": "array"
+    }
+  },
+  "required": [
+    "asset_id"
+  ],
+  "title": "AssetUnderstanding",
+  "type": "object"
+}

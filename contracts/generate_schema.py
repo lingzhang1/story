@@ -25,8 +25,24 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from contracts.schemas.dto import StoryDTO  # noqa: E402
+from contracts.schemas import ai_contracts as _ai  # noqa: E402
 
 OUT_PATH = Path(__file__).resolve().parent / "schemas" / "story.schema.json"
+AI_OUT_DIR = Path(__file__).resolve().parent / "schemas"
+
+# The frozen AI structured-output + boundary contracts that need standalone,
+# language-neutral JSON Schema files (task §4). Name -> (model, filename).
+AI_CONTRACTS: dict[str, tuple[type, str]] = {
+    "CreativeIntent": (_ai.CreativeIntentContract, "creative-intent.schema.json"),
+    "SceneUnderstanding": (_ai.SceneUnderstandingContract, "scene-understanding.schema.json"),
+    "StoryConcept": (_ai.StoryConceptContract, "story-concept.schema.json"),
+    "StoryPlan": (_ai.StoryPlanContract, "story-plan.schema.json"),
+    "ValidationResult": (_ai.ValidationResultContract, "validation-result.schema.json"),
+    "CaptureSession": (_ai.CaptureSessionContract, "capture-session.schema.json"),
+    "MusicDirection": (_ai.MusicDirectionContract, "music-direction.schema.json"),
+    "AssetUnderstanding": (_ai.AssetUnderstandingContract, "asset-understanding.schema.json"),
+    "EditPlan": (_ai.EditPlanContract, "edit-plan.schema.json"),
+}
 
 
 def build_schema() -> dict:
@@ -37,11 +53,26 @@ def build_schema() -> dict:
     return schema
 
 
+def build_ai_schema(title: str, model: type) -> dict:
+    """Return the JSON Schema for one frozen AI/boundary contract."""
+    schema = model.model_json_schema()
+    schema["title"] = title
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    return schema
+
+
 def main() -> None:
     schema = build_schema()
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
     print(f"wrote {OUT_PATH}")
+
+    for title, (model, filename) in AI_CONTRACTS.items():
+        out = AI_OUT_DIR / filename
+        out.write_text(
+            json.dumps(build_ai_schema(title, model), indent=2, sort_keys=True) + "\n"
+        )
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

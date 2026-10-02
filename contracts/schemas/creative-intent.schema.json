@@ -1,0 +1,184 @@
+{
+  "$defs": {
+    "CreativeIntentSource": {
+      "additionalProperties": false,
+      "description": "One contributing input to a CreativeIntent.",
+      "properties": {
+        "asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "when type=reference_asset",
+          "title": "Asset Id"
+        },
+        "template_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "when type=template",
+          "title": "Template Id"
+        },
+        "type": {
+          "$ref": "#/$defs/CreativeIntentSourceType"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "text value, when type=text",
+          "title": "Value"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "CreativeIntentSource",
+      "type": "object"
+    },
+    "CreativeIntentSourceType": {
+      "enum": [
+        "text",
+        "template",
+        "reference_asset"
+      ],
+      "title": "CreativeIntentSourceType",
+      "type": "string"
+    },
+    "OutputFormat": {
+      "enum": [
+        "vertical",
+        "square",
+        "landscape"
+      ],
+      "title": "OutputFormat",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Normalized, structured representation of what the user wants to create.\n\nFrozen full shape (02 \u00a74). The Milestone-A code carried a flattened\n{raw_text, theme, tone, summary}; map `raw_text`->`raw_user_description`,\n`summary`->`summary`, and seed `style_tags`/`desired_feeling` from the\nmock `theme`/`tone` until the real engine populates them (reconciliation \u00a73.1).",
+  "properties": {
+    "avoid": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Avoid",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "desired_feeling": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Desired Feeling",
+      "type": "array"
+    },
+    "emphasis": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Emphasis",
+      "type": "array"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "raw_user_description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw User Description"
+    },
+    "source_inputs": {
+      "items": {
+        "$ref": "#/$defs/CreativeIntentSource"
+      },
+      "title": "Source Inputs",
+      "type": "array"
+    },
+    "style_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Style Tags",
+      "type": "array"
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subject"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "target_duration_seconds": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Duration Seconds"
+    },
+    "target_format": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OutputFormat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id",
+    "summary"
+  ],
+  "title": "CreativeIntent",
+  "type": "object"
+}

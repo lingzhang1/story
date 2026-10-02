@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "ValidationIssue": {
+      "description": "Gross-failure categories only \u2014 never aesthetic (02 \u00a720).",
+      "enum": [
+        "too_short",
+        "severe_shake",
+        "subject_missing",
+        "severe_underexposure",
+        "severe_overexposure",
+        "instruction_not_followed"
+      ],
+      "title": "ValidationIssue",
+      "type": "string"
+    },
+    "ValidationRecommendation": {
+      "enum": [
+        "accept",
+        "retake"
+      ],
+      "title": "ValidationRecommendation",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Usability verdict for a captured shot. NEVER an aesthetic score (02 \u00a720).",
+  "properties": {
+    "confidence": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Confidence"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/ValidationIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "recommendation": {
+      "$ref": "#/$defs/ValidationRecommendation"
+    },
+    "usable": {
+      "title": "Usable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "usable",
+    "recommendation"
+  ],
+  "title": "ValidationResult",
+  "type": "object"
+}

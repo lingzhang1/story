@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "CropInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "aspect_ratio": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aspect Ratio"
+        },
+        "height": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Width",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "CropInstruction",
+      "type": "object"
+    },
+    "EditSegmentContract": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "format": "uuid",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "crop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CropInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "narrative_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narrative Role"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "output_duration_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "Output Duration Seconds",
+          "type": "number"
+        },
+        "source_end_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source End Seconds"
+        },
+        "source_start_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Start Seconds"
+        },
+        "speed": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speed"
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransitionInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "order",
+        "asset_id",
+        "output_duration_seconds"
+      ],
+      "title": "EditSegmentContract",
+      "type": "object"
+    },
+    "OutputFormat": {
+      "enum": [
+        "vertical",
+        "square",
+        "landscape"
+      ],
+      "title": "OutputFormat",
+      "type": "string"
+    },
+    "TransitionInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "type": {
+          "$ref": "#/$defs/TransitionType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TransitionInstruction",
+      "type": "object"
+    },
+    "TransitionType": {
+      "enum": [
+        "cut",
+        "fade",
+        "dissolve"
+      ],
+      "title": "TransitionType",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Structured editing specification produced by the Edit Engine (02 \u00a724).",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "creative_intent_id": {
+      "format": "uuid",
+      "title": "Creative Intent Id",
+      "type": "string"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "music_asset_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Music Asset Id"
+    },
+    "output_format": {
+      "$ref": "#/$defs/OutputFormat"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/EditSegmentContract"
+      },
+      "title": "Segments",
+      "type": "array"
+    },
+    "target_duration_seconds": {
+      "exclusiveMinimum": 0.0,
+      "title": "Target Duration Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "id",
+    "creative_intent_id",
+    "target_duration_seconds",
+    "output_format"
+  ],
+  "title": "EditPlan",
+  "type": "object"
+}

@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "MusicEnergy": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "dynamic"
+      ],
+      "title": "MusicEnergy",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "How the soundtrack should FEEL \u2014 not the selected song.",
+  "properties": {
+    "energy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MusicEnergy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mood_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Mood Tags",
+      "type": "array"
+    },
+    "progression": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Progression"
+    },
+    "raw_user_description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw User Description"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "summary"
+  ],
+  "title": "MusicDirection",
+  "type": "object"
+}

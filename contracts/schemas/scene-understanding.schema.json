@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "SceneSubject": {
+      "additionalProperties": false,
+      "description": "A subject detected in the scene.",
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "SceneSubject",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What Story understands about the user's current environment.\n\nDescribes WHAT IS THERE \u2014 not the directing decision (02 \u00a715).",
+  "properties": {
+    "composition_opportunities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Composition Opportunities",
+      "type": "array"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "environment_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Environment Tags",
+      "type": "array"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "lighting": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lighting"
+    },
+    "motion_opportunities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Motion Opportunities",
+      "type": "array"
+    },
+    "subjects": {
+      "items": {
+        "$ref": "#/$defs/SceneSubject"
+      },
+      "title": "Subjects",
+      "type": "array"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "summary"
+  ],
+  "title": "SceneUnderstanding",
+  "type": "object"
+}
