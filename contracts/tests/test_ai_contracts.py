@@ -87,6 +87,35 @@ def test_creative_intent_rejects_bad_format_enum():
         )
 
 
+def test_creative_intent_pace_and_constraints():
+    from contracts.schemas.ai_contracts import Pace
+
+    ci = CreativeIntentContract(
+        id=uuid4(),
+        summary="epic but not cheesy hike",
+        pace=Pace.FAST,
+        creative_constraints=["epic but not cheesy", "focus on the environment, not us"],
+    )
+    payload = _roundtrip(CreativeIntentContract, ci)
+    assert payload["pace"] == "fast"
+    assert "epic but not cheesy" in payload["creative_constraints"]
+
+
+def test_creative_intent_rejects_bad_pace():
+    with pytest.raises(ValidationError):
+        CreativeIntentContract.model_validate(
+            {"id": str(uuid4()), "summary": "x", "pace": "blazing"}
+        )
+
+
+def test_creative_intent_rejects_retired_avoid_field():
+    # `avoid` was superseded by `creative_constraints`; extra="forbid" rejects it.
+    with pytest.raises(ValidationError):
+        CreativeIntentContract.model_validate(
+            {"id": str(uuid4()), "summary": "x", "avoid": ["staged"]}
+        )
+
+
 # --------------------------------------------------------------------------
 # SceneUnderstanding
 # --------------------------------------------------------------------------

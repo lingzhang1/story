@@ -35,6 +35,10 @@ enum MusicEnergyDTO: String, Codable {
     case low, medium, high, dynamic
 }
 
+enum PaceDTO: String, Codable {
+    case slow, moderate, fast
+}
+
 enum CaptureEntryPointDTO: String, Codable {
     case createNow = "create_now"
     case shootMoment = "shoot_moment"
@@ -86,18 +90,20 @@ struct CreativeIntentContractDTO: Codable, Equatable {
     var subject: String?
     var desiredFeeling: [String]
     var styleTags: [String]
+    var pace: PaceDTO?
     var emphasis: [String]
-    var avoid: [String]
+    var creativeConstraints: [String]
     var targetDurationSeconds: Double?
     var targetFormat: OutputFormatDTO?
     var rawUserDescription: String?
     var createdAt: Date
 
     enum CodingKeys: String, CodingKey {
-        case id, summary, subject, emphasis, avoid
+        case id, summary, subject, pace, emphasis
         case sourceInputs = "source_inputs"
         case desiredFeeling = "desired_feeling"
         case styleTags = "style_tags"
+        case creativeConstraints = "creative_constraints"
         case targetDurationSeconds = "target_duration_seconds"
         case targetFormat = "target_format"
         case rawUserDescription = "raw_user_description"

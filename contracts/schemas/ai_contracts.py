@@ -67,6 +67,18 @@ class MusicEnergy(str, Enum):
     DYNAMIC = "dynamic"
 
 
+class Pace(str, Enum):
+    """Broad temporal energy of the desired output (04-creative-intent.md §7.3).
+
+    Categorical, NOT continuous and NOT exact edit timing — shot rhythm and
+    cut points belong to StoryPlan / EditPlan, not CreativeIntent.
+    """
+
+    SLOW = "slow"
+    MODERATE = "moderate"
+    FAST = "fast"
+
+
 class CaptureEntryPoint(str, Enum):
     """Where a CaptureSession originated (02 §14)."""
 
@@ -139,20 +151,41 @@ class CreativeIntentSource(_Strict):
 class CreativeIntentContract(_Strict):
     """Normalized, structured representation of what the user wants to create.
 
-    Frozen full shape (02 §4). The Milestone-A code carried a flattened
-    {raw_text, theme, tone, summary}; map `raw_text`->`raw_user_description`,
-    `summary`->`summary`, and seed `style_tags`/`desired_feeling` from the
-    mock `theme`/`tone` until the real engine populates them (reconciliation §3.1).
+    Frozen full shape (02 §4, refined by 04-creative-intent.md Milestone C).
+    The Milestone-A code carried a flattened {raw_text, theme, tone, summary};
+    map `raw_text`->`raw_user_description`, `summary`->`summary`, and seed
+    `style_tags`/`desired_feeling` from the mock `theme`/`tone` until the real
+    resolver populates them (reconciliation §3.1).
+
+    Describes the desired OUTCOME only — never physical-scene facts, shot
+    instructions, edit decisions, or provider/model metadata (04 §8).
     """
 
     id: UUID
     source_inputs: list[CreativeIntentSource] = Field(default_factory=list)
     summary: str
-    subject: str | None = None
+    subject: str | None = Field(
+        default=None, description="What the Story is broadly about (semantic, not detected objects)"
+    )
+    # Emotional / creative character. `desired_feeling` is the small-vocabulary
+    # tone (energetic/calm/cinematic/...); `style_tags` holds visual-character
+    # tags. Together they are the spec's `tone` (04 §7.2), split so Director and
+    # Music can consume feeling and visual style independently.
     desired_feeling: list[str] = Field(default_factory=list)
     style_tags: list[str] = Field(default_factory=list)
-    emphasis: list[str] = Field(default_factory=list)
-    avoid: list[str] = Field(default_factory=list)
+    pace: Pace | None = Field(
+        default=None, description="Broad temporal energy (04 §7.3). Categorical only."
+    )
+    emphasis: list[str] = Field(
+        default_factory=list,
+        description="What should receive creative attention (04 §7.5): person/environment/scale/...",
+    )
+    # Important positive OR negative creative preferences that do not fit the
+    # structured fields, e.g. 'authentic, not staged', 'epic but not cheesy',
+    # 'focus more on the environment than me' (04 §7.6). Keep concise — not a
+    # dumping ground for model reasoning. Supersedes the earlier `avoid`-only
+    # field (reconciliation / 04 review): holds both positive and negative.
+    creative_constraints: list[str] = Field(default_factory=list)
     target_duration_seconds: float | None = Field(default=None, gt=0)
     target_format: OutputFormat | None = None
     raw_user_description: str | None = None
@@ -381,6 +414,7 @@ __all__ = [
     # enums
     "OutputFormat",
     "MusicEnergy",
+    "Pace",
     "CaptureEntryPoint",
     "CreativeIntentSourceType",
     "ValidationRecommendation",

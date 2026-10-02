@@ -12,19 +12,19 @@
     },
     "CreativeIntentContract": {
       "additionalProperties": false,
-      "description": "Normalized, structured representation of what the user wants to create.\n\nFrozen full shape (02 \u00a74). The Milestone-A code carried a flattened\n{raw_text, theme, tone, summary}; map `raw_text`->`raw_user_description`,\n`summary`->`summary`, and seed `style_tags`/`desired_feeling` from the\nmock `theme`/`tone` until the real engine populates them (reconciliation \u00a73.1).",
+      "description": "Normalized, structured representation of what the user wants to create.\n\nFrozen full shape (02 \u00a74, refined by 04-creative-intent.md Milestone C).\nThe Milestone-A code carried a flattened {raw_text, theme, tone, summary};\nmap `raw_text`->`raw_user_description`, `summary`->`summary`, and seed\n`style_tags`/`desired_feeling` from the mock `theme`/`tone` until the real\nresolver populates them (reconciliation \u00a73.1).\n\nDescribes the desired OUTCOME only \u2014 never physical-scene facts, shot\ninstructions, edit decisions, or provider/model metadata (04 \u00a78).",
       "properties": {
-        "avoid": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Avoid",
-          "type": "array"
-        },
         "created_at": {
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "creative_constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Creative Constraints",
+          "type": "array"
         },
         "desired_feeling": {
           "items": {
@@ -34,6 +34,7 @@
           "type": "array"
         },
         "emphasis": {
+          "description": "What should receive creative attention (04 \u00a77.5): person/environment/scale/...",
           "items": {
             "type": "string"
           },
@@ -44,6 +45,18 @@
           "format": "uuid",
           "title": "Id",
           "type": "string"
+        },
+        "pace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Broad temporal energy (04 \u00a77.3). Categorical only."
         },
         "raw_user_description": {
           "anyOf": [
@@ -81,6 +94,7 @@
             }
           ],
           "default": null,
+          "description": "What the Story is broadly about (semantic, not detected objects)",
           "title": "Subject"
         },
         "summary": {
@@ -189,6 +203,16 @@
         "landscape"
       ],
       "title": "OutputFormat",
+      "type": "string"
+    },
+    "Pace": {
+      "description": "Broad temporal energy of the desired output (04-creative-intent.md \u00a77.3).\n\nCategorical, NOT continuous and NOT exact edit timing \u2014 shot rhythm and\ncut points belong to StoryPlan / EditPlan, not CreativeIntent.",
+      "enum": [
+        "slow",
+        "moderate",
+        "fast"
+      ],
+      "title": "Pace",
       "type": "string"
     },
     "SceneSubject": {
