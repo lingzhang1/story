@@ -134,6 +134,28 @@ class ValidationIssue(str, Enum):
     INSTRUCTION_NOT_FOLLOWED = "instruction_not_followed"
 
 
+class DirectorActionType(str, Enum):
+    """The Director's next action in the DIRECT decision loop
+    (05-story-director.md §7, §20). One strongest recommendation at a time.
+    """
+
+    CAPTURE_SHOT = "capture_shot"
+    CREATE_NOW = "create_now"
+    RESCAN_SCENE = "rescan_scene"
+    RETRY_SHOT = "retry_shot"
+
+
+class BeatStatus(str, Enum):
+    """How much a StoryBeat has been fulfilled — DIRECTOR state, not planning
+    and not ValidationResult (05-story-director.md §7). Categorical, no numeric
+    percentage.
+    """
+
+    UNFULFILLED = "unfulfilled"
+    PARTIAL = "partial"
+    FULFILLED = "fulfilled"
+
+
 class NarrativeCoverage(str, Enum):
     """Advisory, internal only — never rendered as a progress bar (02 §8)."""
 
@@ -277,7 +299,11 @@ class SceneUnderstandingContract(_Strict):
 
 
 class StoryConceptContract(_Strict):
-    """A creative idea proposed by the Director Engine (02 §16)."""
+    """A creative idea proposed by the Director Engine (02 §16).
+
+    `summary` IS the Story's creative thesis (05-story-director.md §4) — there
+    is deliberately no separate `thesis` field.
+    """
 
     id: UUID
     title: str
@@ -287,14 +313,35 @@ class StoryConceptContract(_Strict):
     target_narrative_need_id: str | None = None
 
 
+class StoryBeat(_Strict):
+    """A creative/narrative purpose the resulting Story needs to express
+    (05-story-director.md §1-4). PLANNING object — minimal, no mutable
+    execution state (fulfillment lives in DirectorState/BeatProgress).
+    Every planned Shot serves a Beat; every Beat serves the StoryConcept.
+    """
+
+    id: str
+    purpose: str
+
+
 class ShotContract(_Strict):
     """One directed shot. Frozen product name is `Shot` (the element of
     StoryPlan.shots[]); 02 §18 called this ShotPlan — see reconciliation §4.2.
+
+    Two explicit layers (05-story-director.md §12): `purpose` is the INTERNAL
+    semantic reason the shot exists (what Validation cares about); `instruction`
+    is the simple USER-FACING direction. Keep both distinct.
     """
 
     id: UUID
     order: int = Field(ge=0)
     instruction: str
+    beat_id: str | None = Field(
+        default=None, description="The StoryBeat this shot serves (every shot serves a beat)."
+    )
+    purpose: str | None = Field(
+        default=None, description="Internal semantic reason the shot exists (05 §12)."
+    )
     target_duration_seconds: float | None = Field(default=None, gt=0)
     framing: str | None = None
     camera_motion: str | None = None
@@ -303,10 +350,15 @@ class ShotContract(_Strict):
 
 
 class StoryPlanContract(_Strict):
-    """The directed capture for one concept. MVP: generally 1-3 shots (02 §17)."""
+    """The directed capture for one concept: WHAT material would create the
+    Story. MVP: generally 1-3 shots (02 §17). PLANNING only — it does NOT own
+    execution progress (that is DirectorState). Every shot's `beat_id` should
+    reference a beat in `beats` (05-story-director.md §2).
+    """
 
     id: UUID
     concept_id: UUID
+    beats: list[StoryBeat] = Field(default_factory=list)
     shots: list[ShotContract] = Field(default_factory=list)
     estimated_duration_seconds: float | None = Field(default=None, gt=0)
 
@@ -317,12 +369,66 @@ class StoryPlanContract(_Strict):
 
 
 class ValidationResultContract(_Strict):
-    """Usability verdict for a captured shot. NEVER an aesthetic score (02 §20)."""
+    """Usability verdict for a captured shot. NEVER an aesthetic score (02 §20).
+
+    Shot-level ONLY (05-story-director.md §6): it answers "did the captured
+    asset sufficiently satisfy the requested Shot, and is it usable?". It does
+    NOT determine StoryBeat fulfillment — that is Director state (BeatProgress).
+    May reference the shot/capture it judged.
+    """
 
     usable: bool
     recommendation: ValidationRecommendation
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     issues: list[ValidationIssue] = Field(default_factory=list)
+    shot_id: UUID | None = Field(default=None, description="The Shot this judged.")
+    capture_asset_id: UUID | None = Field(default=None, description="The captured asset judged.")
+
+
+# ---------------------------------------------------------------------------
+# Director decision loop (05-story-director.md §5, §7, §19) — DIRECT is a
+# decision loop, not only a static plan generator.
+# ---------------------------------------------------------------------------
+
+
+class DirectorDecision(_Strict):
+    """The Director's single strongest next recommendation (05 §5, §9).
+
+    Separate from StoryPlan: StoryPlan = WHAT material would create the Story;
+    DirectorDecision = what the user/system should DO next. Never exposes
+    multiple creative choices to the user by default.
+    """
+
+    action: DirectorActionType
+    # For capture_shot / retry_shot: the shot to (re)capture. Omitted for
+    # create_now / rescan_scene.
+    shot: ShotContract | None = None
+    reason: str | None = Field(
+        default=None, description="Internal rationale for this decision (not necessarily user-facing)."
+    )
+
+
+class BeatProgress(_Strict):
+    """How far one StoryBeat has been fulfilled — DIRECTOR state, not planning
+    and not ValidationResult (05 §7). Categorical, no numeric percentage.
+    `supporting_asset_ids` is OPTIONAL (its necessity is an open experiment).
+    """
+
+    beat_id: str
+    status: BeatStatus = BeatStatus.UNFULFILLED
+    supporting_asset_ids: list[UUID] = Field(default_factory=list)
+
+
+class DirectorState(_Strict):
+    """Mutable DIRECT execution state, owned by the CaptureSession (05 §8).
+
+    Separated from StoryPlan (the intent) so the plan stays a stable record of
+    what we meant to capture while this tracks what actually happened.
+    """
+
+    current_beat_id: str | None = None
+    beat_progress: list[BeatProgress] = Field(default_factory=list)
+    last_decision: DirectorDecision | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +450,9 @@ class CaptureSessionContract(_Strict):
     scene_understanding: SceneUnderstandingContract | None = None
     selected_concept: StoryConceptContract | None = None
     story_plan: StoryPlanContract | None = None
+    director_state: DirectorState | None = Field(
+        default=None, description="Mutable DIRECT loop state (05 §8). Plan stays stable; this changes."
+    )
     capture_asset_ids: list[UUID] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
 
@@ -456,6 +565,8 @@ __all__ = [
     "CreativeIntentSourceType",
     "ValidationRecommendation",
     "ValidationIssue",
+    "DirectorActionType",
+    "BeatStatus",
     "NarrativeCoverage",
     "TransitionType",
     "MusicSectionType",
@@ -467,10 +578,14 @@ __all__ = [
     "SceneSubject",
     "SceneUnderstandingContract",
     "StoryConceptContract",
+    "StoryBeat",
     "ShotContract",
     "StoryPlanContract",
-    # validation + capture session
+    # validation + director loop + capture session
     "ValidationResultContract",
+    "DirectorDecision",
+    "BeatProgress",
+    "DirectorState",
     "CaptureSessionContract",
     # asset understanding
     "AssetQuality",

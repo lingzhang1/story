@@ -223,6 +223,122 @@ def test_story_plan_round_trips_with_shots():
     assert payload["shots"][0]["order"] == 1
 
 
+def test_story_plan_with_beats_and_shot_beat_links():
+    from contracts.schemas.ai_contracts import StoryBeat
+
+    plan = StoryPlanContract(
+        id=uuid4(),
+        concept_id=uuid4(),
+        beats=[
+            StoryBeat(id="beat_scale", purpose="Establish the human/landscape scale contrast."),
+            StoryBeat(id="beat_journey", purpose="Show progression deeper into the landscape."),
+        ],
+        shots=[
+            ShotContract(
+                id=uuid4(),
+                order=1,
+                instruction="Have your partner walk down the trail; keep them small.",
+                beat_id="beat_scale",
+                purpose="Establish scale by keeping the person small against the mountain.",
+                framing="wide",
+                camera_motion="static",
+                subject_action="walk away along trail",
+                target_duration_seconds=3,
+            ),
+        ],
+    )
+    payload = _roundtrip(StoryPlanContract, plan)
+    assert payload["beats"][0]["id"] == "beat_scale"
+    assert payload["shots"][0]["beat_id"] == "beat_scale"
+    # purpose (semantic) and instruction (user-facing) are distinct, both present.
+    assert payload["shots"][0]["purpose"] != payload["shots"][0]["instruction"]
+
+
+def test_story_beat_rejects_extra_fields():
+    from contracts.schemas.ai_contracts import StoryBeat
+
+    # No beat_type/importance_score/etc — extra="forbid".
+    with pytest.raises(ValidationError):
+        StoryBeat.model_validate({"id": "b1", "purpose": "x", "beat_type": "establishing"})
+
+
+def test_director_decision_capture_shot_round_trips():
+    from contracts.schemas.ai_contracts import DirectorActionType, DirectorDecision
+
+    d = DirectorDecision(
+        action=DirectorActionType.CAPTURE_SHOT,
+        shot=ShotContract(id=uuid4(), order=1, instruction="walk down the trail", beat_id="beat_scale"),
+        reason="scale beat still unfulfilled; strongest next shot",
+    )
+    payload = _roundtrip(DirectorDecision, d)
+    assert payload["action"] == "capture_shot"
+    assert payload["shot"]["beat_id"] == "beat_scale"
+
+
+def test_director_decision_create_now_needs_no_shot():
+    from contracts.schemas.ai_contracts import DirectorActionType, DirectorDecision
+
+    d = DirectorDecision(action=DirectorActionType.CREATE_NOW)
+    payload = _roundtrip(DirectorDecision, d)
+    assert payload["action"] == "create_now"
+    assert payload["shot"] is None
+
+
+def test_director_decision_rejects_bad_action():
+    with pytest.raises(ValidationError):
+        from contracts.schemas.ai_contracts import DirectorDecision
+
+        DirectorDecision.model_validate({"action": "do_a_barrel_roll"})
+
+
+def test_director_state_round_trips():
+    from contracts.schemas.ai_contracts import (
+        BeatProgress,
+        BeatStatus,
+        DirectorActionType,
+        DirectorDecision,
+        DirectorState,
+    )
+
+    state = DirectorState(
+        current_beat_id="beat_journey",
+        beat_progress=[
+            BeatProgress(beat_id="beat_scale", status=BeatStatus.FULFILLED, supporting_asset_ids=[uuid4()]),
+            BeatProgress(beat_id="beat_journey", status=BeatStatus.PARTIAL),
+        ],
+        last_decision=DirectorDecision(action=DirectorActionType.RETRY_SHOT,
+                                       shot=ShotContract(id=uuid4(), order=2, instruction="try again")),
+    )
+    payload = _roundtrip(DirectorState, state)
+    assert payload["beat_progress"][0]["status"] == "fulfilled"
+    assert payload["current_beat_id"] == "beat_journey"
+
+
+def test_beat_progress_rejects_bad_status():
+    with pytest.raises(ValidationError):
+        from contracts.schemas.ai_contracts import BeatProgress
+
+        BeatProgress.model_validate({"beat_id": "b1", "status": "mostly_done"})
+
+
+def test_capture_session_carries_director_state():
+    from contracts.schemas.ai_contracts import BeatProgress, DirectorState
+
+    ci = CreativeIntentContract(id=uuid4(), summary="emotional hike")
+    cs = CaptureSessionContract(
+        id=uuid4(),
+        entry_point=CaptureEntryPoint.SHOOT_MOMENT,
+        creative_intent=ci,
+        director_state=DirectorState(
+            current_beat_id="beat_scale",
+            beat_progress=[BeatProgress(beat_id="beat_scale")],
+        ),
+    )
+    payload = _roundtrip(CaptureSessionContract, cs)
+    assert payload["director_state"]["beat_progress"][0]["beat_id"] == "beat_scale"
+    assert payload["director_state"]["beat_progress"][0]["status"] == "unfulfilled"
+
+
 def test_shot_rejects_negative_order():
     with pytest.raises(ValidationError):
         ShotContract(id=uuid4(), order=-1, instruction="x")

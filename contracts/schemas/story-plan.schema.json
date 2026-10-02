@@ -2,8 +2,21 @@
   "$defs": {
     "ShotContract": {
       "additionalProperties": false,
-      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.",
+      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.\n\nTwo explicit layers (05-story-director.md \u00a712): `purpose` is the INTERNAL\nsemantic reason the shot exists (what Validation cares about); `instruction`\nis the simple USER-FACING direction. Keep both distinct.",
       "properties": {
+        "beat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The StoryBeat this shot serves (every shot serves a beat).",
+          "title": "Beat Id"
+        },
         "camera_motion": {
           "anyOf": [
             {
@@ -55,6 +68,19 @@
           "title": "Order",
           "type": "integer"
         },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Internal semantic reason the shot exists (05 \u00a712).",
+          "title": "Purpose"
+        },
         "subject_action": {
           "anyOf": [
             {
@@ -88,12 +114,39 @@
       ],
       "title": "ShotContract",
       "type": "object"
+    },
+    "StoryBeat": {
+      "additionalProperties": false,
+      "description": "A creative/narrative purpose the resulting Story needs to express\n(05-story-director.md \u00a71-4). PLANNING object \u2014 minimal, no mutable\nexecution state (fulfillment lives in DirectorState/BeatProgress).\nEvery planned Shot serves a Beat; every Beat serves the StoryConcept.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "purpose"
+      ],
+      "title": "StoryBeat",
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The directed capture for one concept. MVP: generally 1-3 shots (02 \u00a717).",
+  "description": "The directed capture for one concept: WHAT material would create the\nStory. MVP: generally 1-3 shots (02 \u00a717). PLANNING only \u2014 it does NOT own\nexecution progress (that is DirectorState). Every shot's `beat_id` should\nreference a beat in `beats` (05-story-director.md \u00a72).",
   "properties": {
+    "beats": {
+      "items": {
+        "$ref": "#/$defs/StoryBeat"
+      },
+      "title": "Beats",
+      "type": "array"
+    },
     "concept_id": {
       "format": "uuid",
       "title": "Concept Id",

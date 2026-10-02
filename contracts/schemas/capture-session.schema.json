@@ -1,5 +1,42 @@
 {
   "$defs": {
+    "BeatProgress": {
+      "additionalProperties": false,
+      "description": "How far one StoryBeat has been fulfilled \u2014 DIRECTOR state, not planning\nand not ValidationResult (05 \u00a77). Categorical, no numeric percentage.\n`supporting_asset_ids` is OPTIONAL (its necessity is an open experiment).",
+      "properties": {
+        "beat_id": {
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/BeatStatus",
+          "default": "unfulfilled"
+        },
+        "supporting_asset_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Supporting Asset Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "beat_id"
+      ],
+      "title": "BeatProgress",
+      "type": "object"
+    },
+    "BeatStatus": {
+      "description": "How much a StoryBeat has been fulfilled \u2014 DIRECTOR state, not planning\nand not ValidationResult (05-story-director.md \u00a77). Categorical, no numeric\npercentage.",
+      "enum": [
+        "unfulfilled",
+        "partial",
+        "fulfilled"
+      ],
+      "title": "BeatStatus",
+      "type": "string"
+    },
     "CaptureEntryPoint": {
       "description": "Where a CaptureSession originated (02 \u00a714).",
       "enum": [
@@ -196,6 +233,93 @@
       "title": "CreativeIntentSourceType",
       "type": "string"
     },
+    "DirectorActionType": {
+      "description": "The Director's next action in the DIRECT decision loop\n(05-story-director.md \u00a77, \u00a720). One strongest recommendation at a time.",
+      "enum": [
+        "capture_shot",
+        "create_now",
+        "rescan_scene",
+        "retry_shot"
+      ],
+      "title": "DirectorActionType",
+      "type": "string"
+    },
+    "DirectorDecision": {
+      "additionalProperties": false,
+      "description": "The Director's single strongest next recommendation (05 \u00a75, \u00a79).\n\nSeparate from StoryPlan: StoryPlan = WHAT material would create the Story;\nDirectorDecision = what the user/system should DO next. Never exposes\nmultiple creative choices to the user by default.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/DirectorActionType"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Internal rationale for this decision (not necessarily user-facing).",
+          "title": "Reason"
+        },
+        "shot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShotContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "DirectorDecision",
+      "type": "object"
+    },
+    "DirectorState": {
+      "additionalProperties": false,
+      "description": "Mutable DIRECT execution state, owned by the CaptureSession (05 \u00a78).\n\nSeparated from StoryPlan (the intent) so the plan stays a stable record of\nwhat we meant to capture while this tracks what actually happened.",
+      "properties": {
+        "beat_progress": {
+          "items": {
+            "$ref": "#/$defs/BeatProgress"
+          },
+          "title": "Beat Progress",
+          "type": "array"
+        },
+        "current_beat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Beat Id"
+        },
+        "last_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectorDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DirectorState",
+      "type": "object"
+    },
     "OperatorSpace": {
       "description": "Visually apparent room for the camera operator (04-scene-understanding.md \u00a718).\n\nAn observation of visible space \u2014 NOT a safety guarantee. Director still\napplies conservative capture rules regardless of this value.",
       "enum": [
@@ -354,8 +478,21 @@
     },
     "ShotContract": {
       "additionalProperties": false,
-      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.",
+      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.\n\nTwo explicit layers (05-story-director.md \u00a712): `purpose` is the INTERNAL\nsemantic reason the shot exists (what Validation cares about); `instruction`\nis the simple USER-FACING direction. Keep both distinct.",
       "properties": {
+        "beat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The StoryBeat this shot serves (every shot serves a beat).",
+          "title": "Beat Id"
+        },
         "camera_motion": {
           "anyOf": [
             {
@@ -407,6 +544,19 @@
           "title": "Order",
           "type": "integer"
         },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Internal semantic reason the shot exists (05 \u00a712).",
+          "title": "Purpose"
+        },
         "subject_action": {
           "anyOf": [
             {
@@ -441,9 +591,29 @@
       "title": "ShotContract",
       "type": "object"
     },
+    "StoryBeat": {
+      "additionalProperties": false,
+      "description": "A creative/narrative purpose the resulting Story needs to express\n(05-story-director.md \u00a71-4). PLANNING object \u2014 minimal, no mutable\nexecution state (fulfillment lives in DirectorState/BeatProgress).\nEvery planned Shot serves a Beat; every Beat serves the StoryConcept.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "purpose": {
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "purpose"
+      ],
+      "title": "StoryBeat",
+      "type": "object"
+    },
     "StoryConceptContract": {
       "additionalProperties": false,
-      "description": "A creative idea proposed by the Director Engine (02 \u00a716).",
+      "description": "A creative idea proposed by the Director Engine (02 \u00a716).\n\n`summary` IS the Story's creative thesis (05-story-director.md \u00a74) \u2014 there\nis deliberately no separate `thesis` field.",
       "properties": {
         "id": {
           "format": "uuid",
@@ -506,8 +676,15 @@
     },
     "StoryPlanContract": {
       "additionalProperties": false,
-      "description": "The directed capture for one concept. MVP: generally 1-3 shots (02 \u00a717).",
+      "description": "The directed capture for one concept: WHAT material would create the\nStory. MVP: generally 1-3 shots (02 \u00a717). PLANNING only \u2014 it does NOT own\nexecution progress (that is DirectorState). Every shot's `beat_id` should\nreference a beat in `beats` (05-story-director.md \u00a72).",
       "properties": {
+        "beats": {
+          "items": {
+            "$ref": "#/$defs/StoryBeat"
+          },
+          "title": "Beats",
+          "type": "array"
+        },
         "concept_id": {
           "format": "uuid",
           "title": "Concept Id",
@@ -576,6 +753,18 @@
     },
     "creative_intent": {
       "$ref": "#/$defs/CreativeIntentContract"
+    },
+    "director_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DirectorState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Mutable DIRECT loop state (05 \u00a78). Plan stays stable; this changes."
     },
     "entry_point": {
       "$ref": "#/$defs/CaptureEntryPoint"

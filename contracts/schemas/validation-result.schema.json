@@ -24,8 +24,22 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Usability verdict for a captured shot. NEVER an aesthetic score (02 \u00a720).",
+  "description": "Usability verdict for a captured shot. NEVER an aesthetic score (02 \u00a720).\n\nShot-level ONLY (05-story-director.md \u00a76): it answers \"did the captured\nasset sufficiently satisfy the requested Shot, and is it usable?\". It does\nNOT determine StoryBeat fulfillment \u2014 that is Director state (BeatProgress).\nMay reference the shot/capture it judged.",
   "properties": {
+    "capture_asset_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The captured asset judged.",
+      "title": "Capture Asset Id"
+    },
     "confidence": {
       "anyOf": [
         {
@@ -49,6 +63,20 @@
     },
     "recommendation": {
       "$ref": "#/$defs/ValidationRecommendation"
+    },
+    "shot_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The Shot this judged.",
+      "title": "Shot Id"
     },
     "usable": {
       "title": "Usable",

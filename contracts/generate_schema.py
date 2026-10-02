@@ -37,6 +37,8 @@ AI_CONTRACTS: dict[str, tuple[type, str]] = {
     "SceneUnderstanding": (_ai.SceneUnderstandingContract, "scene-understanding.schema.json"),
     "StoryConcept": (_ai.StoryConceptContract, "story-concept.schema.json"),
     "StoryPlan": (_ai.StoryPlanContract, "story-plan.schema.json"),
+    "DirectorDecision": (_ai.DirectorDecision, "director-decision.schema.json"),
+    "DirectorState": (_ai.DirectorState, "director-state.schema.json"),
     "ValidationResult": (_ai.ValidationResultContract, "validation-result.schema.json"),
     "CaptureSession": (_ai.CaptureSessionContract, "capture-session.schema.json"),
     "MusicDirection": (_ai.MusicDirectionContract, "music-direction.schema.json"),

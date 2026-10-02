@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "A creative idea proposed by the Director Engine (02 \u00a716).",
+  "description": "A creative idea proposed by the Director Engine (02 \u00a716).\n\n`summary` IS the Story's creative thesis (05-story-director.md \u00a74) \u2014 there\nis deliberately no separate `thesis` field.",
   "properties": {
     "id": {
       "format": "uuid",

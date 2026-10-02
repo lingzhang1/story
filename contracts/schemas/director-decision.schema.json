@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "DirectorActionType": {
+      "description": "The Director's next action in the DIRECT decision loop\n(05-story-director.md \u00a77, \u00a720). One strongest recommendation at a time.",
+      "enum": [
+        "capture_shot",
+        "create_now",
+        "rescan_scene",
+        "retry_shot"
+      ],
+      "title": "DirectorActionType",
+      "type": "string"
+    },
+    "ShotContract": {
+      "additionalProperties": false,
+      "description": "One directed shot. Frozen product name is `Shot` (the element of\nStoryPlan.shots[]); 02 \u00a718 called this ShotPlan \u2014 see reconciliation \u00a74.2.\n\nTwo explicit layers (05-story-director.md \u00a712): `purpose` is the INTERNAL\nsemantic reason the shot exists (what Validation cares about); `instruction`\nis the simple USER-FACING direction. Keep both distinct.",
+      "properties": {
+        "beat_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The StoryBeat this shot serves (every shot serves a beat).",
+          "title": "Beat Id"
+        },
+        "camera_motion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Motion"
+        },
+        "example_asset_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Example Asset Id"
+        },
+        "framing": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Framing"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "instruction": {
+          "title": "Instruction",
+          "type": "string"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Internal semantic reason the shot exists (05 \u00a712).",
+          "title": "Purpose"
+        },
+        "subject_action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject Action"
+        },
+        "target_duration_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Duration Seconds"
+        }
+      },
+      "required": [
+        "id",
+        "order",
+        "instruction"
+      ],
+      "title": "ShotContract",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The Director's single strongest next recommendation (05 \u00a75, \u00a79).\n\nSeparate from StoryPlan: StoryPlan = WHAT material would create the Story;\nDirectorDecision = what the user/system should DO next. Never exposes\nmultiple creative choices to the user by default.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/DirectorActionType"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Internal rationale for this decision (not necessarily user-facing).",
+      "title": "Reason"
+    },
+    "shot": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShotContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "DirectorDecision",
+  "type": "object"
+}

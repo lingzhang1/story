@@ -76,6 +76,17 @@ enum ValidationIssueDTO: String, Codable {
     case instructionNotFollowed = "instruction_not_followed"
 }
 
+enum DirectorActionTypeDTO: String, Codable {
+    case captureShot = "capture_shot"
+    case createNow = "create_now"
+    case rescanScene = "rescan_scene"
+    case retryShot = "retry_shot"
+}
+
+enum BeatStatusDTO: String, Codable {
+    case unfulfilled, partial, fulfilled
+}
+
 // MARK: - CreativeIntent (02 §4)
 
 struct CreativeIntentSourceDTO: Codable, Equatable {
@@ -187,10 +198,13 @@ struct StoryConceptContractDTO: Codable, Equatable {
 }
 
 /// Frozen product name is `Shot` (element of StoryPlan.shots[]).
+/// `purpose` = internal semantic reason; `instruction` = user-facing direction.
 struct ShotContractDTO: Codable, Equatable {
     var id: UUID
     var order: Int
     var instruction: String
+    var beatId: String?
+    var purpose: String?
     var targetDurationSeconds: Double?
     var framing: String?
     var cameraMotion: String?
@@ -198,7 +212,8 @@ struct ShotContractDTO: Codable, Equatable {
     var exampleAssetId: UUID?
 
     enum CodingKeys: String, CodingKey {
-        case id, order, instruction, framing
+        case id, order, instruction, purpose, framing
+        case beatId = "beat_id"
         case targetDurationSeconds = "target_duration_seconds"
         case cameraMotion = "camera_motion"
         case subjectAction = "subject_action"
@@ -206,29 +221,75 @@ struct ShotContractDTO: Codable, Equatable {
     }
 }
 
+/// A creative/narrative purpose the Story must express. Minimal planning object.
+struct StoryBeatDTO: Codable, Equatable {
+    var id: String
+    var purpose: String
+}
+
 struct StoryPlanContractDTO: Codable, Equatable {
     var id: UUID
     var conceptId: UUID
+    var beats: [StoryBeatDTO]
     var shots: [ShotContractDTO]
     var estimatedDurationSeconds: Double?
 
     enum CodingKeys: String, CodingKey {
-        case id, shots
+        case id, beats, shots
         case conceptId = "concept_id"
         case estimatedDurationSeconds = "estimated_duration_seconds"
     }
 }
 
-// MARK: - ValidationResult (02 §20)
+// MARK: - ValidationResult (02 §20) — shot-level usability only
 
 struct ValidationResultContractDTO: Codable, Equatable {
     var usable: Bool
     var recommendation: ValidationRecommendationDTO
     var confidence: Double?
     var issues: [ValidationIssueDTO]
+    var shotId: UUID?
+    var captureAssetId: UUID?
 
     enum CodingKeys: String, CodingKey {
         case usable, recommendation, confidence, issues
+        case shotId = "shot_id"
+        case captureAssetId = "capture_asset_id"
+    }
+}
+
+// MARK: - Director decision loop (05-story-director.md §5, §7)
+
+/// One strongest next action. StoryPlan = what material; this = what to do next.
+struct DirectorDecisionDTO: Codable, Equatable {
+    var action: DirectorActionTypeDTO
+    var shot: ShotContractDTO?
+    var reason: String?
+}
+
+/// Director-level fulfillment of one beat. NOT ValidationResult, NOT planning.
+struct BeatProgressDTO: Codable, Equatable {
+    var beatId: String
+    var status: BeatStatusDTO
+    var supportingAssetIds: [UUID]
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case beatId = "beat_id"
+        case supportingAssetIds = "supporting_asset_ids"
+    }
+}
+
+/// Mutable DIRECT execution state, owned by the CaptureSession.
+struct DirectorStateDTO: Codable, Equatable {
+    var currentBeatId: String?
+    var beatProgress: [BeatProgressDTO]
+    var lastDecision: DirectorDecisionDTO?
+
+    enum CodingKeys: String, CodingKey {
+        case currentBeatId = "current_beat_id"
+        case beatProgress = "beat_progress"
+        case lastDecision = "last_decision"
     }
 }
 
@@ -242,6 +303,7 @@ struct CaptureSessionContractDTO: Codable, Equatable {
     var sceneUnderstanding: SceneUnderstandingContractDTO?
     var selectedConcept: StoryConceptContractDTO?
     var storyPlan: StoryPlanContractDTO?
+    var directorState: DirectorStateDTO?
     var captureAssetIds: [UUID]
     var createdAt: Date
 
@@ -253,6 +315,7 @@ struct CaptureSessionContractDTO: Codable, Equatable {
         case sceneUnderstanding = "scene_understanding"
         case selectedConcept = "selected_concept"
         case storyPlan = "story_plan"
+        case directorState = "director_state"
         case captureAssetIds = "capture_asset_ids"
         case createdAt = "created_at"
     }
