@@ -1,0 +1,22 @@
+{
+  "id": "su_blank_weak",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "weak/boring environment (plain wall)",
+  "frames_dir": "evals/scene_understanding/su_blank_weak/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "reports limited opportunities honestly",
+    "sparse output, not invented cinematic features",
+    "operator_space may be unknown"
+  ],
+  "forbidden_properties": [
+    "invents composition/motion opportunities not present",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "weak"
+  ]
+}

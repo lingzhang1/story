@@ -1,0 +1,22 @@
+{
+  "id": "su_office",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "office",
+  "frames_dir": "evals/scene_understanding/su_office/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes an office/workspace",
+    "identifies desk/screen/doorway where present",
+    "notes limited-to-moderate operator space"
+  ],
+  "forbidden_properties": [
+    "invents coworkers not visible",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "office"
+  ]
+}

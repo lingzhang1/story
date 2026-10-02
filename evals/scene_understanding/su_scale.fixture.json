@@ -1,0 +1,20 @@
+{
+  "id": "su_scale",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "scene with meaningful subject/environment scale",
+  "frames_dir": "evals/scene_understanding/su_scale/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes subject small relative to a large environment",
+    "emphasis on scale contrast in composition_opportunities"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "scene_with_meaningful_subject"
+  ]
+}

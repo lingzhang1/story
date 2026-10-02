@@ -1,0 +1,21 @@
+{
+  "id": "su_urban_street",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "urban street",
+  "frames_dir": "evals/scene_understanding/su_urban_street/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes an urban street",
+    "notes depth/leading structure if visible",
+    "notes traffic/people as constraints if present"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "urban_street"
+  ]
+}

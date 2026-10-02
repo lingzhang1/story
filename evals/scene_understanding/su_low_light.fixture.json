@@ -1,0 +1,21 @@
+{
+  "id": "su_low_light",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "low light",
+  "frames_dir": "evals/scene_understanding/su_low_light/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes low-light conditions in lighting",
+    "notes low light as a constraint"
+  ],
+  "forbidden_properties": [
+    "claims bright even lighting",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "low_light"
+  ]
+}

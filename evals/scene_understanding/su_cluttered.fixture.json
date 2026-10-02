@@ -1,0 +1,21 @@
+{
+  "id": "su_cluttered",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "visually cluttered environment",
+  "frames_dir": "evals/scene_understanding/su_cluttered/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "notes heavy visual clutter as a constraint",
+    "does not list every object exhaustively"
+  ],
+  "forbidden_properties": [
+    "dumps an exhaustive irrelevant object list",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "visually_cluttered_environment"
+  ]
+}

@@ -151,9 +151,33 @@ def run_deterministic_checks(component: str, payload: dict[str, Any]) -> list[Ch
     elif component == "creative_intent":
         results.append(check_schema_valid(component, payload))
         results.append(check_creative_intent_no_overlap(payload))
+    elif component == "scene_understanding":
+        results.append(check_schema_valid(component, payload))
+        results.append(check_scene_observational(payload))
     else:
         results.append(check_schema_valid(component, payload))
     return results
+
+
+_SCENE_FORBIDDEN = (
+    "safe to ", "you should ", "walk toward", "walk backward",
+    "pan across", "cut to", "cut on", "zoom in on",
+)
+
+
+def check_scene_observational(payload: dict[str, Any]) -> CheckResult:
+    """SceneUnderstanding must describe observable reality — no directing,
+    editing, or safety-certification language (04-scene-understanding.md §23)."""
+    parts = [payload.get("summary", "")]
+    for k in ("motion_opportunities", "composition_opportunities", "constraints"):
+        parts += [s for s in payload.get(k, []) if isinstance(s, str)]
+    blob = " ".join(parts).lower()
+    hit = next((s for s in _SCENE_FORBIDDEN if s in blob), None)
+    return CheckResult(
+        "scene_observational",
+        hit is None,
+        "" if hit is None else f"leaked non-observational phrase: {hit!r}",
+    )
 
 
 def check_creative_intent_no_overlap(payload: dict[str, Any]) -> CheckResult:

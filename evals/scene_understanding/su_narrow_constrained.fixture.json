@@ -1,0 +1,21 @@
+{
+  "id": "su_narrow_constrained",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "constrained/narrow environment",
+  "frames_dir": "evals/scene_understanding/su_narrow_constrained/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "operator_space very_limited or limited",
+    "notes narrow space as a constraint"
+  ],
+  "forbidden_properties": [
+    "claims open movement space",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "constrained"
+  ]
+}

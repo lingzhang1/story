@@ -1,0 +1,20 @@
+{
+  "id": "su_park",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "park",
+  "frames_dir": "evals/scene_understanding/su_park/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes an open green space",
+    "notes open operator space and movement possibilities"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "park"
+  ]
+}

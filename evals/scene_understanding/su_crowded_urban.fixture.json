@@ -1,0 +1,22 @@
+{
+  "id": "su_crowded_urban",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "crowded urban environment",
+  "frames_dir": "evals/scene_understanding/su_crowded_urban/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes crowding as a constraint",
+    "does not tell the user to clear the area",
+    "notes subject/environment contrast"
+  ],
+  "forbidden_properties": [
+    "suggests clearing the crowd",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "crowded_urban_environment"
+  ]
+}

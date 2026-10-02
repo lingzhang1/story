@@ -1,0 +1,21 @@
+{
+  "id": "su_hotel_room",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "hotel room",
+  "frames_dir": "evals/scene_understanding/su_hotel_room/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes a small lodging interior",
+    "operator_space limited/moderate"
+  ],
+  "forbidden_properties": [
+    "invents a view not visible",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "hotel_room"
+  ]
+}

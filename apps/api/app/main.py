@@ -15,16 +15,21 @@ from __future__ import annotations
 import time
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts.schemas.ai_contracts import CreativeIntentContract
+from contracts.schemas.ai_contracts import CreativeIntentContract, SceneUnderstandingContract
 from contracts.schemas.dto import (
     CreateStoryRequest,
     GeneratedOutputDTO,
     StoryDTO,
 )
 from creative_intent import PROMPT_VERSION, SCHEMA_VERSION, CreativeIntentEngine
+from scene_understanding import (
+    PROMPT_VERSION as SU_PROMPT_VERSION,
+    SCHEMA_VERSION as SU_SCHEMA_VERSION,
+    SceneUnderstandingEngine,
+)
 from director_engine import DirectorEngine  # noqa: F401  (available for future shoot endpoint)
 from edit_engine import EditEngine
 from model_gateway import ProviderError, StructuredOutputError
@@ -35,9 +40,16 @@ from app.deps import (
     get_creative_intent_engine,
     get_director_engine,  # noqa: F401
     get_edit_engine,
+    get_scene_understanding_engine,
     get_story_engine,
 )
 from app.store import InMemoryStoryStore
+
+# Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
+_SU_MAX_FRAMES = 6
+_SU_MAX_FRAME_BYTES = 2 * 1024 * 1024          # 2 MB per frame
+_SU_MAX_TOTAL_BYTES = 8 * 1024 * 1024          # 8 MB total payload
+_SU_ALLOWED_TYPES = {"image/jpeg", "image/jpg", "image/png"}
 
 
 class ResolveCreativeIntentRequest(BaseModel):
@@ -112,6 +124,86 @@ def create_app() -> FastAPI:
                    "success": True},
         )
         return intent
+
+    @app.post("/v1/scene-understanding", response_model=SceneUnderstandingContract, status_code=200)
+    async def scene_understanding(
+        context: str = Form(..., description="JSON: {capture_session_id, mode, story_id?}"),
+        frames: list[UploadFile] = File(..., description="3-6 representative JPEG scan frames"),
+        engine: SceneUnderstandingEngine = Depends(get_scene_understanding_engine),
+    ) -> SceneUnderstandingContract:
+        """Analyze representative scan frames into a canonical SceneUnderstanding
+        via a real multimodal model. Frames are ephemeral — NOT persisted server
+        side. On model/provider failure, return a designed failure (503), never a
+        fabricated scene."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+
+        # --- validate the multipart request BEFORE touching a model ----------
+        if not frames:
+            raise HTTPException(status_code=422, detail="no frames provided")
+        if len(frames) > _SU_MAX_FRAMES:
+            raise HTTPException(status_code=413, detail=f"too many frames (max {_SU_MAX_FRAMES})")
+
+        frame_bytes: list[bytes] = []
+        total = 0
+        for f in frames:
+            if (f.content_type or "").lower() not in _SU_ALLOWED_TYPES:
+                raise HTTPException(status_code=415, detail=f"unsupported frame type: {f.content_type}")
+            data = await f.read()
+            if len(data) > _SU_MAX_FRAME_BYTES:
+                raise HTTPException(status_code=413, detail="a frame exceeds the per-frame size limit")
+            total += len(data)
+            if total > _SU_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="total payload exceeds the size limit")
+            frame_bytes.append(data)
+
+        import json as _json
+        try:
+            ctx = _json.loads(context)
+            if not isinstance(ctx, dict):
+                raise ValueError("context must be a JSON object")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"invalid context json: {e}")
+
+        base_fields = {
+            "operation": "scene_understanding",
+            "correlation_id": correlation_id,
+            "task": "scene_understanding.analyze",
+            "prompt_version": SU_PROMPT_VERSION,
+            "schema_version": SU_SCHEMA_VERSION,
+            "frame_count": len(frame_bytes),
+            "compressed_payload_bytes": total,
+            "mode": ctx.get("mode"),
+        }
+        try:
+            scene = engine.analyze(frame_bytes)
+        except StructuredOutputError as e:
+            log.warning(
+                "scene_understanding_structured_output_failed",
+                extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "structured_output_failed": True, "error": str(e)[:300]},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="scene_understanding_unavailable: model did not return a valid scene; rescan/retry",
+            )
+        except ProviderError as e:
+            log.warning(
+                "scene_understanding_provider_failed",
+                extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "provider_error": True, "error": str(e)[:300]},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="scene_understanding_unavailable: model provider error; retry",
+            )
+        # Frames are discarded here (not persisted) — ephemeral inference input.
+        log.info(
+            "scene_understanding_resolved",
+            extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "subject_count": len(scene.subjects)},
+        )
+        return scene
 
     @app.post("/v1/stories", response_model=StoryDTO, status_code=201)
     def create_story(

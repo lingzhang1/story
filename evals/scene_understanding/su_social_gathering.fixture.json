@@ -1,0 +1,21 @@
+{
+  "id": "su_social_gathering",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "social gathering",
+  "frames_dir": "evals/scene_understanding/su_social_gathering/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes people gathered",
+    "notes group as a visual subject",
+    "constraints note clutter/limited operator space"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "social_gathering"
+  ]
+}

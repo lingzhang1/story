@@ -1,0 +1,20 @@
+{
+  "id": "su_restaurant_table",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "restaurant table / birthday-style",
+  "frames_dir": "evals/scene_understanding/su_restaurant_table/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes a table with people/food",
+    "notes intimate scale, limited operator space"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "restaurant_table"
+  ]
+}

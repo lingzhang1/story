@@ -12,6 +12,7 @@ struct ShootMomentView: View {
     @Bindable var story: StoryModel
 
     @State private var showCamera = false
+    @State private var showSceneScan = false
     @State private var suggestion: ShotSuggestion?
 
     private var useCases: StoryUseCases {
@@ -30,6 +31,18 @@ struct ShootMomentView: View {
                     .foregroundStyle(Color(red: 0.96, green: 0.94, blue: 0.91))
 
                 Spacer()
+
+                Button { showSceneScan = true } label: {
+                    Text("Show me what's around you")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color(red: 0.83, green: 0.66, blue: 0.33), lineWidth: 1)
+                        )
+                        .foregroundStyle(Color(red: 0.83, green: 0.66, blue: 0.33))
+                }
 
                 Button { showCamera = true } label: {
                     Text("Open Camera")
@@ -55,6 +68,9 @@ struct ShootMomentView: View {
                 onCancel: { showCamera = false }
             )
             .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $showSceneScan) {
+            SceneScanFlowView(storyId: story.id)
         }
     }
 

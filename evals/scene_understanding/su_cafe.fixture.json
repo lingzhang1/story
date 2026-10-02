@@ -1,0 +1,21 @@
+{
+  "id": "su_cafe",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "cafe / restaurant",
+  "frames_dir": "evals/scene_understanding/su_cafe/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes a cafe/restaurant interior",
+    "notes table/food/window subjects",
+    "constraints note other patrons / narrow space if visible"
+  ],
+  "forbidden_properties": [
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "cafe"
+  ]
+}

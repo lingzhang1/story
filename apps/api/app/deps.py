@@ -21,6 +21,11 @@ from creative_intent import (
     MockCreativeIntentEngine,
     RealCreativeIntentEngine,
 )
+from scene_understanding import (
+    MockSceneUnderstandingEngine,
+    RealSceneUnderstandingEngine,
+    SceneUnderstandingEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -54,3 +59,18 @@ def get_creative_intent_engine() -> CreativeIntentEngine:
     if os.environ.get("STORY_CREATIVE_INTENT_MOCK") == "1":
         return MockCreativeIntentEngine()
     return RealCreativeIntentEngine(get_model_gateway())
+
+
+def get_scene_understanding_engine() -> SceneUnderstandingEngine:
+    """Provide the Scene Understanding analyzer.
+
+    Task-specific, config-driven VISION model (STORY_SCENE_MODEL), separate from
+    the Creative Intent model (Creative Intent model != Scene Understanding model).
+    Default amazon.nova-pro-v1:0 — on-demand-invocable, image-capable, no Anthropic
+    form gate. Set STORY_SCENE_UNDERSTANDING_MOCK=1 for the dev/offline mock (never
+    a silent production fallback).
+    """
+    if os.environ.get("STORY_SCENE_UNDERSTANDING_MOCK") == "1":
+        return MockSceneUnderstandingEngine()
+    model = os.environ.get("STORY_SCENE_MODEL", "amazon.nova-pro-v1:0")
+    return RealSceneUnderstandingEngine(BedrockModelGateway(model_id=model))

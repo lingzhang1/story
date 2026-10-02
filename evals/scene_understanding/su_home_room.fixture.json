@@ -1,0 +1,22 @@
+{
+  "id": "su_home_room",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "home / ordinary indoor room",
+  "frames_dir": "evals/scene_understanding/su_home_room/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes an indoor domestic space",
+    "notes furniture/window as subjects with prominence",
+    "operator_space reflects a room-sized interior"
+  ],
+  "forbidden_properties": [
+    "invents objects not present",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "home"
+  ]
+}

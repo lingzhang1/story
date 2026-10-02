@@ -21,7 +21,8 @@ RUN pip install --prefix=/install/deps \
     "fastapi" \
     "uvicorn[standard]" \
     "pydantic>=2" \
-    "boto3"
+    "boto3" \
+    "python-multipart"
 
 # ---- runtime ------------------------------------------------------------
 FROM python:3.12-slim AS runtime

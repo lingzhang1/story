@@ -1,0 +1,22 @@
+{
+  "id": "su_mountain_overlook",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "mountain / scenic overlook",
+  "frames_dir": "evals/scene_understanding/su_mountain_overlook/  (real device scan frames; added during dogfooding)",
+  "expected_properties": [
+    "recognizes a large landscape with strong depth",
+    "notes scale contrast if a person is present",
+    "operator_space open"
+  ],
+  "forbidden_properties": [
+    "claims an inaccessible path is reachable",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe",
+    "infers what the user wants to make"
+  ],
+  "tags": [
+    "scene",
+    "mountain"
+  ]
+}
