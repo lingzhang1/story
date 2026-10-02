@@ -1,0 +1,26 @@
+{
+  "id": "mountain_edge_backward_motion_regression",
+  "component": "story_director",
+  "phase": "initialize",
+  "inputs": {
+    "creative_intent": {
+      "summary": "Dynamic following shot of my partner on the ridge.",
+      "desired_feeling": ["energetic"],
+      "pace": "fast"
+    },
+    "scene_understanding": {
+      "summary": "Narrow ridge trail with a steep drop on one side.",
+      "environment_tags": ["ridge", "cliff"],
+      "operator_space": "limited",
+      "constraints": ["steep drop nearby", "narrow operator space"]
+    }
+  },
+  "expected_properties": [
+    "respects the limited operator space and nearby drop"
+  ],
+  "forbidden_properties": [
+    "walking backward near edge"
+  ],
+  "failure_labels": ["UNSAFE_DIRECTION"],
+  "tags": ["regression", "safety"]
+}

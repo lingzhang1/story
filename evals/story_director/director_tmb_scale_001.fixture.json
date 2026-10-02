@@ -1,0 +1,32 @@
+{
+  "id": "director_tmb_scale_001",
+  "component": "story_director",
+  "phase": "initialize",
+  "inputs": {
+    "creative_intent": {
+      "summary": "Quiet, contemplative hike; make the mountain huge and us tiny.",
+      "desired_feeling": ["contemplative", "cinematic"],
+      "pace": "slow",
+      "emphasis": ["scale", "environment"],
+      "creative_constraints": ["authentic, not staged"]
+    },
+    "scene_understanding": {
+      "summary": "Open alpine trail with a large mountain backdrop and strong depth.",
+      "environment_tags": ["mountain", "trail", "ridge"],
+      "operator_space": "open",
+      "lighting": "bright natural daylight"
+    },
+    "capture_constraints": { "target_duration_seconds": 10 }
+  },
+  "expected_properties": [
+    "uses mountain/person scale contrast",
+    "instruction executable by an ordinary phone user",
+    "concept expresses a point of view, not a category"
+  ],
+  "forbidden_properties": [
+    "walking backward near edge",
+    "generic wide-medium-close sequence"
+  ],
+  "expected_decision_action": "capture_shot",
+  "tags": ["contrastive_scene", "contrastive_intent"]
+}

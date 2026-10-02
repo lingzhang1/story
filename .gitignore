@@ -45,3 +45,6 @@ apps/ios/**/.swiftpm/
 *.xcuserstate
 **/xcuserdata/
 **/*.xcuserdatad/
+
+# Eval harness run artifacts (regenerated; not source)
+evals/results/
