@@ -41,6 +41,16 @@ final class StoryModel {
     var intentTone: String
     var intentSummary: String
 
+    // Milestone C1: the REAL model-resolved CreativeIntent fields. Optional +
+    // defaulted so existing persisted Stories remain valid (additive migration).
+    var intentSubject: String?
+    var intentDesiredFeeling: [String] = []
+    var intentStyleTags: [String] = []
+    var intentEmphasis: [String] = []
+    var intentConstraints: [String] = []
+    var intentPace: String?
+    var intentTargetDurationSeconds: Double?
+
     var createdAt: Date
     var updatedAt: Date
 

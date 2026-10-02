@@ -24,7 +24,11 @@ struct StoryHomeView: View {
                     Text(story.intentSummary)
                         .font(.system(size: 20, weight: .light, design: .serif))
                         .foregroundStyle(Color(red: 0.96, green: 0.94, blue: 0.91))
-                    Text("\(story.status.rawValue.capitalized) · theme: \(story.intentTheme) · tone: \(story.intentTone)")
+
+                    // What Story understood from your direction (real model output).
+                    IntentChips(story: story)
+
+                    Text(story.status.rawValue.capitalized)
                         .font(.caption)
                         .foregroundStyle(.gray)
 
@@ -93,6 +97,62 @@ struct StoryHomeView: View {
     private func createOutput() {
         do { _ = try useCases.createStoryOutput(for: story) }
         catch { print("Failed to create output: \(error)") }
+    }
+}
+
+// Surfaces what the real model understood from the user's direction.
+// Creative Intent interprets WHAT the user wants; it does NOT yet generate
+// shot ideas — that is Scene Understanding + Story Director (next milestone).
+private struct IntentChips: View {
+    @Bindable var story: StoryModel
+    private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What Story understood")
+                .font(.caption).foregroundStyle(gold)
+            FlowChips(items: labeledChips)
+            if let subject = story.intentSubject, !subject.isEmpty {
+                Text("About: \(subject)").font(.caption2).foregroundStyle(.gray)
+            }
+            if !story.intentConstraints.isEmpty {
+                Text("Keep in mind: " + story.intentConstraints.joined(separator: " · "))
+                    .font(.caption2).foregroundStyle(.gray)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(red: 0.09, green: 0.09, blue: 0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var labeledChips: [String] {
+        var chips: [String] = []
+        chips += story.intentDesiredFeeling
+        chips += story.intentEmphasis.map { "✦ \($0)" }
+        if let p = story.intentPace, !p.isEmpty { chips.append("pace: \(p)") }
+        if let d = story.intentTargetDurationSeconds { chips.append("\(Int(d))s") }
+        if chips.isEmpty { chips = ["(minimal — add more direction for a richer read)"] }
+        return chips
+    }
+}
+
+// Simple wrapping chip row.
+private struct FlowChips: View {
+    let items: [String]
+    private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6, alignment: .leading)],
+                  alignment: .leading, spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                Text(item)
+                    .font(.caption2)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(gold.opacity(0.15))
+                    .foregroundStyle(gold)
+                    .clipShape(Capsule())
+            }
+        }
     }
 }
 

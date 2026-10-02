@@ -42,7 +42,18 @@ final class StoryUseCases {
     ) async throws -> StoryModel {
         let dto = try await service.resolve(rawText: direction)
         let intent = Self.mapIntent(dto, rawText: direction)
-        return try repository.createStory(title: title, intent: intent)
+        let story = try repository.createStory(title: title, intent: intent)
+        // Carry the FULL resolved intelligence onto the Story so Story Home can
+        // show what the model actually understood (not just theme/tone).
+        story.intentSubject = dto.subject
+        story.intentDesiredFeeling = dto.desiredFeeling
+        story.intentStyleTags = dto.styleTags
+        story.intentEmphasis = dto.emphasis
+        story.intentConstraints = dto.creativeConstraints
+        story.intentPace = dto.pace?.rawValue
+        story.intentTargetDurationSeconds = dto.targetDurationSeconds
+        try repository.save()
+        return story
     }
 
     /// Map the canonical CreativeIntent DTO onto the Milestone-A flattened local
