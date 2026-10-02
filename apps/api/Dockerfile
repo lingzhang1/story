@@ -20,7 +20,8 @@ WORKDIR /install
 RUN pip install --prefix=/install/deps \
     "fastapi" \
     "uvicorn[standard]" \
-    "pydantic>=2"
+    "pydantic>=2" \
+    "boto3"
 
 # ---- runtime ------------------------------------------------------------
 FROM python:3.12-slim AS runtime
@@ -40,6 +41,9 @@ COPY --from=builder /install/deps /usr/local
 COPY packages/ /app/packages/
 COPY contracts/ /app/contracts/
 COPY apps/api/ /app/apps/api/
+# Versioned engine prompts (creative_intent/v1/system.md, ...). The engine
+# resolves these at <repo>/prompts/..., so they must be in the image.
+COPY prompts/ /app/prompts/
 
 EXPOSE 8080
 

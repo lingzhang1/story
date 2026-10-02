@@ -47,6 +47,19 @@ describe("StoryApiStack (Milestone A)", () => {
     });
   });
 
+  test("instance role has least-privilege Bedrock InvokeModel grant (Milestone C)", () => {
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: "Allow",
+            Action: Match.arrayWith(["bedrock:InvokeModel"]),
+          }),
+        ]),
+      }),
+    });
+  });
+
   test("provisions ZERO forbidden resource types", () => {
     const forbidden = [
       "AWS::DynamoDB::Table",

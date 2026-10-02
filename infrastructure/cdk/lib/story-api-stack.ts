@@ -51,12 +51,27 @@ export class StoryApiStack extends cdk.Stack {
     repository.grantPull(accessRole);
 
     // --- App Runner instance role (runtime task permissions) -------------
-    // Least-privilege: no S3/Bedrock/DynamoDB grants at Milestone A — the
-    // mock API needs none. Real grants are added when those services land.
+    // Milestone C: the API now calls Amazon Bedrock (Creative Intent) through
+    // the Model Gateway, so the runtime role is granted least-privilege
+    // bedrock:InvokeModel on foundation models + inference profiles. No S3 /
+    // DynamoDB / SQS grants — still none are needed. Model id is runtime config
+    // (STORY_BEDROCK_MODEL); the grant covers the model family in-region plus
+    // cross-region inference-profile ARNs so a config switch needs no IAM change.
     const instanceRole = new iam.Role(this, "StoryApiInstanceRole", {
       assumedBy: new iam.ServicePrincipal("tasks.apprunner.amazonaws.com"),
       description: "Runtime role for the Story API App Runner service",
     });
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "BedrockInvoke",
+        effect: iam.Effect.ALLOW,
+        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+        resources: [
+          `arn:aws:bedrock:*::foundation-model/*`,
+          `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
+        ],
+      })
+    );
 
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
