@@ -1,0 +1,17 @@
+{
+  "id": "ci_conflicting_ambiguous_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "I want it calm but also really energetic and exciting" },
+  "expected_properties": [
+    "preserves the tension rather than silently picking one side",
+    "either records both feelings or notes the ambiguity in a constraint",
+    "does not fabricate a confident single pace it cannot justify"
+  ],
+  "forbidden_properties": [
+    "drops one half of the conflict without acknowledgement",
+    "invents a resolution the user never gave"
+  ],
+  "failure_labels": ["INTENT_MISREAD"],
+  "tags": ["conflicting", "ambiguous", "uncertainty"]
+}

@@ -10,6 +10,8 @@ struct CreativeDirectionView: View {
     @State private var title: String = ""
     @State private var direction: String = ""
     @State private var createdStory: StoryModel?
+    @State private var isResolving = false
+    @State private var errorMessage: String?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -46,17 +48,21 @@ struct CreativeDirectionView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 Button {
-                    createStory()
+                    Task { await createStory() }
                 } label: {
-                    Text("Create Story")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color(red: 0.83, green: 0.66, blue: 0.33))
-                        .foregroundStyle(.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    HStack {
+                        if isResolving { ProgressView().tint(.black) }
+                        Text(isResolving ? "Creating…" : "Create Story")
+                            .font(.headline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color(red: 0.83, green: 0.66, blue: 0.33))
+                    .foregroundStyle(.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty
+                .disabled(isResolving
+                          || title.trimmingCharacters(in: .whitespaces).isEmpty
                           || direction.trimmingCharacters(in: .whitespaces).isEmpty)
 
                 Spacer()
@@ -68,14 +74,28 @@ struct CreativeDirectionView: View {
         .navigationDestination(item: $createdStory) { story in
             StoryHomeView(story: story)
         }
+        .alert("Couldn't create your Story", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("Try Again") { Task { await createStory() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
-    private func createStory() {
+    private func createStory() async {
+        isResolving = true
+        errorMessage = nil
+        defer { isResolving = false }
         do {
-            createdStory = try useCases.startStory(title: title, direction: direction)
+            // Milestone C1: resolve CreativeIntent via the real backend model.
+            createdStory = try await useCases.startStoryWithRealIntent(
+                title: title, direction: direction)
         } catch {
-            // Local-first: a failure here never loses captured media (none yet).
-            print("Failed to create story: \(error)")
+            // Preserve the user's input; show a recoverable retry. Never fabricate.
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Something went wrong. Please try again."
         }
     }
 }

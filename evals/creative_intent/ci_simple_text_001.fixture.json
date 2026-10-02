@@ -1,0 +1,17 @@
+{
+  "id": "ci_simple_text_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a short energetic video of Times Square" },
+  "expected_properties": [
+    "subject references Times Square",
+    "desired_feeling or style reflects energetic",
+    "summary is one concise line"
+  ],
+  "forbidden_properties": [
+    "invents a scene fact not stated",
+    "contains shot or camera instructions",
+    "contains edit/cut instructions"
+  ],
+  "tags": ["simple_text"]
+}

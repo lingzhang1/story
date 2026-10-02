@@ -1,0 +1,16 @@
+{
+  "id": "ci_explicit_constraints_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "cinematic, but keep it authentic and real, not staged, and focus more on the environment than on me" },
+  "expected_properties": [
+    "feeling includes cinematic",
+    "creative_constraints preserves 'authentic / not staged'",
+    "emphasis or constraint preserves 'environment over me'"
+  ],
+  "forbidden_properties": [
+    "drops the authenticity constraint",
+    "makes it person-dominant despite the stated preference"
+  ],
+  "tags": ["explicit_constraints"]
+}

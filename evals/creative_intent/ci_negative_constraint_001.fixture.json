@@ -1,0 +1,16 @@
+{
+  "id": "ci_negative_constraint_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "make my hike feel epic but not cheesy, and don't make it look like an advertisement" },
+  "expected_properties": [
+    "feeling includes epic",
+    "creative_constraints preserves the negative 'not cheesy'",
+    "creative_constraints preserves 'not like an advertisement'"
+  ],
+  "forbidden_properties": [
+    "collapses 'epic but not cheesy' to just 'epic', dropping the negative nuance"
+  ],
+  "failure_labels": ["INTENT_MISREAD"],
+  "tags": ["negative_constraints"]
+}

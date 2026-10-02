@@ -1,0 +1,17 @@
+{
+  "id": "ci_landscape_scale_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "make the mountains feel huge and us feel tiny" },
+  "expected_properties": [
+    "emphasis includes scale and environment",
+    "constraint or emphasis preserves 'people small vs huge landscape'",
+    "summary conveys scale contrast"
+  ],
+  "forbidden_properties": [
+    "emphasis is person-dominant",
+    "describes a specific mountain or trail that was not stated",
+    "contains shot instructions"
+  ],
+  "tags": ["landscape_emphasis", "subject_emphasis"]
+}

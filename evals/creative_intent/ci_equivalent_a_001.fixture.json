@@ -1,0 +1,15 @@
+{
+  "id": "ci_equivalent_a_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a calm peaceful cinematic video of the lake at dawn" },
+  "expected_properties": [
+    "feeling includes calm/peaceful and cinematic",
+    "subject references the lake at dawn"
+  ],
+  "forbidden_properties": [
+    "feeling is energetic/fast"
+  ],
+  "contrast_group": "ci_equivalent_phrasing",
+  "tags": ["equivalent_phrasings", "stability"]
+}

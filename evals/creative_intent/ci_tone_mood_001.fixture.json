@@ -1,0 +1,17 @@
+{
+  "id": "ci_tone_mood_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a quiet, nostalgic memory of our last morning in Kyoto" },
+  "expected_properties": [
+    "feeling includes quiet/nostalgic/calm",
+    "subject references the Kyoto morning",
+    "pace, if present, is slow"
+  ],
+  "forbidden_properties": [
+    "feeling includes energetic/frantic",
+    "invents scene facts about Kyoto",
+    "contains shot instructions"
+  ],
+  "tags": ["tone", "mood"]
+}

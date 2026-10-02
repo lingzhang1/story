@@ -1,0 +1,16 @@
+{
+  "id": "ci_equivalent_b_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "film the lake early in the morning — serene, still, movie-like" },
+  "expected_properties": [
+    "feeling includes calm/serene and cinematic",
+    "subject references the lake in the early morning",
+    "semantically similar to ci_equivalent_a_001 despite different wording"
+  ],
+  "forbidden_properties": [
+    "feeling is energetic/fast"
+  ],
+  "contrast_group": "ci_equivalent_phrasing",
+  "tags": ["equivalent_phrasings", "stability"]
+}

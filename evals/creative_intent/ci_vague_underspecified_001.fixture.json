@@ -1,0 +1,18 @@
+{
+  "id": "ci_vague_underspecified_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "make something cool here" },
+  "expected_properties": [
+    "produces a minimal, honest intent (summary present)",
+    "leaves optional creative fields empty rather than inventing them",
+    "echoes the raw user description"
+  ],
+  "forbidden_properties": [
+    "invents a subject the user never gave",
+    "fabricates desired_feeling / emphasis / pace with no basis",
+    "produces a long creative brief"
+  ],
+  "failure_labels": ["INTENT_INVENTED"],
+  "tags": ["vague", "underspecified"]
+}

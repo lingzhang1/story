@@ -1,0 +1,21 @@
+{
+  "id": "ci_detailed_text_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": {
+    "raw_text": "We're hiking Tour du Mont Blanc. I want an emotional cinematic film that shows the scale of the mountains and the feeling of the journey, with a slow gradual build. Keep it about us but mostly the landscape."
+  },
+  "expected_properties": [
+    "subject references the hike / Tour du Mont Blanc",
+    "feeling includes emotional and cinematic",
+    "emphasis includes scale / environment / journey",
+    "pace reflects slow or gradual build if captured",
+    "preserves the 'mostly landscape, some us' balance as a constraint or emphasis"
+  ],
+  "forbidden_properties": [
+    "invents specific scene objects (a specific ridge, specific weather)",
+    "generates shots or shot lists",
+    "fabricates a duration not implied"
+  ],
+  "tags": ["detailed_text", "landscape_emphasis", "tone", "pacing"]
+}

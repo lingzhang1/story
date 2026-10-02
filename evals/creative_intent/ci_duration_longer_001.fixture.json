@@ -1,0 +1,15 @@
+{
+  "id": "ci_duration_longer_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a 30 second travel memory of our weekend in New York" },
+  "expected_properties": [
+    "target_duration_seconds is about 30",
+    "subject references the New York weekend"
+  ],
+  "forbidden_properties": [
+    "invents a duration far from 30",
+    "generates a shot list to fill 30 seconds"
+  ],
+  "tags": ["duration_longer"]
+}

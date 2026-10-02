@@ -1,0 +1,16 @@
+{
+  "id": "ci_person_emphasis_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a warm video really centered on my daughter at her birthday dinner" },
+  "expected_properties": [
+    "subject references the daughter / birthday dinner",
+    "emphasis includes person / relationship",
+    "feeling includes warm/intimate"
+  ],
+  "forbidden_properties": [
+    "emphasis is landscape/environment-dominant",
+    "invents guests or decorations not stated"
+  ],
+  "tags": ["subject_emphasis", "person_emphasis"]
+}

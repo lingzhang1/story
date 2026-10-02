@@ -1,0 +1,15 @@
+{
+  "id": "ci_duration_short_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "a quick 7-second clip of the beach at sunset" },
+  "expected_properties": [
+    "target_duration_seconds is about 7",
+    "subject references beach / sunset"
+  ],
+  "forbidden_properties": [
+    "invents a duration far from 7",
+    "contains shot instructions"
+  ],
+  "tags": ["duration_short"]
+}

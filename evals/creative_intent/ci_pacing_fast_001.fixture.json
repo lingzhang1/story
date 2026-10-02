@@ -1,0 +1,16 @@
+{
+  "id": "ci_pacing_fast_001",
+  "component": "creative_intent",
+  "phase": "resolve",
+  "inputs": { "raw_text": "something fun and chaotic and fast, lots of energy" },
+  "expected_properties": [
+    "pace is fast",
+    "feeling includes playful/energetic",
+    "summary reflects a high-energy intent"
+  ],
+  "forbidden_properties": [
+    "pace is slow",
+    "contains edit instructions like 'cut on beat'"
+  ],
+  "tags": ["pacing"]
+}

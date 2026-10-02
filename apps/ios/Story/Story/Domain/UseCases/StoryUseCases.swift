@@ -25,9 +25,39 @@ final class StoryUseCases {
     }
 
     /// Start a Story from the user's free-text creative direction.
+    /// Milestone A path: local mock intent (offline / tests).
     func startStory(title: String, direction: String) throws -> StoryModel {
         let intent = storyEngine.deriveCreativeIntent(from: direction)
         return try repository.createStory(title: title, intent: intent)
+    }
+
+    /// Milestone C1 path: resolve CreativeIntent via the REAL backend
+    /// (POST /v1/creative-intent -> Model Gateway -> model), then create the
+    /// Story. Throws on backend failure so the UI can show a recoverable retry
+    /// — we never silently fabricate an intent (approved design §9).
+    func startStoryWithRealIntent(
+        title: String,
+        direction: String,
+        service: CreativeIntentService = CreativeIntentService()
+    ) async throws -> StoryModel {
+        let dto = try await service.resolve(rawText: direction)
+        let intent = Self.mapIntent(dto, rawText: direction)
+        return try repository.createStory(title: title, intent: intent)
+    }
+
+    /// Map the canonical CreativeIntent DTO onto the Milestone-A flattened local
+    /// value type (documented mapping, 02 §0a): summary 1:1; the local `theme`/
+    /// `tone` are seeded from style_tags / desired_feeling until the local model
+    /// carries the full structured intent.
+    static func mapIntent(_ dto: CreativeIntentContractDTO, rawText: String) -> CreativeIntent {
+        let tone = dto.desiredFeeling.first ?? ""
+        let theme = dto.styleTags.first ?? (dto.subject ?? "")
+        return CreativeIntent(
+            rawText: dto.rawUserDescription ?? rawText,
+            theme: theme,
+            tone: tone,
+            summary: dto.summary
+        )
     }
 
     /// Story-level guidance for the next Moment (no scene understanding — mock).
