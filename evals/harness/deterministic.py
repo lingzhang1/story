@@ -163,21 +163,35 @@ _SCENE_FORBIDDEN = (
     "safe to ", "you should ", "walk toward", "walk backward",
     "pan across", "cut to", "cut on", "zoom in on",
 )
+_SCENE_PHYSICAL_PROPERTY = (
+    "is heavy", "is light", "may be difficult to move", "support a lot of weight",
+    "support weight", "load-bearing", "may not be able to support", "is fragile",
+    "is sturdy", "is stable", "is unstable",
+)
+_SCENE_MANIPULATION = (
+    "could be moved", "could be relocated", "moved to another",
+    "could be lifted", "could be rearranged", "be picked up",
+)
 
 
 def check_scene_observational(payload: dict[str, Any]) -> CheckResult:
-    """SceneUnderstanding must describe observable reality — no directing,
-    editing, or safety-certification language (04-scene-understanding.md §23)."""
-    parts = [payload.get("summary", "")]
+    """SceneUnderstanding must describe observable reality — no directing/editing/
+    safety language, no unsupported physical-property inference (weight/strength/
+    stability), and motion_opportunities must not be object-manipulation
+    (04-scene-understanding.md §23; device regression su_backpack_physical_props)."""
+    all_parts = [payload.get("summary", "")]
     for k in ("motion_opportunities", "composition_opportunities", "constraints"):
-        parts += [s for s in payload.get(k, []) if isinstance(s, str)]
-    blob = " ".join(parts).lower()
-    hit = next((s for s in _SCENE_FORBIDDEN if s in blob), None)
-    return CheckResult(
-        "scene_observational",
-        hit is None,
-        "" if hit is None else f"leaked non-observational phrase: {hit!r}",
-    )
+        all_parts += [s for s in payload.get(k, []) if isinstance(s, str)]
+    blob = " ".join(all_parts).lower()
+    for group in (_SCENE_FORBIDDEN, _SCENE_PHYSICAL_PROPERTY):
+        hit = next((s for s in group if s in blob), None)
+        if hit is not None:
+            return CheckResult("scene_observational", False, f"non-observational/unsupported phrase: {hit!r}")
+    motion = " ".join(s for s in payload.get("motion_opportunities", []) if isinstance(s, str)).lower()
+    manip = next((s for s in _SCENE_MANIPULATION if s in motion), None)
+    if manip is not None:
+        return CheckResult("scene_observational", False, f"object-manipulation in motion_opportunities: {manip!r}")
+    return CheckResult("scene_observational", True, "")
 
 
 def check_creative_intent_no_overlap(payload: dict[str, Any]) -> CheckResult:

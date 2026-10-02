@@ -73,6 +73,28 @@ def test_semantic_guard_rejects_safety_certification():
         engine.analyze(_FRAMES)
 
 
+def test_semantic_guard_rejects_physical_property_inference():
+    # Device regression: inferring weight / load-bearing from an image.
+    gw = FakeModelGateway(response={
+        "summary": "A red backpack on a chair.",
+        "constraints": ["The chair is small and may not be able to support a lot of weight."],
+    })
+    engine = RealSceneUnderstandingEngine(gw)
+    with pytest.raises(StructuredOutputError):
+        engine.analyze(_FRAMES)
+
+
+def test_semantic_guard_rejects_object_manipulation_motion():
+    # Device regression: object-manipulation masquerading as a motion opportunity.
+    gw = FakeModelGateway(response={
+        "summary": "A room with a backpack.",
+        "motion_opportunities": ["The backpack could be moved to another location."],
+    })
+    engine = RealSceneUnderstandingEngine(gw)
+    with pytest.raises(StructuredOutputError):
+        engine.analyze(_FRAMES)
+
+
 def test_invalid_output_raises_not_fabricates():
     gw = FakeModelGateway(response={"summary": "x", "operator_space": "cramped"})  # bad enum
     engine = RealSceneUnderstandingEngine(gw)

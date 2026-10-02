@@ -1,0 +1,24 @@
+{
+  "id": "su_backpack_physical_props_regression",
+  "component": "scene_understanding",
+  "phase": "analyze",
+  "category": "home / ordinary indoor room",
+  "frames_dir": "evals/scene_understanding/su_backpack_physical_props_regression/  (real device scan: red backpack on a chair, wooden floor; preserve frames where privacy permits)",
+  "origin": "physical-iPhone C2 dogfooding 2026-10-01",
+  "expected_properties": [
+    "recognizes the indoor room, backpack, chair as subjects with prominence",
+    "motion_opportunities describe subject/camera movement through the space, or are empty",
+    "composition relationships only reference elements actually visible in the frames"
+  ],
+  "forbidden_properties": [
+    "infers an object's weight ('the backpack is heavy')",
+    "infers load-bearing/strength ('the chair may not support weight')",
+    "infers stability/fragility/accessibility not visibly evident",
+    "motion_opportunities suggesting objects 'could be moved' / relocated / lifted",
+    "a framing relationship whose elements are not both visible (e.g. a window not in frame)",
+    "generates a shot or camera instruction",
+    "certifies the scene is safe"
+  ],
+  "failure_labels": ["SCENE_HALLUCINATION", "unsupported-physical-assumption"],
+  "tags": ["regression", "scene", "home", "physical_properties", "object_manipulation"]
+}

@@ -52,6 +52,33 @@ _FORBIDDEN_SUBSTRINGS = (
     "zoom in on",
 )
 
+# Unsupported physical-property inferences (weight/strength/stability/etc.) — the
+# model sees images, not the physical world. Generalizable, low false-positive.
+_PHYSICAL_PROPERTY_SUBSTRINGS = (
+    "is heavy",
+    "is light",
+    "may be difficult to move",
+    "support a lot of weight",
+    "support weight",
+    "load-bearing",
+    "may not be able to support",
+    "is fragile",
+    "is sturdy",
+    "is stable",
+    "is unstable",
+)
+
+# Object-manipulation masquerading as a motion opportunity (rearranging the room
+# is not a director's movement and not an observation).
+_MANIPULATION_SUBSTRINGS = (
+    "could be moved",
+    "could be relocated",
+    "moved to another",
+    "could be lifted",
+    "could be rearranged",
+    "be picked up",
+)
+
 
 def _load_system_prompt() -> str:
     return (_PROMPT_DIR / "system.md").read_text()
@@ -126,18 +153,33 @@ class RealSceneUnderstandingEngine:
 
     @staticmethod
     def _semantic_guard(scene: SceneUnderstandingContract) -> None:
-        """Backstop: reject output that leaked directing/editing/safety language."""
-        blob = " ".join(
+        """Backstop: reject output that leaked directing/editing/safety language,
+        unsupported physical-property inferences, or object-manipulation."""
+        all_text = " ".join(
             [scene.summary]
             + scene.motion_opportunities
             + scene.composition_opportunities
             + scene.constraints
         ).lower()
-        hit = next((s for s in _FORBIDDEN_SUBSTRINGS if s in blob), None)
+        hit = next((s for s in _FORBIDDEN_SUBSTRINGS if s in all_text), None)
         if hit is not None:
             raise StructuredOutputError(
                 f"scene output leaked a non-observational phrase ({hit!r}); "
                 "Scene Understanding must describe observable reality only"
+            )
+        prop = next((s for s in _PHYSICAL_PROPERTY_SUBSTRINGS if s in all_text), None)
+        if prop is not None:
+            raise StructuredOutputError(
+                f"scene output inferred an unsupported physical property ({prop!r}); "
+                "Scene Understanding sees images, not weight/strength/stability"
+            )
+        motion = " ".join(scene.motion_opportunities).lower()
+        manip = next((s for s in _MANIPULATION_SUBSTRINGS if s in motion), None)
+        if manip is not None:
+            raise StructuredOutputError(
+                f"motion_opportunities contained object-manipulation ({manip!r}); "
+                "motion opportunities are observable subject/camera movement, not "
+                "rearranging objects"
             )
 
 
