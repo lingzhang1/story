@@ -264,25 +264,29 @@ private struct MomentTile: View {
     @State private var thumb: UIImage?
 
     var body: some View {
-        ZStack {
-            if let thumb {
-                Image(uiImage: thumb).resizable().scaledToFill()
-            } else {
-                Image(StoryPlaceholderPhoto.name(fallbackIndex)).resizable().scaledToFill()
-                    .opacity(0.84)
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                if let thumb {
+                    Image(uiImage: thumb).resizable().scaledToFill()
+                } else {
+                    Image(StoryPlaceholderPhoto.name(fallbackIndex)).resizable().scaledToFill()
+                        .opacity(0.84)
+                }
             }
-            if let n = countOverlay {
-                LinearGradient(colors: [.clear, StoryTheme.ink.opacity(0.68)],
-                               startPoint: .center, endPoint: .bottom)
-                Text("\(n) moment\(n == 1 ? "" : "s") →")
-                    .font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.9))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .padding(8)
+            .overlay {
+                if let n = countOverlay {
+                    LinearGradient(colors: [.clear, StoryTheme.ink.opacity(0.68)],
+                                   startPoint: .center, endPoint: .bottom)
+                    Text("\(n) moment\(n == 1 ? "" : "s") →")
+                        .font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.9))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(8)
+                }
             }
-        }
-        .aspectRatio(1, contentMode: .fill)
-        .clipped()
-        .task { thumb = await MomentThumbnailCache.shared.thumbnail(for: moment) }
+            .clipped()
+            .task { thumb = await MomentThumbnailCache.shared.thumbnail(for: moment) }
     }
 }
 
