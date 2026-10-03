@@ -25,8 +25,12 @@ struct StoryHomeView: View {
                         .font(.system(size: 20, weight: .light, design: .serif))
                         .foregroundStyle(Color(red: 0.96, green: 0.94, blue: 0.91))
 
-                    // What Story understood from your direction (real model output).
+                    // Raw CreativeIntent fields are an internal representation — not
+                    // consumer UX (C3B §4). The consumer sees the Story summary above;
+                    // the resolved-intent chips are DEBUG-only.
+                    #if DEBUG
                     IntentChips(story: story)
+                    #endif
 
                     Text(story.status.rawValue.capitalized)
                         .font(.caption)

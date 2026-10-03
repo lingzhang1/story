@@ -122,14 +122,25 @@ struct SceneScanFlowView: View {
             VStack(alignment: .leading, spacing: 22) {
                 switch action {
                 case .captureShot, .retryShot:
-                    // A real shot to capture — the normal path.
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Here's your shot").font(.headline).foregroundStyle(gold)
+                    // Concept Card (11-direct-flow): concept title + description +
+                    // "N shots · ~X sec", then the first shot's plain instruction, with
+                    // "Let's shoot" as the primary action. Visual-first, no shot plan,
+                    // no filmmaking terms.
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(out.concept.title)
-                            .font(.system(size: 26, weight: .light, design: .serif))
+                            .font(.system(size: 28, weight: .light, design: .serif))
                             .foregroundStyle(ink)
+                        if !out.concept.summary.isEmpty {
+                            Text(out.concept.summary)
+                                .font(.system(size: 17, weight: .light))
+                                .foregroundStyle(ink.opacity(0.82))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Text(conceptMeta(out))
+                            .font(.caption).foregroundStyle(gold)
                     }
                     if let shot {
+                        Divider().overlay(gold.opacity(0.25)).padding(.vertical, 4)
                         Text(shot.instruction)
                             .font(.system(size: 20, weight: .light, design: .serif))
                             .foregroundStyle(ink).fixedSize(horizontal: false, vertical: true)
@@ -141,7 +152,7 @@ struct SceneScanFlowView: View {
                         .padding(.top, 2)
                     }
                     Spacer(minLength: 12)
-                    primaryButton("Open Camera") { showCamera = true }
+                    primaryButton("Let's shoot") { showCamera = true }
                     secondaryButton("Rescan") { state = .intro }
 
                 case .rescanScene:
@@ -193,6 +204,17 @@ struct SceneScanFlowView: View {
 
     private func secondaryButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action).foregroundStyle(gold).frame(maxWidth: .infinity)
+    }
+
+    /// "N shots · ~X sec" summary for the Concept Card (11-direct-flow). Uses the
+    /// plan's estimated duration, falling back to summed shot target durations.
+    private func conceptMeta(_ out: DirectorOutputDTO) -> String {
+        let shots = out.plan.shots.count
+        let shotLabel = shots == 1 ? "1 shot" : "\(shots) shots"
+        let secs = out.plan.estimatedDurationSeconds
+            ?? out.plan.shots.compactMap { $0.targetDurationSeconds }.reduce(0, +)
+        if secs > 0 { return "\(shotLabel) · ~\(Int(secs.rounded())) sec" }
+        return shotLabel
     }
 
     private func guidanceRow(_ k: String, _ v: String) -> some View {
