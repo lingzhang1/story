@@ -103,4 +103,39 @@ final class StoryUseCases {
         )
         return try repository.addGeneratedOutput(to: story, plan: plan)
     }
+
+    // MARK: - C3.5 cheap lifecycle / media capabilities (local, mechanical)
+
+    /// Complete Story — a LIFECYCLE action only (02 §: Complete != Create).
+    /// Flips status to completed; the Story keeps all Moments/outputs and can be
+    /// reopened. Completed Stories sort below active ones in Home.
+    func completeStory(_ story: StoryModel) throws {
+        story.status = .completed
+        try repository.save()
+    }
+
+    /// Reopen a completed Story back to active.
+    func reopenStory(_ story: StoryModel) throws {
+        story.status = .active
+        try repository.save()
+    }
+
+    /// Add existing phone media (picked via PHPicker, already copied into
+    /// MediaStore) to the Story as existing-media Moments. No AI analysis — that
+    /// is the AssetUnderstanding path, which stays disabled (ui-capability-matrix).
+    @discardableResult
+    func addExistingMedia(
+        to story: StoryModel,
+        relativePaths: [(path: String, duration: Double)]
+    ) throws -> [MomentModel] {
+        var created: [MomentModel] = []
+        for item in relativePaths {
+            let asset = AssetModel(relativePath: item.path,
+                                   durationSeconds: item.duration,
+                                   source: .existingMedia)
+            created.append(try repository.addMoment(
+                to: story, source: .existingMedia, asset: asset, caption: nil))
+        }
+        return created
+    }
 }

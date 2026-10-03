@@ -1,86 +1,99 @@
 import SwiftUI
 import SwiftData
 
-// Home — the three entry points (spec production §Home). For Milestone A
-// only "Start a Story" is wired; the others are visible but disabled.
-
+// Home — the frozen Figma entry point (ScreenHome). Two layouts:
+//  • no active Story: "What would you like to make?" + the three make-paths.
+//  • with Stories: a "Your Stories" list, active first then completed.
+// Create Now is a frozen future path (DIRECT-one-off) with no persistent-Story
+// backing yet → intentionally disabled. Use-existing (analyze) is disabled
+// (AssetUnderstanding). Start a Story is wired to the real C1 flow.
+// See ui-capability-matrix.md.
 struct HomeView: View {
     @Environment(\.modelContext) private var context
-    @Query(sort: \StoryModel.createdAt, order: .reverse) private var stories: [StoryModel]
+    @Query private var stories: [StoryModel]
+
+    // Active Stories first (most recent first), then completed below.
+    private var sortedStories: [StoryModel] {
+        stories.sorted { a, b in
+            if a.status != b.status { return a.status == .active }   // active above completed
+            return a.createdAt > b.createdAt
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color(red: 0.04, green: 0.04, blue: 0.043).ignoresSafeArea()
-                VStack(alignment: .leading, spacing: 24) {
-                    Text("Story")
-                        .font(.system(size: 40, weight: .light, design: .serif))
-                        .foregroundStyle(Color(red: 0.96, green: 0.94, blue: 0.91))
-                        .padding(.top, 40)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    StoryEyebrow(text: "Story").padding(.top, 32)
 
+                    Text("What would you like to make?")
+                        .font(StoryTheme.display(30))
+                        .foregroundStyle(StoryTheme.cream)
+
+                    // Make-paths
                     VStack(spacing: 14) {
-                        NavigationLink {
-                            CreativeDirectionView()
-                        } label: {
-                            EntryCard(title: "Start a Story",
-                                      subtitle: "A trip, an event, something that unfolds over time",
-                                      enabled: true)
+                        NavigationLink { CreativeDirectionView() } label: {
+                            makeCard(eyebrow: "Over time", title: "Start a Story",
+                                     sub: "Capture an experience as it unfolds.", enabled: true)
                         }
-                        EntryCard(title: "Create Now",
-                                  subtitle: "Make something good, right here, right now",
-                                  enabled: false)
-                        EntryCard(title: "Use Existing Photos/Videos",
-                                  subtitle: "Turn media you already have into a story",
-                                  enabled: false)
+                        .buttonStyle(.plain)
+
+                        // Create Now — frozen path, no backing yet (disabled).
+                        makeCard(eyebrow: "Right now", title: "Create now",
+                                 sub: "Make something here, in this moment.", enabled: false)
+                            .accessibilityHint("Not available yet")
+
+                        // Use existing (analyze) — disabled (AssetUnderstanding).
+                        Text("Use photos & videos I already have")
+                            .font(StoryTheme.body(14))
+                            .foregroundStyle(StoryTheme.textMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityHint("Not available yet")
                     }
 
-                    if !stories.isEmpty {
-                        Text("Your Stories")
-                            .font(.headline)
-                            .foregroundStyle(Color(red: 0.83, green: 0.66, blue: 0.33))
-                            .padding(.top, 8)
-                        List(stories) { story in
-                            NavigationLink {
-                                StoryHomeView(story: story)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(story.title).foregroundStyle(.white)
-                                    Text("\(story.status.rawValue) · \(story.moments.count) moments · \(story.generatedOutputs.count) outputs")
-                                        .font(.caption)
-                                        .foregroundStyle(.gray)
+                    if !sortedStories.isEmpty {
+                        StorySectionHeader(text: "Your Stories").padding(.top, 4)
+                        VStack(spacing: 12) {
+                            ForEach(sortedStories) { story in
+                                NavigationLink { StoryHomeView(story: story) } label: {
+                                    storyRow(story)
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .listRowBackground(Color(red: 0.09, green: 0.09, blue: 0.1))
                         }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
                     }
-                    Spacer()
+                    Spacer(minLength: 20)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, StoryTheme.screenPadding)
+            }
+            .storyBackground()
+            .toolbar(.hidden, for: .navigationBar)
+        }
+        .tint(StoryTheme.gold)
+    }
+
+    private func makeCard(eyebrow: String, title: String, sub: String, enabled: Bool) -> some View {
+        StoryCard(enabled: enabled) {
+            VStack(alignment: .leading, spacing: 6) {
+                StoryEyebrow(text: eyebrow)
+                Text(title).font(StoryTheme.display(22))
+                    .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.textMuted)
+                Text(sub).font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
             }
         }
     }
-}
 
-private struct EntryCard: View {
-    let title: String
-    let subtitle: String
-    let enabled: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(enabled ? Color(red: 0.96, green: 0.94, blue: 0.91) : .gray)
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.gray)
+    private func storyRow(_ story: StoryModel) -> some View {
+        StoryCard {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(story.title).font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                    Text("\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
+                }
+                Spacer()
+                StoryStatusPill(status: story.status)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(Color(red: 0.09, green: 0.09, blue: 0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .opacity(enabled ? 1 : 0.5)
     }
 }

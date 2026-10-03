@@ -1,0 +1,85 @@
+import SwiftUI
+import SwiftData
+import AVKit
+
+// Create My Story — preview (frozen Figma ScreenTMBPreview). Shows the Story
+// material and the intended Create action, but real generation (Edit Planner +
+// Media Engine) is NOT built, so the generate action is an intentional
+// disabled/empty state. Music is disabled (Music Engine). In DEBUG the old
+// Milestone-A mock output path remains, clearly marked as dev-only — never
+// presented as a real AI-generated Story. See ui-capability-matrix.md.
+struct CreateStoryPreviewView: View {
+    @Environment(\.modelContext) private var context
+    @Bindable var story: StoryModel
+
+    private var useCases: StoryUseCases {
+        StoryUseCases(repository: StoryRepository(context: context))
+    }
+
+    private let cols = [GridItem(.adaptive(minimum: 96), spacing: 8)]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                StoryEyebrow(text: story.title)
+                Text("Here's what I'm working with.")
+                    .font(StoryTheme.display(24)).foregroundStyle(StoryTheme.cream)
+
+                if story.moments.isEmpty {
+                    StoryEmptyState(text: "No moments yet. Shoot one first.")
+                } else {
+                    LazyVGrid(columns: cols, spacing: 8) {
+                        ForEach(story.moments.sorted(by: { $0.createdAt < $1.createdAt })) { m in
+                            thumb(m)
+                        }
+                    }
+                    Text("\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
+                    Text("Story will choose the moments that work best.")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+                }
+
+                // Music — frozen surface, disabled (Music Engine).
+                StoryUnavailableSection(header: { StoryEyebrow(text: "Music") },
+                    message: "Story will score your video to music. Not available yet.")
+
+                // Create — real generation unavailable (Edit Planner + Media).
+                VStack(alignment: .leading, spacing: 8) {
+                    StoryUnavailableButton(title: "Create my Story",
+                                           note: "Story generation is coming in a later update.")
+                }
+                .padding(.top, 4)
+
+                #if DEBUG
+                Divider().overlay(StoryTheme.gold.opacity(0.25))
+                StoryEyebrow(text: "DEBUG · dev mock output")
+                Button("Generate mock output (dev only)") {
+                    try? useCases.createStoryOutput(for: story)
+                }
+                .font(StoryTheme.body(13)).tint(StoryTheme.gold)
+                if !story.generatedOutputs.isEmpty {
+                    Text("mock outputs: \(story.generatedOutputs.count)")
+                        .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
+                }
+                #endif
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
+        }
+        .storyBackground()
+        .navigationTitle("Create your Story")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func thumb(_ m: MomentModel) -> some View {
+        Group {
+            if let a = m.asset, MediaStore.shared.fileExists(relativePath: a.relativePath) {
+                VideoPlayer(player: AVPlayer(url: MediaStore.shared.absoluteURL(for: a.relativePath)))
+            } else {
+                RoundedRectangle(cornerRadius: 8).fill(StoryTheme.surfaceAlt)
+            }
+        }
+        .frame(height: 96).clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
