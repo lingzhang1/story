@@ -93,5 +93,5 @@ def get_story_director_engine() -> StoryDirectorEngine:
     """
     if os.environ.get("STORY_DIRECTOR_MOCK") == "1":
         return MockStoryDirectorEngine()
-    model = os.environ.get("STORY_DIRECTOR_MODEL", "amazon.nova-pro-v1:0")
+    model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-opus-4-5-20251101-v1:0")
     return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))

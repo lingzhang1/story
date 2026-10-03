@@ -224,8 +224,12 @@ class RealStoryDirectorEngine:
 
     @staticmethod
     def _integrity_guard(out: DirectorOutput) -> None:
+        action = out.decision.action.value
+        # rescan_scene = Director declines this scene; create_now = enough already.
+        # Both legitimately carry NO plan — do not force beats/shots on them.
+        declines = action in ("rescan_scene", "create_now")
         beat_ids = {b.id for b in out.plan.beats}
-        if not out.plan.beats:
+        if not out.plan.beats and not declines:
             raise StructuredOutputError("plan has no beats; every shot must serve a beat")
         for s in out.plan.shots:
             if s.beat_id is None or s.beat_id not in beat_ids:
