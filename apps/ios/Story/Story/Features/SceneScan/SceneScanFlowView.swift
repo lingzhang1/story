@@ -115,47 +115,65 @@ struct SceneScanFlowView: View {
 
     private func recommendationView(_ su: SceneUnderstandingContractDTO,
                                     _ out: DirectorOutputDTO) -> some View {
-        // The shot the Director wants captured now (capture_shot/retry_shot carry it;
-        // otherwise fall back to the plan's first shot for guidance display).
-        let shot = out.decision.shot ?? out.plan.shots.first
+        let action = out.decision.action
+        let shot = out.decision.shot ?? (action == .captureShot || action == .retryShot
+                                         ? out.plan.shots.first : nil)
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                // What Story is trying to capture (concept = the point of view).
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Here's your shot")
-                        .font(.headline).foregroundStyle(gold)
-                    Text(out.concept.title)
-                        .font(.system(size: 26, weight: .light, design: .serif))
-                        .foregroundStyle(ink)
-                }
-
-                // The user-facing instruction — the primary content.
-                if let shot {
-                    Text(shot.instruction)
-                        .font(.system(size: 20, weight: .light, design: .serif))
-                        .foregroundStyle(ink)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    // Light, optional guidance rows — no filmmaking jargon dump.
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let action = shot.subjectAction, !action.isEmpty {
-                            guidanceRow("Subject", action)
-                        }
-                        if let motion = shot.cameraMotion, !motion.isEmpty {
-                            guidanceRow("You", friendlyMotion(motion))
-                        }
-                        if let dur = shot.targetDurationSeconds {
-                            guidanceRow("Hold", "about \(Int(dur.rounded())) seconds")
-                        }
+                switch action {
+                case .captureShot, .retryShot:
+                    // A real shot to capture — the normal path.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Here's your shot").font(.headline).foregroundStyle(gold)
+                        Text(out.concept.title)
+                            .font(.system(size: 26, weight: .light, design: .serif))
+                            .foregroundStyle(ink)
                     }
-                    .padding(.top, 2)
+                    if let shot {
+                        Text(shot.instruction)
+                            .font(.system(size: 20, weight: .light, design: .serif))
+                            .foregroundStyle(ink).fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let a = shot.subjectAction, !a.isEmpty { guidanceRow("Subject", a) }
+                            if let m = shot.cameraMotion, !m.isEmpty { guidanceRow("You", friendlyMotion(m)) }
+                            if let d = shot.targetDurationSeconds { guidanceRow("Hold", "about \(Int(d.rounded())) seconds") }
+                        }
+                        .padding(.top, 2)
+                    }
+                    Spacer(minLength: 12)
+                    primaryButton("Open Camera") { showCamera = true }
+                    secondaryButton("Rescan") { state = .intro }
+
+                case .rescanScene:
+                    // Director declined this scene — do NOT offer the camera / an empty shot.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Let's find a better moment").font(.headline).foregroundStyle(gold)
+                        Text("This scene doesn't quite fit your Story")
+                            .font(.system(size: 26, weight: .light, design: .serif))
+                            .foregroundStyle(ink)
+                    }
+                    Text("Point your phone at something that connects to what you're making, and scan again.")
+                        .font(.system(size: 18, weight: .light))
+                        .foregroundStyle(ink.opacity(0.8)).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 12)
+                    primaryButton("Scan again") { state = .intro }
+
+                case .createNow:
+                    // Enough material — nothing to shoot here.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("You've got what you need").font(.headline).foregroundStyle(gold)
+                        Text(out.concept.title)
+                            .font(.system(size: 26, weight: .light, design: .serif))
+                            .foregroundStyle(ink)
+                    }
+                    Text("Story has enough to work with. You can create your Story now.")
+                        .font(.system(size: 18, weight: .light))
+                        .foregroundStyle(ink.opacity(0.8)).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 12)
+                    primaryButton("Done") { dismiss() }
+                    secondaryButton("Scan again") { state = .intro }
                 }
 
-                Spacer(minLength: 12)
-
-                primaryButton("Open Camera") { showCamera = true }
-                Button("Rescan") { state = .intro }
-                    .foregroundStyle(gold).frame(maxWidth: .infinity)
                 Button("Cancel") { dismiss() }
                     .foregroundStyle(.gray).frame(maxWidth: .infinity)
 
@@ -171,6 +189,10 @@ struct SceneScanFlowView: View {
             .padding(24)
             .padding(.top, 8)
         }
+    }
+
+    private func secondaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action).foregroundStyle(gold).frame(maxWidth: .infinity)
     }
 
     private func guidanceRow(_ k: String, _ v: String) -> some View {
