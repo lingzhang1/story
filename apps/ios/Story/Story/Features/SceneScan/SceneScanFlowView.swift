@@ -135,34 +135,44 @@ struct SceneScanFlowView: View {
                     // Concept Card (11-direct-flow) over the real scanned scene
                     // (Figma idea.png: image-backed card + "SHOT 1" label), then
                     // the shot instruction + guidance. Visual-first, no jargon.
-                    ZStack(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if let sceneFrame {
-                            Image(uiImage: sceneFrame).resizable().scaledToFill()
-                                .frame(height: 240).frame(maxWidth: .infinity).clipped()
-                            LinearGradient(
-                                stops: [.init(color: bg.opacity(0.96), location: 0),
-                                        .init(color: bg.opacity(0.3), location: 0.55),
-                                        .init(color: .clear, location: 1)],
-                                startPoint: .bottom, endPoint: .top)
+                            Color.clear
+                                .frame(height: 200).frame(maxWidth: .infinity)
+                                .overlay(Image(uiImage: sceneFrame).resizable().scaledToFill())
+                                .overlay(
+                                    LinearGradient(
+                                        stops: [.init(color: bg.opacity(0.96), location: 0),
+                                                .init(color: bg.opacity(0.25), location: 0.6),
+                                                .init(color: .clear, location: 1)],
+                                        startPoint: .bottom, endPoint: .top)
+                                )
+                                .clipped()
+                                .overlay(alignment: .topLeading) {
+                                    Text("SHOT 1").font(StoryTheme.body(11, .semibold))
+                                        .tracking(1.5).foregroundStyle(gold)
+                                        .padding(14)
+                                }
                         }
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("SHOT 1").font(StoryTheme.body(11, .semibold))
-                                .tracking(1.5).foregroundStyle(gold)
                             Text(out.concept.title)
-                                .font(StoryTheme.display(28))
+                                .font(StoryTheme.display(26))
                                 .foregroundStyle(ink)
+                                .fixedSize(horizontal: false, vertical: true)
                             if !out.concept.summary.isEmpty {
                                 Text(out.concept.summary)
-                                    .font(StoryTheme.body(17, .light))
+                                    .font(StoryTheme.body(16, .light))
                                     .foregroundStyle(ink.opacity(0.82))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Text(conceptMeta(out))
                                 .font(StoryTheme.body(13)).foregroundStyle(gold)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(sceneFrame == nil ? 0 : 16)
                     }
-                    .background(sceneFrame == nil ? Color.clear : bg.opacity(0.25))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(sceneFrame == nil ? Color.clear : bg.opacity(0.3))
                     .clipShape(RoundedRectangle(cornerRadius: sceneFrame == nil ? 0 : 18))
                     if let shot {
                         Divider().overlay(gold.opacity(0.25)).padding(.vertical, 4)

@@ -44,15 +44,11 @@ struct MomentsManageView: View {
                 } else {
                     LazyVGrid(columns: cols, spacing: 2) {
                         ForEach(moments) { m in
-                            Button { pendingRemove = m } label: {
-                                MomentManageTile(moment: m)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("Tap to manage this moment")
+                            MomentManageTile(moment: m) { pendingRemove = m }
                         }
                     }
                     .padding(.top, 18)
-                    Text("Tap a moment to remove it from this Story.")
+                    Text("Tap the ✕ on a moment to remove it from this Story.")
                         .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
                         .padding(.top, 14)
                 }
@@ -79,6 +75,7 @@ struct MomentsManageView: View {
 
 private struct MomentManageTile: View {
     let moment: MomentModel
+    var onRemove: () -> Void
     @State private var thumb: UIImage?
     var body: some View {
         Color.clear
@@ -89,6 +86,18 @@ private struct MomentManageTile: View {
                 else { StoryTheme.surfaceAlt }
             }
             .clipped()
+            .overlay(alignment: .topTrailing) {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(StoryTheme.cream)
+                        .frame(width: 26, height: 26)
+                        .background(StoryTheme.ink.opacity(0.55), in: Circle())
+                        .padding(6)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove this moment")
+            }
             .task { thumb = await MomentThumbnailCache.shared.thumbnail(for: moment) }
     }
 }

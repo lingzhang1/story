@@ -11,6 +11,7 @@ import AVKit
 struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
+    @Environment(\.dismiss) private var dismiss
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -21,7 +22,15 @@ struct CreateStoryPreviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                StoryEyebrow(text: story.title)
+                // Custom back header (consistent with the rest of the product).
+                HStack(spacing: 12) {
+                    Button { dismiss() } label: {
+                        Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                            .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("Back")
+                    Spacer()
+                }
+                StoryEyebrow(text: story.title.displayTitle)
                 Text("Here's what I'm working with.")
                     .font(StoryTheme.display(24)).foregroundStyle(StoryTheme.cream)
 
@@ -70,8 +79,7 @@ struct CreateStoryPreviewView: View {
             .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
         }
         .storyBackground()
-        .navigationTitle("Create your Story")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private func thumb(_ m: MomentModel) -> some View {
