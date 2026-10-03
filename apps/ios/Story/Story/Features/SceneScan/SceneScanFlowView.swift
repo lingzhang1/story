@@ -198,12 +198,14 @@ struct SceneScanFlowView: View {
                     .foregroundStyle(.gray).frame(maxWidth: .infinity)
 
                 #if DEBUG
-                DirectorDebugPanel(story: story,
-                                   creativeIntent: CreativeIntentContractDTO(from: story),
-                                   scene: su,
-                                   output: out,
-                                   scanToRecommendationMs: lastScanToRecommendationMs)
-                    .padding(.top, 16)
+                if AppMode.current.showsDiagnostics {
+                    DirectorDebugPanel(story: story,
+                                       creativeIntent: CreativeIntentContractDTO(from: story),
+                                       scene: su,
+                                       output: out,
+                                       scanToRecommendationMs: lastScanToRecommendationMs)
+                        .padding(.top, 16)
+                }
                 #endif
             }
             .padding(24)

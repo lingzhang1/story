@@ -20,8 +20,12 @@ struct CreativeDirectionView: View {
     @State private var resolvedStory: StoryModel?       // reflected at Context step
     @State private var navigate = false                 // Start Story -> Story Home
 
-    private let presets = ["Cinematic journey", "Energetic adventure",
-                           "Personal & emotional", "Minimal / scenic"]
+    private let presets: [(title: String, desc: String)] = [
+        ("Cinematic journey", "Cinematic · Scenic · Journey"),
+        ("Energetic adventure", "Energetic · Kinetic · Adventure"),
+        ("Personal & emotional", "Personal · Intimate · Emotional"),
+        ("Minimal / scenic", "Minimal · Scenic · Quiet"),
+    ]
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -62,12 +66,13 @@ struct CreativeDirectionView: View {
     // Step 1 — describe
     private var describeStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Tell me about this experience.")
-                .font(StoryTheme.display(28)).foregroundStyle(StoryTheme.cream)
+            Text("Tell me about\nthis experience.")
+                .font(StoryTheme.display(28).italic()).foregroundStyle(StoryTheme.cream)
+                .fixedSize(horizontal: false, vertical: true)
             Text("What it is, how long, what you want it to feel like.")
                 .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
-            StoryTextField(placeholder: "e.g. A weekend hiking the Tour du Mont Blanc with friends…",
-                           text: $description, minHeight: 140)
+            StoryTextField(placeholder: "We're hiking the Tour du Mont Blanc for 8 days…",
+                           text: $description, minHeight: 200)
             StoryTextField(placeholder: "Give it a title", text: $title, minHeight: 44)
             StoryPrimaryButton(title: "Continue") { step = .feel }
                 .disabled(cannotContinueDescribe).opacity(cannotContinueDescribe ? 0.4 : 1)
@@ -81,25 +86,52 @@ struct CreativeDirectionView: View {
     // Step 2 — feel (optional preset; any input is enough)
     private var feelStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("How should this Story feel?")
-                .font(StoryTheme.display(28)).foregroundStyle(StoryTheme.cream)
-            Text("Pick a feeling or just continue — your description is enough.")
+            Text("How should this\nStory feel?")
+                .font(StoryTheme.display(28).italic()).foregroundStyle(StoryTheme.cream)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Pick a feeling, add a reference, or describe it. Any one is enough.")
                 .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                ForEach(presets, id: \.self) { p in
-                    Button { feeling = (feeling == p ? nil : p) } label: {
-                        Text(p).font(StoryTheme.body(14))
-                            .frame(maxWidth: .infinity, minHeight: 64)
-                            .foregroundStyle(feeling == p ? StoryTheme.ink : StoryTheme.cream)
-                            .background(feeling == p ? StoryTheme.gold : StoryTheme.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: StoryTheme.card))
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())], spacing: 12) {
+                ForEach(presets, id: \.title) { p in
+                    let selected = feeling == p.title
+                    Button { feeling = selected ? nil : p.title } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top) {
+                                Text(p.title).font(StoryTheme.display(19))
+                                    .foregroundStyle(selected ? StoryTheme.cream : StoryTheme.textSecondary)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 4)
+                                if selected {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(StoryTheme.ink)
+                                        .frame(width: 18, height: 18)
+                                        .background(StoryTheme.gold).clipShape(Circle())
+                                }
+                            }
+                            Text(p.desc).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                        .padding(14)
+                        .background(StoryTheme.surface)
+                        .overlay(RoundedRectangle(cornerRadius: StoryTheme.card)
+                            .stroke(selected ? StoryTheme.gold : Color.clear, lineWidth: 1.5))
+                        .clipShape(RoundedRectangle(cornerRadius: StoryTheme.card))
                     }
                     .buttonStyle(.plain)
                 }
             }
-            // Reference media — disabled future (reference transport not built).
-            StoryUnavailableSection(header: { StoryEyebrow(text: "Add a reference") },
-                message: "Match the feel of a clip you like. Not available yet.")
+            // Reference media — disabled future (dashed, like Figma + Add a reference).
+            Text("+ Add a reference")
+                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textMuted)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .overlay(RoundedRectangle(cornerRadius: StoryTheme.card)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5]))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.15)))
+                .accessibilityHint("Not available yet")
+            Text("or describe it").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+            StoryTextField(placeholder: "Mostly landscapes and the feeling of the journey. Include us naturally.",
+                           text: $description, minHeight: 92)
             StoryPrimaryButton(title: "Continue") { Task { await resolve() } }
         }
     }

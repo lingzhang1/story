@@ -51,15 +51,17 @@ struct CreateStoryPreviewView: View {
                 .padding(.top, 4)
 
                 #if DEBUG
-                Divider().overlay(StoryTheme.gold.opacity(0.25))
-                StoryEyebrow(text: "DEBUG · dev mock output")
-                Button("Generate mock output (dev only)") {
-                    try? useCases.createStoryOutput(for: story)
-                }
-                .font(StoryTheme.body(13)).tint(StoryTheme.gold)
-                if !story.generatedOutputs.isEmpty {
-                    Text("mock outputs: \(story.generatedOutputs.count)")
-                        .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
+                if AppMode.current.showsDiagnostics {
+                    Divider().overlay(StoryTheme.gold.opacity(0.25))
+                    StoryEyebrow(text: "DEBUG · dev mock output")
+                    Button("Generate mock output (dev only)") {
+                        try? useCases.createStoryOutput(for: story)
+                    }
+                    .font(StoryTheme.body(13)).tint(StoryTheme.gold)
+                    if !story.generatedOutputs.isEmpty {
+                        Text("mock outputs: \(story.generatedOutputs.count)")
+                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
+                    }
                 }
                 #endif
 

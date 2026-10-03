@@ -24,59 +24,69 @@ struct StoryHomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                // Header row: status + menu
-                HStack {
-                    StoryStatusPill(status: story.status)
+            VStack(alignment: .leading, spacing: 18) {
+                // Header: inline title + status + menu (Figma composition)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(story.title).font(StoryTheme.display(26)).foregroundStyle(StoryTheme.cream)
+                        Text(story.status == .completed ? "Completed" : "Active")
+                            .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+                    }
                     Spacer()
                     Button { showMenu = true } label: {
-                        Image(systemName: "ellipsis")
-                            .foregroundStyle(StoryTheme.cream).padding(8)
-                    }
-                    .accessibilityLabel("Story options")
+                        Image(systemName: "ellipsis").foregroundStyle(StoryTheme.cream).padding(8)
+                    }.accessibilityLabel("Story options")
                 }
 
-                // Story summary (the user-facing thesis; NOT raw intent fields)
-                Text(story.intentSummary.isEmpty ? story.title : story.intentSummary)
-                    .font(StoryTheme.display(24))
-                    .foregroundStyle(StoryTheme.cream)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(stateLine).font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
 
-                Text(stateLine).font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
+                // Moments mosaic (Figma: photo grid, count overlaid on last tile)
+                MomentsMosaic(moments: story.moments.sorted(by: { $0.createdAt < $1.createdAt }))
 
-                #if DEBUG
-                IntentChipsDebug(story: story)   // diagnostics only
-                #endif
-
-                // Moments
-                StorySectionHeader(text: "Moments (\(story.moments.count))")
-                if story.moments.isEmpty {
-                    StoryEmptyState(text: "Your moments will appear here. Shoot one to begin.")
-                } else {
-                    ForEach(story.moments.sorted(by: { $0.createdAt < $1.createdAt })) { m in
-                        MomentCardRow(moment: m)
+                // Primary + quiet secondary (Figma hierarchy)
+                VStack(spacing: 10) {
+                    if story.status == .active {
+                        StoryPrimaryButton(title: "Shoot a moment") { showCapture = true }
                     }
+                    Button { showPreview = true } label: {
+                        Text("Create my Story").font(StoryTheme.body(15))
+                            .foregroundStyle(story.moments.isEmpty ? StoryTheme.textMuted : StoryTheme.textSecondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .disabled(story.moments.isEmpty)
                 }
+
                 Button { pickerItems = true } label: {
                     Text("+ Add photos or videos")
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.gold)
                 }
 
-                // Story Guide — neutral unavailable (no StoryBlueprint capability).
-                StoryUnavailableSection(header: { StoryEyebrow(text: "Story Guide") },
-                    message: "Story will suggest what to capture next as your Story grows. Not available yet.")
+                Divider().overlay(StoryTheme.cream.opacity(0.08)).padding(.vertical, 2)
 
-                // Actions
-                VStack(spacing: 12) {
-                    if story.status == .active {
-                        StoryPrimaryButton(title: "Shoot a moment") { showCapture = true }
-                    }
-                    // Create My Story → preview; real generation disabled downstream.
-                    StorySecondaryButton(title: "Create my Story") { showPreview = true }
-                        .disabled(story.moments.isEmpty)
-                        .opacity(story.moments.isEmpty ? 0.4 : 1)
+                // Story Idea — neutral unavailable (NOT TMB demo copy)
+                VStack(alignment: .leading, spacing: 6) {
+                    StoryEyebrow(text: "✦ Story Idea")
+                    Text("Ideas for what to capture next")
+                        .font(StoryTheme.display(18)).foregroundStyle(StoryTheme.textSecondary)
+                    Text("Story will suggest ideas as your Story grows. Not available yet.")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
                 }
-                .padding(.top, 4)
+
+                Divider().overlay(StoryTheme.cream.opacity(0.08)).padding(.vertical, 2)
+
+                // Story Guide — neutral unavailable
+                VStack(alignment: .leading, spacing: 6) {
+                    StoryEyebrow(text: "Story Guide")
+                    Text("A guide to what would make your Story stronger — coming in a later update.")
+                        .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                #if DEBUG
+                if AppMode.current.showsDiagnostics {
+                    IntentChipsDebug(story: story)   // AI-debug mode only
+                }
+                #endif
 
                 Spacer(minLength: 20)
             }
@@ -84,8 +94,7 @@ struct StoryHomeView: View {
             .padding(.top, 8)
         }
         .storyBackground()
-        .navigationTitle(story.title)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showCapture) { ShootMomentView(story: story) }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems) { picked in
@@ -112,37 +121,48 @@ struct StoryHomeView: View {
     }
 }
 
-// Moment card (frozen Figma Moment presentation; consumer language, not source enum).
-private struct MomentCardRow: View {
-    let moment: MomentModel
+// Moments mosaic (frozen Figma: a 3-column photo grid; the moment count is
+// overlaid on the last visible tile; graceful empty + partial states).
+private struct MomentsMosaic: View {
+    let moments: [MomentModel]
+    private let cols = [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)]
+
     var body: some View {
-        StoryCard {
-            HStack(spacing: 12) {
-                if let asset = moment.asset,
-                   MediaStore.shared.fileExists(relativePath: asset.relativePath) {
-                    VideoPlayer(player: AVPlayer(url: MediaStore.shared.absoluteURL(for: asset.relativePath)))
-                        .frame(width: 110, height: 74)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else {
-                    RoundedRectangle(cornerRadius: 8).fill(StoryTheme.surfaceAlt)
-                        .frame(width: 110, height: 74)
+        if moments.isEmpty {
+            RoundedRectangle(cornerRadius: StoryTheme.card)
+                .fill(StoryTheme.surfaceAlt)
+                .frame(height: 150)
+                .overlay(Text("Your moments will appear here")
+                    .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textMuted))
+        } else {
+            let shown = Array(moments.prefix(6))
+            LazyVGrid(columns: cols, spacing: 4) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { idx, m in
+                    tile(m, overlayCount: idx == shown.count - 1 && moments.count > 0)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(momentLabel).font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream)
-                    if let a = moment.asset {
-                        Text(String(format: "%.0fs", a.durationSeconds))
-                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textSecondary)
-                    }
-                }
-                Spacer()
             }
+            .clipShape(RoundedRectangle(cornerRadius: StoryTheme.card))
         }
     }
-    private var momentLabel: String {
-        switch moment.source {
-        case .directed, .spontaneous: return "Captured moment"
-        case .existingMedia, .cameraImport: return "From your library"
+
+    private func tile(_ m: MomentModel, overlayCount: Bool) -> some View {
+        ZStack {
+            if let a = m.asset, MediaStore.shared.fileExists(relativePath: a.relativePath) {
+                VideoPlayer(player: AVPlayer(url: MediaStore.shared.absoluteURL(for: a.relativePath)))
+            } else {
+                StoryTheme.surfaceAlt
+            }
+            if overlayCount {
+                LinearGradient(colors: [.clear, StoryTheme.ink.opacity(0.75)],
+                               startPoint: .center, endPoint: .bottom)
+                Text("\(moments.count) moment\(moments.count == 1 ? "" : "s") →")
+                    .font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.cream)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(8)
+            }
         }
+        .aspectRatio(1, contentMode: .fill)
+        .clipped()
     }
 }
 
