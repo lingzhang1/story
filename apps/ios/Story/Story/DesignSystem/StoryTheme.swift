@@ -35,6 +35,10 @@ enum StoryTheme {
     static func display(_ size: CGFloat, _ weight: Font.Weight = .light) -> Font {
         .system(size: size, weight: weight, design: .serif)
     }
+    /// Italic serif display (Figma wizard headlines use Fraunces italic light).
+    static func displayItalic(_ size: CGFloat, _ weight: Font.Weight = .light) -> Font {
+        .system(size: size, weight: weight, design: .serif).italic()
+    }
     static func body(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
     }

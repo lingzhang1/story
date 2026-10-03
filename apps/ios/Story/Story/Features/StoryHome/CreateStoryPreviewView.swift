@@ -16,7 +16,7 @@ struct CreateStoryPreviewView: View {
         StoryUseCases(repository: StoryRepository(context: context))
     }
 
-    private let cols = [GridItem(.adaptive(minimum: 96), spacing: 8)]
+    private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
         ScrollView {
@@ -75,13 +75,25 @@ struct CreateStoryPreviewView: View {
     }
 
     private func thumb(_ m: MomentModel) -> some View {
+        PreviewThumb(moment: m)
+    }
+}
+
+// Portrait preview tile — real first frame if available, else placeholder tone.
+private struct PreviewThumb: View {
+    let moment: MomentModel
+    @State private var img: UIImage?
+    var body: some View {
         Group {
-            if let a = m.asset, MediaStore.shared.fileExists(relativePath: a.relativePath) {
-                VideoPlayer(player: AVPlayer(url: MediaStore.shared.absoluteURL(for: a.relativePath)))
+            if let img {
+                Image(uiImage: img).resizable().scaledToFill()
             } else {
-                RoundedRectangle(cornerRadius: 8).fill(StoryTheme.surfaceAlt)
+                Image(StoryPlaceholderPhoto.name(abs(moment.id.hashValue)))
+                    .resizable().scaledToFill().opacity(0.84)
             }
         }
-        .frame(height: 96).clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(height: 150).frame(maxWidth: .infinity).clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .task { img = await MomentThumbnailCache.shared.thumbnail(for: moment) }
     }
 }

@@ -62,6 +62,75 @@ struct StoryUnavailableButton: View {
     }
 }
 
+// MARK: - Image-forward cards (frozen Figma)
+
+/// Neutral bundled placeholder photos (procedural dusk gradients — no
+/// copyrighted content). Used where the frozen Figma shows a photographic card
+/// but the native app has no real media yet. Deterministic by key so a given
+/// surface always shows the same tone. See Assets.xcassets/ph_*.
+enum StoryPlaceholderPhoto {
+    static let all = ["ph_alpine", "ph_trail", "ph_lake", "ph_city"]
+    static func name(_ i: Int) -> String { all[((i % all.count) + all.count) % all.count] }
+}
+
+/// A large image-backed make-path card (Figma ScreenHome lgCard: aspectRatio
+/// 16/9, radius 20, bottom-up ink gradient, eyebrow+title+sub overlaid).
+struct StoryImageCard: View {
+    let image: String            // asset name
+    let eyebrow: String
+    let title: String
+    let sub: String
+    var enabled: Bool = true
+    var titleSize: CGFloat = 21
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Image(image).resizable().scaledToFill()
+                .opacity(enabled ? 0.75 : 0.4)
+            LinearGradient(
+                stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
+                        .init(color: StoryTheme.ink.opacity(0.25), location: 0.6),
+                        .init(color: .clear, location: 1)],
+                startPoint: .bottom, endPoint: .top)
+            VStack(alignment: .leading, spacing: 2) {
+                StoryEyebrow(text: eyebrow)
+                Text(title).font(StoryTheme.display(titleSize))
+                    .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
+                if !sub.isEmpty {
+                    Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                }
+            }
+            .padding(.horizontal, 18).padding(.bottom, 15)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(14)
+        }
+        .aspectRatio(16.0/9.0, contentMode: .fill)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .opacity(enabled ? 1 : 0.85)
+    }
+}
+
+/// A compact image mosaic row used on cards (Figma: 3 tiles side by side with
+/// a card body below). Degrades to placeholder tones when no media.
+struct StoryMosaicStrip: View {
+    var height: CGFloat = 110
+    var startIndex: Int = 0
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<3, id: \.self) { i in
+                Image(StoryPlaceholderPhoto.name(startIndex + i))
+                    .resizable().scaledToFill()
+                    .frame(maxWidth: .infinity).frame(height: height)
+                    .clipped().opacity(0.88)
+            }
+        }
+        .frame(height: height)
+        .clipped()
+    }
+}
+
 // MARK: - Text treatments
 
 struct StoryEyebrow: View {

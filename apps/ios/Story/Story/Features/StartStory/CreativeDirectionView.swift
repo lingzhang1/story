@@ -67,13 +67,15 @@ struct CreativeDirectionView: View {
     private var describeStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Tell me about\nthis experience.")
-                .font(StoryTheme.display(28).italic()).foregroundStyle(StoryTheme.cream)
+                .font(StoryTheme.displayItalic(28)).foregroundStyle(StoryTheme.cream)
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text("What it is, how long, what you want it to feel like.")
-                .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
+                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.32))
             StoryTextField(placeholder: "We're hiking the Tour du Mont Blanc for 8 days…",
-                           text: $description, minHeight: 200)
+                           text: $description, minHeight: 220)
             StoryTextField(placeholder: "Give it a title", text: $title, minHeight: 44)
+            Spacer(minLength: 8)
             StoryPrimaryButton(title: "Continue") { step = .feel }
                 .disabled(cannotContinueDescribe).opacity(cannotContinueDescribe ? 0.4 : 1)
         }
@@ -87,51 +89,59 @@ struct CreativeDirectionView: View {
     private var feelStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("How should this\nStory feel?")
-                .font(StoryTheme.display(28).italic()).foregroundStyle(StoryTheme.cream)
+                .font(StoryTheme.displayItalic(27)).foregroundStyle(StoryTheme.cream)
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Pick a feeling, add a reference, or describe it. Any one is enough.")
-                .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())], spacing: 12) {
+                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.32))
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
                 ForEach(presets, id: \.title) { p in
                     let selected = feeling == p.title
+                    let dimmed = feeling != nil && !selected
                     Button { feeling = selected ? nil : p.title } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .top) {
-                                Text(p.title).font(StoryTheme.display(19))
-                                    .foregroundStyle(selected ? StoryTheme.cream : StoryTheme.textSecondary)
-                                    .multilineTextAlignment(.leading)
-                                Spacer(minLength: 4)
-                                if selected {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(StoryTheme.ink)
-                                        .frame(width: 18, height: 18)
-                                        .background(StoryTheme.gold).clipShape(Circle())
-                                }
-                            }
-                            Text(p.desc).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Spacer(minLength: 0)
+                            Text(p.title).font(StoryTheme.display(17))
+                                .foregroundStyle(StoryTheme.cream)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(p.desc).font(StoryTheme.body(11))
+                                .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                                .padding(.top, 5)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-                        .padding(14)
-                        .background(StoryTheme.surface)
-                        .overlay(RoundedRectangle(cornerRadius: StoryTheme.card)
-                            .stroke(selected ? StoryTheme.gold : Color.clear, lineWidth: 1.5))
-                        .clipShape(RoundedRectangle(cornerRadius: StoryTheme.card))
+                        .frame(maxWidth: .infinity, minHeight: 84, alignment: .bottomLeading)
+                        .padding(.horizontal, 15).padding(.vertical, 16)
+                        .background(selected ? StoryTheme.gold.opacity(0.08) : StoryTheme.cream.opacity(0.03))
+                        .overlay(RoundedRectangle(cornerRadius: 14)
+                            .stroke(selected ? StoryTheme.gold : StoryTheme.cream.opacity(0.1),
+                                    lineWidth: selected ? 2 : 1.5))
+                        .overlay(alignment: .topTrailing) {
+                            if selected {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(StoryTheme.ink)
+                                    .frame(width: 18, height: 18)
+                                    .background(StoryTheme.gold).clipShape(Circle())
+                                    .padding(10)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .opacity(dimmed ? 0.5 : 1)
                     }
                     .buttonStyle(.plain)
                 }
             }
             // Reference media — disabled future (dashed, like Figma + Add a reference).
             Text("+ Add a reference")
-                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textMuted)
+                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.45))
                 .frame(maxWidth: .infinity, minHeight: 52)
-                .overlay(RoundedRectangle(cornerRadius: StoryTheme.card)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5]))
-                    .foregroundStyle(StoryTheme.cream.opacity(0.15)))
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5]))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.18)))
                 .accessibilityHint("Not available yet")
-            Text("or describe it").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
-            StoryTextField(placeholder: "Mostly landscapes and the feeling of the journey. Include us naturally.",
-                           text: $description, minHeight: 92)
+            Text("or describe it").font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
+            StoryTextField(placeholder: "Mostly landscapes and the scale of the mountains. Include us naturally. Slow, cinematic feeling.",
+                           text: $description, minHeight: 96)
             StoryPrimaryButton(title: "Continue") { Task { await resolve() } }
         }
     }
