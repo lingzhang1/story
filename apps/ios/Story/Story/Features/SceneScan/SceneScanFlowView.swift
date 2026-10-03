@@ -36,9 +36,18 @@ struct SceneScanFlowView: View {
     @State private var state: FlowState = .intro
     @State private var showCamera = false
     @State private var lastScanToRecommendationMs: Int?
+    @State private var planningLine = "Looking at your scene…"
+    @State private var planningTimer: Timer?
 
     private let sceneService = SceneUnderstandingService()
     private let directorService = StoryDirectorService()
+
+    // Staged consumer copy for the real ~12–16s Director wait (no fake %).
+    private let planningStages = [
+        "Looking at your scene…",
+        "Finding what matters…",
+        "Finding a shot worth capturing…"
+    ]
 
     private let bg = Color(red: 0.04, green: 0.04, blue: 0.043)
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
@@ -51,7 +60,7 @@ struct SceneScanFlowView: View {
             case .intro:                      introView
             case .scanning:                   Color.clear
             case .analyzing:                  statusView("Looking at your scene…")
-            case .planning:                   statusView("Finding the best way to capture this…")
+            case .planning:                   statusView(planningLine)
             case .recommendation(let su, let out): recommendationView(su, out)
             case .failed(let message, let retry): failedView(message, retry)
             }
@@ -281,6 +290,7 @@ struct SceneScanFlowView: View {
 
     private func runDirector(_ su: SceneUnderstandingContractDTO, scanStart: Date? = nil) {
         state = .planning(su)
+        startPlanningStages()
         let start = scanStart ?? Date()
         Task {
             do {
@@ -290,17 +300,30 @@ struct SceneScanFlowView: View {
                     targetDurationSeconds: story.intentTargetDurationSeconds)
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                 await MainActor.run {
+                    stopPlanningStages()
                     lastScanToRecommendationMs = ms
                     state = .recommendation(su, out)
                 }
             } catch {
                 await MainActor.run {
+                    stopPlanningStages()
                     state = .failed(errorText(error, "Story couldn't plan this shot."),
                                     retry: .replan(su))
                 }
             }
         }
     }
+
+    private func startPlanningStages() {
+        planningLine = planningStages[0]
+        var i = 0
+        planningTimer?.invalidate()
+        planningTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            i = min(i + 1, planningStages.count - 1)
+            withAnimation { planningLine = planningStages[i] }
+        }
+    }
+    private func stopPlanningStages() { planningTimer?.invalidate(); planningTimer = nil }
 
     private func handleCapture(tempURL: URL, duration: Double) {
         let useCases = StoryUseCases(repository: StoryRepository(context: context))
