@@ -61,6 +61,7 @@ struct HomeView: View {
             NavigationLink { CreativeDirectionView() } label: {
                 StoryImageCard(image: "ph_alpine", eyebrow: "Over time", title: "Start a Story",
                                sub: "Capture an experience as it unfolds.")
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.bottom, 22)
@@ -99,6 +100,7 @@ struct HomeView: View {
             NavigationLink { CreativeDirectionView() } label: {
                 StoryImageCard(image: "ph_alpine", eyebrow: "Over time", title: "Start a Story",
                                sub: "", titleSize: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.bottom, 16)
@@ -107,8 +109,10 @@ struct HomeView: View {
             StoryEyebrow(text: "Your Stories").padding(.bottom, 11)
             VStack(spacing: 8) {
                 ForEach(Array(active.dropFirst()) + completed) { story in
-                    NavigationLink { StoryHomeView(story: story) } label: { storyRow(story) }
-                        .buttonStyle(.plain)
+                    NavigationLink { StoryHomeView(story: story) } label: {
+                        storyRow(story).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -134,6 +138,7 @@ struct HomeView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(StoryTheme.cream.opacity(0.09), lineWidth: 1))
+        .contentShape(Rectangle())
     }
 
     private func momentSub(_ story: StoryModel) -> String {

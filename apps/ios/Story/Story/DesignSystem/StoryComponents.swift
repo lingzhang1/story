@@ -83,32 +83,39 @@ struct StoryImageCard: View {
     var enabled: Bool = true
     var titleSize: CGFloat = 21
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Image(image).resizable().scaledToFill()
-                .opacity(enabled ? 0.75 : 0.4)
-            LinearGradient(
-                stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
-                        .init(color: StoryTheme.ink.opacity(0.25), location: 0.6),
-                        .init(color: .clear, location: 1)],
-                startPoint: .bottom, endPoint: .top)
-            VStack(alignment: .leading, spacing: 2) {
-                StoryEyebrow(text: eyebrow)
-                Text(title).font(StoryTheme.display(titleSize))
-                    .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
-                if !sub.isEmpty {
-                    Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+        Color.clear
+            .aspectRatio(16.0/9.0, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay(
+                Image(image).resizable().scaledToFill()
+                    .opacity(enabled ? 0.75 : 0.4)
+            )
+            .overlay(
+                LinearGradient(
+                    stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
+                            .init(color: StoryTheme.ink.opacity(0.25), location: 0.6),
+                            .init(color: .clear, location: 1)],
+                    startPoint: .bottom, endPoint: .top)
+            )
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    StoryEyebrow(text: eyebrow)
+                    Text(title).font(StoryTheme.display(titleSize))
+                        .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
+                    if !sub.isEmpty {
+                        Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                    }
                 }
+                .padding(.horizontal, 18).padding(.bottom, 15)
             }
-            .padding(.horizontal, 18).padding(.bottom, 15)
-            Image(systemName: "arrow.right")
-                .font(.system(size: 13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(14)
-        }
-        .aspectRatio(16.0/9.0, contentMode: .fill)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .opacity(enabled ? 1 : 0.85)
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .padding(14)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .opacity(enabled ? 1 : 0.85)
     }
 }
 
@@ -120,14 +127,18 @@ struct StoryMosaicStrip: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<3, id: \.self) { i in
-                Image(StoryPlaceholderPhoto.name(startIndex + i))
-                    .resizable().scaledToFill()
+                Color.clear
                     .frame(maxWidth: .infinity).frame(height: height)
-                    .clipped().opacity(0.88)
+                    .overlay(
+                        Image(StoryPlaceholderPhoto.name(startIndex + i))
+                            .resizable().scaledToFill().opacity(0.88)
+                    )
+                    .clipped()
             }
         }
         .frame(height: height)
         .clipped()
+        .allowsHitTesting(false)
     }
 }
 

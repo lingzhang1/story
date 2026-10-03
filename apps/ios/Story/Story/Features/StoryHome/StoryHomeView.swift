@@ -28,8 +28,13 @@ struct StoryHomeView: View {
                 // Header: ← back · title + Day/status · ••• menu (Figma inline row)
                 HStack(alignment: .top, spacing: 12) {
                     Button { dismiss() } label: {
-                        Text("←").font(StoryTheme.body(16)).foregroundStyle(StoryTheme.cream.opacity(0.28))
-                    }.accessibilityLabel("Back")
+                        Text("←").font(StoryTheme.body(18))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                            .frame(width: 44, height: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(story.title).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
                         Text(story.status == .completed ? "Completed" : "Active")
@@ -38,8 +43,13 @@ struct StoryHomeView: View {
                     }
                     Spacer()
                     Button { showMenu = true } label: {
-                        Text("•••").font(StoryTheme.body(16)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                    }.accessibilityLabel("Story options")
+                        Text("•••").font(StoryTheme.body(16))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                            .frame(width: 44, height: 44, alignment: .trailing)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Story options")
                 }
                 .padding(.top, 8)
 
