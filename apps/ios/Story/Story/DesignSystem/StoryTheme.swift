@@ -1,14 +1,14 @@
 import SwiftUI
+import UIKit
 
 // StoryTheme — the Story design-system tokens, taken from the frozen Figma
 // (prototypes/story-figma/src/App.tsx + index.css). Single source of truth so
 // screens don't re-declare colors/opacities. C3.5 (Figma UX convergence).
 //
-// Fonts: Figma uses Fraunces (serif display) + DM Sans (body). Those aren't
-// bundled in the app target, so display text uses the system serif
-// (design: .serif, light weight) and body uses the system sans — the closest
-// native match without adding font files (a bundling step is out of C3.5 scope;
-// tracked as a remaining Figma difference).
+// Fonts: the frozen Figma uses Fraunces (serif display) + DM Sans (body),
+// now BUNDLED (SIL OFL, Resources/Fonts). display* resolve the Fraunces
+// variable family; body resolves DM Sans. Both fall back to the system
+// serif/sans automatically if the family fails to register.
 enum StoryTheme {
     // Palette (exact Figma hex)
     static let ink      = Color(hex: 0x0a0a0b)   // background
@@ -31,18 +31,31 @@ enum StoryTheme {
     // Spacing
     static let screenPadding: CGFloat = 24
 
-    // Type (system fallback for Fraunces/DM Sans)
+    // Font family names (as registered by the bundled .ttf name tables).
+    private static let serifFamily = "Fraunces"
+    private static let sansFamily  = "DM Sans"
+    private static let serifReady  = UIFont(name: serifFamily, size: 12) != nil
+    private static let sansReady   = UIFont(name: sansFamily, size: 12) != nil
+
+    // Fraunces display (light by default, matching Figma weight 300).
     static func display(_ size: CGFloat, _ weight: Font.Weight = .light) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+        serifReady ? .custom(serifFamily, size: size).weight(weight)
+                   : .system(size: size, weight: weight, design: .serif)
     }
-    /// Italic serif display (Figma wizard headlines use Fraunces italic light).
+    /// Italic Fraunces (Figma wizard headlines).
     static func displayItalic(_ size: CGFloat, _ weight: Font.Weight = .light) -> Font {
-        .system(size: size, weight: weight, design: .serif).italic()
+        serifReady ? .custom(serifFamily, size: size).weight(weight).italic()
+                   : .system(size: size, weight: weight, design: .serif).italic()
     }
+    // DM Sans body.
     static func body(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight)
+        sansReady ? .custom(sansFamily, size: size).weight(weight)
+                  : .system(size: size, weight: weight)
     }
-    static func eyebrow() -> Font { .system(size: 12, weight: .regular) }
+    static func eyebrow() -> Font {
+        sansReady ? .custom(sansFamily, size: 12).weight(.regular)
+                  : .system(size: 12, weight: .regular)
+    }
 }
 
 extension Color {

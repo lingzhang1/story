@@ -38,6 +38,7 @@ struct SceneScanFlowView: View {
     @State private var lastScanToRecommendationMs: Int?
     @State private var planningLine = "Looking at your scene…"
     @State private var planningTimer: Timer?
+    @State private var sceneFrame: UIImage?   // sharpest scanned frame, backs the Idea card
 
     private let sceneService = SceneUnderstandingService()
     private let directorService = StoryDirectorService()
@@ -131,27 +132,42 @@ struct SceneScanFlowView: View {
             VStack(alignment: .leading, spacing: 22) {
                 switch action {
                 case .captureShot, .retryShot:
-                    // Concept Card (11-direct-flow): concept title + description +
-                    // "N shots · ~X sec", then the first shot's plain instruction, with
-                    // "Let's shoot" as the primary action. Visual-first, no shot plan,
-                    // no filmmaking terms.
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(out.concept.title)
-                            .font(.system(size: 28, weight: .light, design: .serif))
-                            .foregroundStyle(ink)
-                        if !out.concept.summary.isEmpty {
-                            Text(out.concept.summary)
-                                .font(.system(size: 17, weight: .light))
-                                .foregroundStyle(ink.opacity(0.82))
-                                .fixedSize(horizontal: false, vertical: true)
+                    // Concept Card (11-direct-flow) over the real scanned scene
+                    // (Figma idea.png: image-backed card + "SHOT 1" label), then
+                    // the shot instruction + guidance. Visual-first, no jargon.
+                    ZStack(alignment: .bottomLeading) {
+                        if let sceneFrame {
+                            Image(uiImage: sceneFrame).resizable().scaledToFill()
+                                .frame(height: 240).frame(maxWidth: .infinity).clipped()
+                            LinearGradient(
+                                stops: [.init(color: bg.opacity(0.96), location: 0),
+                                        .init(color: bg.opacity(0.3), location: 0.55),
+                                        .init(color: .clear, location: 1)],
+                                startPoint: .bottom, endPoint: .top)
                         }
-                        Text(conceptMeta(out))
-                            .font(.caption).foregroundStyle(gold)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SHOT 1").font(StoryTheme.body(11, .semibold))
+                                .tracking(1.5).foregroundStyle(gold)
+                            Text(out.concept.title)
+                                .font(StoryTheme.display(28))
+                                .foregroundStyle(ink)
+                            if !out.concept.summary.isEmpty {
+                                Text(out.concept.summary)
+                                    .font(StoryTheme.body(17, .light))
+                                    .foregroundStyle(ink.opacity(0.82))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text(conceptMeta(out))
+                                .font(StoryTheme.body(13)).foregroundStyle(gold)
+                        }
+                        .padding(sceneFrame == nil ? 0 : 16)
                     }
+                    .background(sceneFrame == nil ? Color.clear : bg.opacity(0.25))
+                    .clipShape(RoundedRectangle(cornerRadius: sceneFrame == nil ? 0 : 18))
                     if let shot {
                         Divider().overlay(gold.opacity(0.25)).padding(.vertical, 4)
                         Text(shot.instruction)
-                            .font(.system(size: 20, weight: .light, design: .serif))
+                            .font(StoryTheme.display(20))
                             .foregroundStyle(ink).fixedSize(horizontal: false, vertical: true)
                         VStack(alignment: .leading, spacing: 10) {
                             if let a = shot.subjectAction, !a.isEmpty { guidanceRow("Subject", a) }
@@ -272,6 +288,7 @@ struct SceneScanFlowView: View {
     // MARK: - pipeline
 
     private func handleFrames(_ frames: [UIImage]) {
+        sceneFrame = frames.first   // real scanned scene → backs the Idea card (Figma)
         state = .analyzing
         let scanStart = Date()
         Task {

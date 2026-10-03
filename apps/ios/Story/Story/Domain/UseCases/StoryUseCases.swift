@@ -138,4 +138,10 @@ final class StoryUseCases {
         }
         return created
     }
+
+    /// Remove a Moment from a Story (local/mechanical — Moments management screen,
+    /// Figma ScreenMoments). Does not change Story status.
+    func removeMoment(_ moment: MomentModel, from story: StoryModel) throws {
+        try repository.removeMoment(moment, from: story)
+    }
 }

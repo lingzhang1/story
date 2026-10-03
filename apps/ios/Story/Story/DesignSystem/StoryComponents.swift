@@ -1,5 +1,19 @@
 import SwiftUI
 
+// Presentation-only tidy of a user/C1-authored Story title for DISPLAY. The
+// stored title (a real C1 artifact) is NEVER mutated — this only fixes an
+// odd leading-lowercase ("tMB hiking" → "TMB hiking") in the UI, per the
+// product-over-code rule, without touching the contract value.
+extension String {
+    var displayTitle: String {
+        guard let first = first else { return self }
+        if first.isLowercase, count > 1, self[index(startIndex, offsetBy: 1)].isUppercase {
+            return first.uppercased() + dropFirst()
+        }
+        return self
+    }
+}
+
 // StoryComponents — the small set of reusable UI patterns the frozen Figma UX
 // repeats. Only patterns actually reused are extracted (no generic framework).
 // C3.5 Figma UX convergence.
@@ -63,7 +77,6 @@ struct StoryUnavailableButton: View {
 }
 
 // MARK: - Image-forward cards (frozen Figma)
-
 /// Neutral bundled placeholder photos (procedural dusk gradients — no
 /// copyrighted content). Used where the frozen Figma shows a photographic card
 /// but the native app has no real media yet. Deterministic by key so a given

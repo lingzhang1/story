@@ -155,7 +155,7 @@ struct CreativeDirectionView: View {
             } else if let s = resolvedStory {
                 Text("Here's what I understood.")
                     .font(StoryTheme.display(28)).foregroundStyle(StoryTheme.cream)
-                Text(s.title).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                Text(s.title.displayTitle).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
                 Text(s.intentSummary).font(StoryTheme.body(16))
                     .foregroundStyle(StoryTheme.textSecondary).fixedSize(horizontal: false, vertical: true)
                 // Music direction — disabled future.

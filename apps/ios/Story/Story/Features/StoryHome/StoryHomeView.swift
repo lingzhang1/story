@@ -17,6 +17,8 @@ struct StoryHomeView: View {
     @State private var showMenu = false
     @State private var showPreview = false
     @State private var pickerItems = false
+    @State private var showMoments = false
+    @State private var confirmLifecycle = false
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -36,7 +38,7 @@ struct StoryHomeView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Back")
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(story.title).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                        Text(story.title.displayTitle).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
                         Text(story.status == .completed ? "Completed" : "Active")
                             .font(StoryTheme.body(11)).tracking(0.5)
                             .foregroundStyle(story.status == .completed ? StoryTheme.gold : StoryTheme.cream.opacity(0.22))
@@ -59,8 +61,12 @@ struct StoryHomeView: View {
                     .padding(.top, 20)
 
                 // Moments mosaic (Figma: 3-col square grid, count overlaid)
-                MomentsMosaic(moments: story.moments.sorted(by: { $0.createdAt < $1.createdAt }))
-                    .padding(.top, 16)
+                Button { if !story.moments.isEmpty { showMoments = true } } label: {
+                    MomentsMosaic(moments: story.moments.sorted(by: { $0.createdAt < $1.createdAt }))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 16)
 
                 // Primary cream pill + quiet secondary text (Figma hierarchy)
                 VStack(spacing: 14) {
@@ -123,20 +129,17 @@ struct StoryHomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showCapture) { ShootMomentView(story: story) }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
+        .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems) { picked in
             try? useCases.addExistingMedia(to: story, relativePaths: picked)
         }
-        .confirmationDialog("Story options", isPresented: $showMenu, titleVisibility: .visible) {
-            if story.status == .active {
-                Button("Complete Story") { try? useCases.completeStory(story) }
-            } else {
-                Button("Reopen Story") { try? useCases.reopenStory(story) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(story.status == .active
-                 ? "This moves the Story out of your active Stories. You can still view Moments and reopen it anytime."
-                 : "Reopen this Story and move it back to active.")
+        .sheet(isPresented: $showMenu) {
+            StoryOptionsSheet(
+                status: story.status,
+                onComplete: { showMenu = false; try? useCases.completeStory(story) },
+                onReopen: { showMenu = false; try? useCases.reopenStory(story) })
+                .presentationDetents([.height(story.status == .active ? 300 : 260)])
+                .presentationBackground(StoryTheme.surfaceAlt)
         }
     }
 
@@ -144,6 +147,79 @@ struct StoryHomeView: View {
         if story.status == .completed { return "Everything from your Story, in one place." }
         if story.moments.isEmpty { return "Your Story is ready to begin." }
         return "Your Story is taking shape."
+    }
+}
+
+// Story options — frozen Figma bottom sheet (ScreenTMB menu). Edit Story details
+// + Creative direction are future surfaces (disabled); Complete/Reopen is the
+// wired action, routed through a styled two-step confirm.
+private struct StoryOptionsSheet: View {
+    let status: StoryStatus
+    var onComplete: () -> Void
+    var onReopen: () -> Void
+    @State private var confirming = false
+    @Environment(\.dismiss) private var dismiss
+
+    private var isActive: Bool { status == .active }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule().fill(StoryTheme.cream.opacity(0.12))
+                .frame(width: 36, height: 4).padding(.top, 10).padding(.bottom, 14)
+
+            if confirming {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(isActive ? "Complete this Story?" : "Reopen this Story?")
+                        .font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                    Text(isActive
+                         ? "This Story moves out of your active Stories. You can still view Moments, create videos, or reopen it anytime."
+                         : "This Story returns to your active Stories.")
+                        .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                    StoryPrimaryButton(title: isActive ? "Complete Story" : "Reopen Story") {
+                        isActive ? onComplete() : onReopen()
+                    }.padding(.top, 10)
+                    Button { confirming = false } label: {
+                        Text("Cancel").font(StoryTheme.body(14))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                }
+                .padding(.horizontal, 24).padding(.bottom, 24)
+            } else {
+                VStack(spacing: 0) {
+                    sheetRow("Edit Story details", disabled: true) {}
+                    sheetRow("Creative direction", disabled: true) {}
+                    Divider().overlay(StoryTheme.cream.opacity(0.07)).padding(.vertical, 6)
+                    sheetRow(isActive ? "Complete Story" : "Reopen Story",
+                             tint: isActive ? StoryTheme.cream.opacity(0.75) : StoryTheme.gold) {
+                        confirming = true
+                    }
+                }
+                .padding(.horizontal, 24).padding(.bottom, 28)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func sheetRow(_ title: String, tint: Color = StoryTheme.cream.opacity(0.8),
+                          disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(StoryTheme.body(15))
+                    .foregroundStyle(disabled ? StoryTheme.cream.opacity(0.28) : tint)
+                Spacer()
+                if disabled {
+                    Text("Soon").font(StoryTheme.body(11))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.2))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 14).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityHint(disabled ? "Not available yet" : "")
     }
 }
 

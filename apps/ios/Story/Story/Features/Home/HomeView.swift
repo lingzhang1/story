@@ -124,7 +124,7 @@ struct HomeView: View {
             StoryMosaicStrip(height: 110)
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(story.title).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+                    Text(story.title.displayTitle).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
                     Text(momentSub(story)).font(StoryTheme.body(11))
                         .foregroundStyle(StoryTheme.cream.opacity(0.5))
                 }
@@ -151,7 +151,7 @@ struct HomeView: View {
             StoryMosaicStrip(height: 56, startIndex: story.status == .completed ? 3 : 0)
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(story.title).font(StoryTheme.display(14))
+                    Text(story.title.displayTitle).font(StoryTheme.display(14))
                         .foregroundStyle(StoryTheme.cream.opacity(0.6))
                     Text("\(story.status == .completed ? "Completed · " : "")\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
                         .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.2))
