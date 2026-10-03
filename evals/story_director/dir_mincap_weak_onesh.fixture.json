@@ -1,0 +1,45 @@
+{
+  "id": "dir_mincap_weak_onesh",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_mincap_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "quiet reflective moment",
+      "desired_feeling": [
+        "quiet"
+      ]
+    },
+    "scene_understanding": {
+      "summary": "A mostly empty room with a plain white wall and a single light switch.",
+      "environment_tags": [
+        "indoor"
+      ],
+      "operator_space": "limited",
+      "subjects": [
+        {
+          "label": "light switch",
+          "prominence": "low"
+        }
+      ],
+      "composition_opportunities": []
+    }
+  },
+  "expected_properties": [
+    "gives at most ONE simple honest recommendation for a visually weak scene",
+    "does not hallucinate rich cinematic opportunities on a blank wall"
+  ],
+  "forbidden_properties": [
+    "manufactures a TMB/hiking narrative from objects with no hiking relevance",
+    "object-inventory wide shot ('wide shot including [list of objects]') used as a fallback for missing narrative relevance",
+    "claims a concept the resulting footage would not communicate to a viewer",
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_mincap_axis"
+  ]
+}

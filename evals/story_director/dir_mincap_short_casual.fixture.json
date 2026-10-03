@@ -1,0 +1,61 @@
+{
+  "id": "dir_mincap_short_casual",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_mincap_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "a quick casual clip right now",
+      "desired_feeling": [
+        "light"
+      ],
+      "target_duration_seconds": 8
+    },
+    "scene_understanding": {
+      "summary": "A room with a hiking backpack on a chair, a window and a bookshelf.",
+      "environment_tags": [
+        "indoor",
+        "room"
+      ],
+      "operator_space": "moderate",
+      "subjects": [
+        {
+          "label": "hiking backpack",
+          "prominence": "high"
+        },
+        {
+          "label": "window",
+          "prominence": "medium"
+        },
+        {
+          "label": "bookshelf",
+          "prominence": "medium"
+        }
+      ],
+      "composition_opportunities": [
+        "the window provides a natural frame"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 8
+    }
+  },
+  "expected_properties": [
+    "keeps the plan small for a short casual Moment (ideally one strong beat/shot)",
+    "does not over-plan a single quick clip"
+  ],
+  "forbidden_properties": [
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan",
+    "4+ beats/shots for an 8s casual clip"
+  ],
+  "tags": [
+    "director",
+    "dir_mincap_axis"
+  ],
+  "failure_labels": [
+    "OVER_PLANNING"
+  ]
+}

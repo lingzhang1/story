@@ -1,0 +1,70 @@
+{
+  "id": "dir_ng_C_musicroom_relevant_intent",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_narrative_grounding_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "a short piece about my music practice",
+      "desired_feeling": [
+        "focused",
+        "warm"
+      ],
+      "emphasis": [
+        "playing",
+        "practice"
+      ]
+    },
+    "scene_understanding": {
+      "summary": "A music/office room: a guitar on a stand, a music stand with sheet music, a closet with clothes, and a desk with monitors and a laptop.",
+      "environment_tags": [
+        "indoor",
+        "music",
+        "room"
+      ],
+      "operator_space": "limited",
+      "subjects": [
+        {
+          "label": "guitar",
+          "prominence": "high"
+        },
+        {
+          "label": "music stand",
+          "prominence": "high"
+        },
+        {
+          "label": "laptop",
+          "prominence": "medium"
+        },
+        {
+          "label": "closet",
+          "prominence": "low"
+        }
+      ],
+      "composition_opportunities": [
+        "the guitar and music stand create a composition"
+      ],
+      "constraints": [
+        "limited space",
+        "visual clutter"
+      ]
+    }
+  },
+  "expected_properties": [
+    "USES the guitar/music stand because they genuinely serve a music-practice Story",
+    "proves ordinary rooms are usable when narratively relevant (not blanket-rejected)",
+    "scene-grounded AND narratively grounded"
+  ],
+  "forbidden_properties": [
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan",
+    "rejects the scene as unusable when it is clearly relevant to a music Story"
+  ],
+  "tags": [
+    "director",
+    "dir_narrative_grounding_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}

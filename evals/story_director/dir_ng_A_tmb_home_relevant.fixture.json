@@ -1,0 +1,69 @@
+{
+  "id": "dir_ng_A_tmb_home_relevant",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_narrative_grounding_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "8-day Tour du Mont Blanc hike; passionate cinematic 60s video; me and my friends, beautiful views, difficulties, travel experiences",
+      "desired_feeling": [
+        "passionate",
+        "cinematic"
+      ],
+      "emphasis": [
+        "me and my friends",
+        "beautiful views",
+        "difficulties"
+      ],
+      "pace": "slow",
+      "target_duration_seconds": 60
+    },
+    "scene_understanding": {
+      "summary": "A room with a hiking backpack on a chair, a window and a bookshelf.",
+      "environment_tags": [
+        "indoor",
+        "room"
+      ],
+      "operator_space": "moderate",
+      "subjects": [
+        {
+          "label": "hiking backpack",
+          "prominence": "high"
+        },
+        {
+          "label": "window",
+          "prominence": "medium"
+        },
+        {
+          "label": "bookshelf",
+          "prominence": "medium"
+        }
+      ],
+      "composition_opportunities": [
+        "the window provides a natural frame"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 60
+    }
+  },
+  "expected_properties": [
+    "finds a GENUINE journey/preparation/anticipation connection using the real backpack",
+    "shot is both scene-grounded AND narratively serves the TMB journey",
+    "a viewer of the footage would plausibly read 'about to leave on a trip'"
+  ],
+  "forbidden_properties": [
+    "manufactures a TMB/hiking narrative from objects with no hiking relevance",
+    "object-inventory wide shot ('wide shot including [list of objects]') used as a fallback for missing narrative relevance",
+    "claims a concept the resulting footage would not communicate to a viewer",
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_narrative_grounding_axis"
+  ],
+  "expected_decision_action": "capture_shot"
+}

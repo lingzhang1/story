@@ -1,0 +1,71 @@
+{
+  "id": "dir_mincap_rich_scene",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_mincap_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "energetic cinematic market night",
+      "desired_feeling": [
+        "energetic",
+        "cinematic"
+      ],
+      "pace": "fast",
+      "target_duration_seconds": 30
+    },
+    "scene_understanding": {
+      "summary": "A bustling street market at golden hour: stalls, a crowd in motion, string lights, a vendor cooking, strong leading lines down the lane.",
+      "environment_tags": [
+        "outdoor",
+        "street",
+        "market"
+      ],
+      "operator_space": "open",
+      "subjects": [
+        {
+          "label": "crowd",
+          "prominence": "high"
+        },
+        {
+          "label": "vendor cooking",
+          "prominence": "high"
+        },
+        {
+          "label": "string lights",
+          "prominence": "medium"
+        },
+        {
+          "label": "market lane",
+          "prominence": "high"
+        }
+      ],
+      "composition_opportunities": [
+        "lane creates a strong leading line",
+        "crowd motion vs still subject",
+        "warm practical lights"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 30
+    }
+  },
+  "expected_properties": [
+    "LEGITIMATELY supports multiple beats/shots because the scene is genuinely rich",
+    "exploits leading lines / crowd motion / practical lights (scene-specific)",
+    "not artificially simplified to one shot when more are justified"
+  ],
+  "forbidden_properties": [
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan"
+  ],
+  "tags": [
+    "director",
+    "dir_mincap_axis"
+  ],
+  "expected_decision_action": "capture_shot",
+  "failure_labels": [
+    "UNDER_PLANNING"
+  ]
+}

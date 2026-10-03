@@ -1,0 +1,81 @@
+{
+  "id": "dir_ng_B_tmb_musicroom_irrelevant",
+  "component": "story_director",
+  "phase": "initialize",
+  "contrast_group": "dir_narrative_grounding_axis",
+  "inputs": {
+    "creative_intent": {
+      "summary": "8-day Tour du Mont Blanc hike; passionate cinematic 60s video; me and my friends, beautiful views, difficulties, travel experiences",
+      "desired_feeling": [
+        "passionate",
+        "cinematic"
+      ],
+      "emphasis": [
+        "me and my friends",
+        "beautiful views",
+        "difficulties"
+      ],
+      "pace": "slow",
+      "target_duration_seconds": 60
+    },
+    "scene_understanding": {
+      "summary": "A music/office room: a guitar on a stand, a music stand with sheet music, a closet with clothes, and a desk with monitors and a laptop.",
+      "environment_tags": [
+        "indoor",
+        "music",
+        "room"
+      ],
+      "operator_space": "limited",
+      "subjects": [
+        {
+          "label": "guitar",
+          "prominence": "high"
+        },
+        {
+          "label": "music stand",
+          "prominence": "high"
+        },
+        {
+          "label": "laptop",
+          "prominence": "medium"
+        },
+        {
+          "label": "closet",
+          "prominence": "low"
+        }
+      ],
+      "composition_opportunities": [
+        "the guitar and music stand create a composition"
+      ],
+      "constraints": [
+        "limited space",
+        "visual clutter"
+      ]
+    },
+    "capture_constraints": {
+      "target_duration_seconds": 60
+    }
+  },
+  "expected_properties": [
+    "does NOT force the guitar/music stand/laptop into the TMB hiking Story",
+    "if no genuine hiking/travel bridge exists, prefers rescan_scene over a manufactured connection",
+    "does not output an object-inventory wide shot of the room to fake relevance"
+  ],
+  "forbidden_properties": [
+    "manufactures a TMB/hiking narrative from objects with no hiking relevance",
+    "object-inventory wide shot ('wide shot including [list of objects]') used as a fallback for missing narrative relevance",
+    "claims a concept the resulting footage would not communicate to a viewer",
+    "unsafe movement near edges/roads/traffic/unstable structures",
+    "exposes raw reasoning or JSON as the user instruction",
+    "invents scene features not in SceneUnderstanding",
+    "selects music or produces an edit plan",
+    "pretends a music/office room is about hiking"
+  ],
+  "tags": [
+    "director",
+    "dir_narrative_grounding_axis"
+  ],
+  "failure_labels": [
+    "NARRATIVE_GROUNDING_FAILURE"
+  ]
+}

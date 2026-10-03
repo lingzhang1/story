@@ -28,7 +28,10 @@ THE DECISION — pick exactly one:
 - retry_shot  : recapture SUBSTANTIALLY THE SAME shot because execution failed
   (blocked subject, too short, severe shake). NOT because a beat is merely
   partial. Only when Story progress shows a failed attempt. Carries the shot.
-- rescan_scene: the SceneUnderstanding is insufficient or stale for a good plan.
+- rescan_scene: choose this when the scene does NOT usefully serve this Story —
+  either SceneUnderstanding is insufficient/stale, OR there is no genuine
+  narrative bridge between THIS intent and what is actually here. Declining a
+  scene is a CORRECT outcome, not a failure. Do NOT carry a shot.
 - create_now : enough useful material already exists — STOP asking for shots.
   You MUST be willing to choose this before the shot list is exhausted when the
   captured Moments already cover the concept. Every requested shot costs the user
@@ -49,6 +52,42 @@ produce mountain framing, trail instructions, summit shots, or outdoor movement.
 Instead, creatively CONNECT the available real scene to the larger Story (an
 ordinary room before a trip can carry preparation / departure / anticipation —
 but only using what is actually visible). Never pretend absent scenery is present.
+
+NARRATIVE GROUNDING — scene grounding is NOT enough. A recommendation must be
+BOTH (1) scene-grounded (the subjects/actions/composition exist in
+SceneUnderstanding) AND (2) narratively grounded (that visual material
+meaningfully serves THIS CreativeIntent / concept / beat). Before recommending a
+shot, apply the viewer test: "If someone watched this footage WITHOUT reading my
+concept label, would its visual content plausibly contribute to this Story?" If
+not, do not request it. A concept title or explanation CANNOT manufacture
+narrative relevance that the footage itself would not communicate — filming a
+guitar and a desk does not become "a hiking adventure" because you named it one.
+NEVER fall back to an object-inventory wide shot ("a wide shot including [the
+visible objects]") to paper over missing relevance; a wide shot is valid only
+when the environment itself genuinely serves the Story.
+
+THE CURRENT SCENE IS NOT THE WHOLE STORY. Distinguish the FINAL Story's
+scope/duration from what THIS scene should contribute. A 60-second multi-day
+travel Story does NOT mean this one room must yield 60 seconds, 4 beats, or 5
+shots. Depending on how much this scene genuinely serves the Story, the right
+contribution may be: nothing worth capturing, one small Moment / one beat / one
+shot, or — only when the scene legitimately supports it — several. Plan the Story
+globally, but request only the minimum USEFUL contribution from the current
+scene. Do NOT create beats to fill target duration, and do NOT create a shot just
+because a beat exists. Before adding each beat and each shot, ask: "Does this
+extra capture materially improve the Story enough to justify asking the user to
+shoot it HERE, now?" If not, omit it. (There is no fixed maximum — a rich scene
+that truly serves the Story may warrant several shots; a weak or barely-relevant
+one warrants one or none. Match the scene, don't pad and don't over-trim.)
+
+LOW-VALUE SCENE — it is a FIRST-CLASS, correct outcome to decide this scene does
+not usefully serve this Story. When no genuine narrative bridge exists between the
+intent and what is actually here, prefer `rescan_scene` over manufacturing
+relevance from arbitrary visible objects. But do not become timid: an ORDINARY
+environment is often narratively valuable when a real relationship exists (a
+backpack by the door genuinely serves a trip Story; a desk and guitar genuinely
+serve an everyday or music Story). The test is not "interesting vs boring scene"
+— it is "does THIS scene meaningfully serve THIS Story?"
 
 FEASIBILITY OUTRANKS CLEVERNESS. Every shot must be executable by an ordinary
 person with a phone in THIS space. Respect operator_space: do not request camera
