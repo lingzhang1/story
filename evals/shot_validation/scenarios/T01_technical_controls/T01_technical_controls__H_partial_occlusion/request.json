@@ -1,0 +1,15 @@
+{
+  "fixture_id": "T01_technical_controls__H_partial_occlusion",
+  "shot": {
+    "purpose": "Hold a clean, steady, well-exposed, in-focus shot of the subject.",
+    "instruction": "Hold a steady, clear shot of the subject for a few seconds.",
+    "subject_action": "subject framed clearly",
+    "camera_motion": "static",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_object",
+    "purpose": "A clean usable shot."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

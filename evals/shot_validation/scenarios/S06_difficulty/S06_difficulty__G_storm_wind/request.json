@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S06_difficulty__G_storm_wind",
+  "shot": {
+    "purpose": "Convey the difficulty / effort of the hike.",
+    "instruction": "Capture a moment that shows how tough the hike is.",
+    "subject_action": "evidence of effort/hardship",
+    "camera_motion": "any",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_difficulty",
+    "purpose": "Show the effort it took."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

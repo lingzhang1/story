@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S05_trail_progression__B_static_camera_walk_away",
+  "shot": {
+    "purpose": "Show progression deeper into the landscape (movement along the trail).",
+    "instruction": "Follow behind your friend as they walk up the trail.",
+    "subject_action": "subject progresses along trail",
+    "camera_motion": "follow",
+    "target_duration_seconds": 5
+  },
+  "beat": {
+    "id": "beat_progress",
+    "purpose": "Progression into the landscape."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

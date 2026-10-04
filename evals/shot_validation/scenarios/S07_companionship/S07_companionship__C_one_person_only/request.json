@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S07_companionship__C_one_person_only",
+  "shot": {
+    "purpose": "Convey genuine companionship between the people.",
+    "instruction": "Capture you and your friend together, naturally.",
+    "subject_action": "authentic interaction between companions",
+    "camera_motion": "any",
+    "target_duration_seconds": 5
+  },
+  "beat": {
+    "id": "beat_companion",
+    "purpose": "The people you shared it with."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

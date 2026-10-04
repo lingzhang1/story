@@ -1,0 +1,15 @@
+{
+  "fixture_id": "A01_semantic_adversarial__A04_person_mountain_but_no_scale",
+  "shot": {
+    "purpose": "Establish human/landscape SCALE contrast.",
+    "instruction": "Capture a shot that: Establish human/landscape SCALE contrast.",
+    "subject_action": "(see per-fixture)",
+    "camera_motion": "any",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_scale",
+    "purpose": "Scale contrast."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

@@ -1,0 +1,15 @@
+{
+  "fixture_id": "A01_semantic_adversarial__A06_beautiful_but_wrong_beat",
+  "shot": {
+    "purpose": "Convey the DIFFICULTY of the hike.",
+    "instruction": "Capture a shot that: Convey the DIFFICULTY of the hike.",
+    "subject_action": "(see per-fixture)",
+    "camera_motion": "any",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_difficulty",
+    "purpose": "Show the effort it took."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

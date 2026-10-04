@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S08_end_of_day__E_tired_face",
+  "shot": {
+    "purpose": "Convey the quiet end-of-day winding-down mood.",
+    "instruction": "Capture a calm end-of-day moment.",
+    "subject_action": "quiet end-of-day activity",
+    "camera_motion": "any",
+    "target_duration_seconds": 5
+  },
+  "beat": {
+    "id": "beat_endofday",
+    "purpose": "Settling, the day ending."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

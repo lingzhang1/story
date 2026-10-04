@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S03_scenic_reveal__A_exact_friend_to_landscape__take1",
+  "shot": {
+    "purpose": "Reveal the landscape by moving from the friend to the vista (friend -> landscape).",
+    "instruction": "Start on your friend, then pan to reveal the landscape.",
+    "subject_action": "pan from person to landscape",
+    "camera_motion": "pan",
+    "target_duration_seconds": 5
+  },
+  "beat": {
+    "id": "beat_reveal",
+    "purpose": "Reveal the place."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

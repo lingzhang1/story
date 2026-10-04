@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S04_human_scale__A_exact_small_person_landscape__take2",
+  "shot": {
+    "purpose": "Establish the scale contrast between a small human and the large landscape.",
+    "instruction": "Frame your friend small against the big landscape.",
+    "subject_action": "small person in large landscape",
+    "camera_motion": "static",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_scale",
+    "purpose": "Human/landscape scale contrast."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

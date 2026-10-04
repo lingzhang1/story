@@ -1,0 +1,13 @@
+{
+  "technical_usability": "unusable",
+  "execution_match": "absent",
+  "shot_purpose": "unfulfilled",
+  "story_utility": "none",
+  "clip_disposition": "discard",
+  "requested_shot_status": "unfulfilled",
+  "user_state": "try_again",
+  "becomes_moment": false,
+  "tags": [
+    "technical"
+  ]
+}

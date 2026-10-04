@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S02_departure__B_stand_still",
+  "shot": {
+    "purpose": "Communicate departure / the beginning of the journey.",
+    "instruction": "Walk toward the camera down the hallway, like you're heading out.",
+    "subject_action": "walk toward camera and depart",
+    "camera_motion": "static",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_departure",
+    "purpose": "Beginning of the journey."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

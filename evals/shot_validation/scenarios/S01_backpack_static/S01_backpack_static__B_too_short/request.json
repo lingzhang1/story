@@ -1,0 +1,15 @@
+{
+  "fixture_id": "S01_backpack_static__B_too_short",
+  "shot": {
+    "purpose": "Hold a steady, clear shot of the backpack as the object of the moment.",
+    "instruction": "Hold the camera steady on your backpack for a few seconds.",
+    "subject_action": "backpack stationary, framed",
+    "camera_motion": "static",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_object",
+    "purpose": "Establish the gear/object."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

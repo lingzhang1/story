@@ -1,0 +1,15 @@
+{
+  "fixture_id": "A01_semantic_adversarial__A03_backpack_but_arrival_not_departure",
+  "shot": {
+    "purpose": "Communicate DEPARTURE / beginning of journey.",
+    "instruction": "Capture a shot that: Communicate DEPARTURE / beginning of journey.",
+    "subject_action": "(see per-fixture)",
+    "camera_motion": "any",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_departure",
+    "purpose": "Beginning of the journey."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}

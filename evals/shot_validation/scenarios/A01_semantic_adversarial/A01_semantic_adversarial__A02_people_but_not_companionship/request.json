@@ -1,0 +1,15 @@
+{
+  "fixture_id": "A01_semantic_adversarial__A02_people_but_not_companionship",
+  "shot": {
+    "purpose": "Convey genuine COMPANIONSHIP.",
+    "instruction": "Capture a shot that: Convey genuine COMPANIONSHIP.",
+    "subject_action": "(see per-fixture)",
+    "camera_motion": "any",
+    "target_duration_seconds": 4
+  },
+  "beat": {
+    "id": "beat_companion",
+    "purpose": "The people you shared it with."
+  },
+  "concept_summary": "A quiet, authentic hiking story \u2014 the people, the effort, and the landscape."
+}
