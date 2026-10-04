@@ -34,7 +34,7 @@ from typing import Any
 
 from shot_validation import ShotValidationJudgment, derive
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+REPO = pathlib.Path(__file__).resolve().parents[1]
 MEDIA_MAP = REPO / "evals/shot_validation/media-map.json"
 FIXTURES_DIR = REPO / "evals/shot_validation/scenarios"
 FRAMES_ROOT = REPO / "evals/assets/private_local/frames"
@@ -256,10 +256,16 @@ def main() -> None:
     ])
     ap.add_argument("--frames", nargs="*", type=int, default=[8])
     ap.add_argument("--run", action="store_true", help="LIVE Bedrock calls (bills). Default dry.")
+    ap.add_argument("--limit", type=int, default=0, help="Limit to first N fixtures (smoke).")
+    ap.add_argument("--only", nargs="*", default=[], help="Only these fixture ids.")
     ap.add_argument("--out", default=str(REPO / "evals/results"))
     args = ap.parse_args()
 
     cases = load_cases()
+    if args.only:
+        cases = [c for c in cases if c.fixture_id in set(args.only)]
+    if args.limit:
+        cases = cases[: args.limit]
     print(f"loaded {len(cases)} authored fixtures")
     results = []
     for m in args.models:
