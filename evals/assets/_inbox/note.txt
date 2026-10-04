@@ -1,0 +1,3 @@
+# Field dump — classify later. One line per clip:
+#   IMG_3921.MOV = friend turning to view a valley, probably S03_scenic_reveal
+#   IMG_3922.MOV = muddy boots close-up, S06_difficulty

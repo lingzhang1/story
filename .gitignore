@@ -53,3 +53,8 @@ evals/results/
 evals/story_director/dir_gear_prep/
 evals/story_director/dir_home_doorway/
 evals/story_director/dir_tmb_pretrip_home/
+
+# Private eval raw media (friends/faces/homes/travel footage stays LOCAL ONLY).
+# Fixture metadata/expectations under evals/shot_validation/ ARE committed;
+# the actual personal videos under private_local/ are never pushed to GitHub.
+evals/assets/private_local/

@@ -1,0 +1,9 @@
+{
+  "scene_id": "home_backpack_001",
+  "component": "C2_scene_understanding",
+  "description": "TEMPLATE — describe the physical scene the scan frames show.",
+  "location_type": "home",
+  "frames": ["frame_01.jpg", "frame_02.jpg", "frame_03.jpg"],
+  "notes": "Reusable scan-frame set. Source asset only — no expected model answers here.",
+  "privacy": "public_safe | private_local"
+}
