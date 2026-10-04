@@ -1,0 +1,106 @@
+{
+  "_doc": "Stable fixture-ID -> physical media mapping for Shot Validation (C4A). COMMITTED and media-free: it only references the gitignored private_local corpus by path; media is NEVER duplicated. Renaming/reorganizing raw files later touches ONLY this file. Shared-source entries intentionally point multiple fixture IDs at the SAME physical file under different Shot/Beat context (a C4 evaluation property). IMG_8712.MOV is excluded until a purpose is deliberately assigned. Retakes (_2) are DISTINCT fixtures. media_root is relative to the repo root.",
+  "schema_version": "shot_validation.media_map/1",
+  "media_root": "evals/assets/private_local/videos",
+  "excluded": [
+    { "path": "S07_companionship/IMG_8712.MOV", "reason": "unclassified; no requested-purpose assigned yet (c4 §interpretation)" }
+  ],
+  "fixtures": {
+    "S01_backpack_static__A_exact_good":        "S01_backpack_static/S01_A_exact_good.mov",
+    "S01_backpack_static__B_too_short":         "S01_backpack_static/S01_B_too_short.mov",
+    "S01_backpack_static__C_shaky":             "S01_backpack_static/S01_C_shaky.mov",
+    "S01_backpack_static__D_poor_framing":      "S01_backpack_static/S01_D_poor_framing.mov",
+    "S01_backpack_static__E_wrong_subject":     "S01_backpack_static/S01_E_wrong_subject.MOV",
+    "S01_backpack_static__F_alternative_good":  "S01_backpack_static/S01_F_alternative_good.MOV",
+
+    "S02_departure__A_exact_good":              "S02_departure/S02_A_exact_good.mov",
+    "S02_departure__B_stand_still":             "S02_departure/S02_B_stand_still.mov",
+    "S02_departure__D_walk_away_through_door":  "S02_departure/S02_D_walk_away_through_door.mov",
+    "S02_departure__E_pickup_backpack_and_leave": "S02_departure/S02_E_pickup_backpack_and_leave.mov",
+    "S02_departure__F_slightly_shaky_but_good": "S02_departure/S02_F_slightly_shaky_but_good.mov",
+    "S02_departure__G_contradictory_action":    "S02_departure/S02_ G_contradictory_action.mov",
+
+    "S03_scenic_reveal__A_exact_friend_to_landscape__take1": "S03_scenic_reveal/S03_A_exact_friend_to_landscape.MOV",
+    "S03_scenic_reveal__A_exact_friend_to_landscape__take2": "S03_scenic_reveal/S03_A_exact_friend_to_landscape_2.MOV",
+    "S03_scenic_reveal__B_landscape_only":      "S03_scenic_reveal/S03_B_landscape_only.MOV",
+    "S03_scenic_reveal__C_friend_only__take1":  "S03_scenic_reveal/S03_C_friend_only.MOV",
+    "S03_scenic_reveal__C_friend_only__take2":  "S03_scenic_reveal/S03_C_friend_only_2.MOV",
+    "S03_scenic_reveal__D_reverse_reveal__take1": "S03_scenic_reveal/S03_D_reverse_reveal.MOV",
+    "S03_scenic_reveal__D_reverse_reveal__take2": "S03_scenic_reveal/S03_D_reverse_reveal_2.MOV",
+    "S03_scenic_reveal__E_bad_whip_pan":        "S03_scenic_reveal/S03_E_bad_whip_pan.MOV",
+
+    "S04_human_scale__A_exact_small_person_landscape__take1": "S04_human_scale/S04_A_exact_small_person_landscape.MOV",
+    "S04_human_scale__A_exact_small_person_landscape__take2": "S04_human_scale/S04_A_exact_small_person_landscape_2.MOV",
+    "S04_human_scale__B_person_too_large":      "S04_human_scale/S04_B_person_too_large.mov",
+    "S04_human_scale__C_landscape_no_person":   "S04_human_scale/S04_C_landscape_no_person.MOV",
+    "S04_human_scale__D_small_person_moving":   "S04_human_scale/S04_D_small_person_moving.mov",
+    "S04_human_scale__E_two_people_small":      "S04_human_scale/S04_E_two_people_small.MP4",
+
+    "S05_trail_progression__A_follow_behind":   "S05_trail_progression/S05_A_follow_behind.MOV",
+    "S05_trail_progression__B_static_camera_walk_away": "S05_trail_progression/S05_B_static_camera_walk_away.MOV",
+    "S05_trail_progression__C_subject_static_camera_moves": "S05_trail_progression/S05_C_subject_static_camera_moves.MOV",
+    "S05_trail_progression__D_follow_but_shaky": "S05_trail_progression/S05_D_follow_but_shaky.mov",
+    "S05_trail_progression__E_feet_walking__take1": "S05_trail_progression/S05_E_feet_walking_alternative.MOV",
+    "S05_trail_progression__E_feet_walking__take2": "S05_trail_progression/S05_E_feet_walking_alternative_2.MOV",
+    "S05_trail_progression__E_static_camera_two_people": "S05_trail_progression/S05_E_static_camera_two_people.mov",
+
+    "S06_difficulty__B_tired_face__take1":      "S06_difficulty/S06_B_tired_face.MOV",
+    "S06_difficulty__B_tired_face__take2":      "S06_difficulty/S06_B_tired_face_2.MOV",
+    "S06_difficulty__C_hand_trekking_pole":     "S06_difficulty/S06_C_hand_trekking_pole.MOV",
+    "S06_difficulty__D_heavy_footsteps":        "S06_difficulty/S06_D_heavy_footsteps.MOV",
+    "S06_difficulty__E_cross_river":            "S06_difficulty/S06_E_cross_river.MOV",
+    "S06_difficulty__F_eat_food_in_snow":       "S06_difficulty/S06_F_eat_food_in_snow.MOV",
+    "S06_difficulty__G_storm_cold":             "S06_difficulty/S06_G_storm_cold.MOV",
+    "S06_difficulty__G_storm_wind":             "S06_difficulty/S06_G_storm_wind.MOV",
+
+    "S07_companionship__A_natural_conversation": "S07_companionship/S07_A_natural_conversation.mov",
+    "S07_companionship__C_one_person_only":     "S07_companionship/S07_C_one_person_only.MOV",
+    "S07_companionship__D_imperfect_but_natural": "S07_companionship/S07_D_imperfect_but_natural.MOV",
+    "S07_companionship__E_wrong_people":        "S07_companionship/S07_E_wrong_people.MOV",
+    "S07_companionship__F_two_people_selfie":   "S07_companionship/S07_F_two_people_sel-ph.MOV",
+    "S07_companionship__G_walking_together":    "S07_companionship/S07_G_walking_together.MP4",
+
+    "S08_end_of_day__A_quiet_window":           "S08_end_of_day/S08_A_quiet_window.MOV",
+    "S08_end_of_day__B_quiet_stove":            "S08_end_of_day/S08_B_quiet_stove.MOV",
+    "S08_end_of_day__C_sleepy_person":          "S08_end_of_day/S08_C_sleepy_person.MOV",
+    "S08_end_of_day__D_cooking_dinner":         "S08_end_of_day/S08_D_cooking_dinner.MOV",
+    "S08_end_of_day__E_tired_face":             "S08_end_of_day/S08_E_tired_face.MOV",
+    "S08_end_of_day__F_nice_dinner_window_view": "S08_end_of_day/S08_F_nice_dinner_with_window_view.MOV",
+
+    "T01_technical_controls__A_clean_4s":       "T01_technical_controls/T01_A_clean_4s.mov",
+    "T01_technical_controls__B_too_short_08s":  "T01_technical_controls/T01_B_too_short_08s.mov",
+    "T01_technical_controls__C_moderate_shake": "T01_technical_controls/T01_C_moderate_shake.mov",
+    "T01_technical_controls__D_severe_shake":   "T01_technical_controls/T01_D_severe_shake.mov",
+    "T01_technical_controls__E_underexposed":   "T01_technical_controls/T01_E_underexposed.mov",
+    "T01_technical_controls__F_overexposed":    "T01_technical_controls/T01_F_overexposed.mov",
+    "T01_technical_controls__G_out_of_focus":   "T01_technical_controls/T01_G_out_of_focus.mov",
+    "T01_technical_controls__H_partial_occlusion": "T01_technical_controls/T01_H_partial_occlusion.mov",
+    "T01_technical_controls__I_camera_points_away": "T01_technical_controls/T01_I_camera_points_away.mov",
+
+    "A01_semantic_adversarial__A01_hiking_but_not_difficulty": "A01_semantic_adversarial/A01_hiking_but_not_difficulty.MOV",
+    "A01_semantic_adversarial__A02_people_but_not_companionship": "A01_semantic_adversarial/A02_people_but_not_companionship.mov",
+    "A01_semantic_adversarial__A03_backpack_but_arrival_not_departure": "A01_semantic_adversarial/A03_backpack_but_arrival_not_departure.mov",
+    "A01_semantic_adversarial__A04_person_mountain_but_no_scale": "A01_semantic_adversarial/A04_person_mountain_but_no_scale.MOV",
+    "A01_semantic_adversarial__A05_motion_but_wrong_motion": "A01_semantic_adversarial/A05_motion_but_wrong_motion.mov",
+    "A01_semantic_adversarial__A06_beautiful_but_wrong_beat": "A01_semantic_adversarial/A06_beautiful_but_wrong_beat.MOV"
+  },
+  "shared_source": [
+    {
+      "note": "Contextual reuse: the SAME physical file is validated under different requested Shot/Beat contexts. Different expected judgments are the point. Media is NOT duplicated.",
+      "groups": [
+        {
+          "physical_file": "A01_semantic_adversarial/A01_hiking_but_not_difficulty.MOV",
+          "also_known_physical_copy": "A01_semantic_adversarial/A06_beautiful_but_wrong_beat.MOV",
+          "fixtures": ["A01_semantic_adversarial__A01_hiking_but_not_difficulty", "A01_semantic_adversarial__A06_beautiful_but_wrong_beat"],
+          "detail": "A06 is the same captured footage as A01 (beautiful hiking panorama) exercised against a DIFFERENT requested beat. The corpus currently stores it as a second physical copy; the eval treats both IDs as the shared-source pair regardless."
+        },
+        {
+          "physical_file": "A01_semantic_adversarial/A05_motion_but_wrong_motion.mov",
+          "related_fixture_distinct_file": "S02_departure/S02_ G_contradictory_action.mov",
+          "fixtures": ["A01_semantic_adversarial__A05_motion_but_wrong_motion", "S02_departure__G_contradictory_action"],
+          "detail": "A05 (motion exists, wrong motion) and S02_G (contradictory departure: approach then sit) express the same contradiction idea. The corpus stores S02_G as its own physical file; both are evaluated as the contradiction pair under their own requested contexts."
+        }
+      ]
+    }
+  ]
+}

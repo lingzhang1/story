@@ -54,9 +54,12 @@ evals/story_director/dir_gear_prep/
 evals/story_director/dir_home_doorway/
 evals/story_director/dir_tmb_pretrip_home/
 
-# Private eval raw media (friends/faces/homes/travel footage stays LOCAL ONLY).
-# Fixture metadata/expectations under evals/shot_validation/ ARE committed;
-# the actual personal videos under private_local/ are never pushed to GitHub.
+# Private eval raw + DERIVED media (friends/faces/homes/travel footage stays LOCAL ONLY).
+# Directory-level ignore (fail-safe by LOCATION, not by extension): the entire tree —
+# private_local/videos/ (raw clips, incl. the C4 corpus), private_local/frames/ and
+# private_local/thumbs/ (DERIVED sampled frames/thumbnails) — is never committed.
+# Committed fixture metadata/expectations live under evals/shot_validation/ and reference
+# this media by path (see evals/shot_validation/media-map.json); media is never duplicated.
 evals/assets/private_local/
 
 # Raw video media anywhere under evals/assets/ stays LOCAL ONLY (friends/faces/
