@@ -72,3 +72,25 @@ evals/assets/**/*.mkv
 evals/assets/**/*.avi
 evals/assets/**/*.hevc
 evals/assets/**/*.HEVC
+
+# Exported frames / sampled stills / thumbnails anywhere under evals/assets/
+# stay LOCAL ONLY too — a frame of personal footage is as private as the clip.
+# Text fixtures (.md, .json) and vector diagrams (.svg) under the same dirs
+# remain committable; only raster image exports are ignored here.
+evals/assets/**/*.jpg
+evals/assets/**/*.JPG
+evals/assets/**/*.jpeg
+evals/assets/**/*.JPEG
+evals/assets/**/*.png
+evals/assets/**/*.PNG
+evals/assets/**/*.heic
+evals/assets/**/*.HEIC
+evals/assets/**/*.heif
+evals/assets/**/*.HEIF
+evals/assets/**/*.webp
+evals/assets/**/*.WEBP
+evals/assets/**/*.gif
+evals/assets/**/*.GIF
+evals/assets/**/*.bmp
+evals/assets/**/*.tiff
+evals/assets/**/*.tif
