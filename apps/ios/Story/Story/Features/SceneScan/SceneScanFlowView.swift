@@ -40,6 +40,14 @@ struct SceneScanFlowView: View {
     @State private var planningTimer: Timer?
     @State private var sceneFrame: UIImage?   // sharpest scanned frame, backs the Idea card
 
+    // C4-Lite capture integrity (Milestone C4-Lite). SAVE does not interrupt (brief
+    // "Moment added" confirmation only); only FAIL interrupts with a physical reason.
+    @State private var showMomentAdded = false                       // neutral SAVE toast
+    @State private var integrityFail: CaptureIntegrityIssue?         // non-nil => FAIL sheet
+    @State private var pendingCaptureURL: URL?                       // held for Keep-anyway
+    @State private var pendingCaptureDuration: Double = 0
+    private let integrityChecker = CaptureIntegrityChecker()
+
     private let sceneService = SceneUnderstandingService()
     private let directorService = StoryDirectorService()
 
@@ -80,6 +88,54 @@ struct SceneScanFlowView: View {
             )
             .ignoresSafeArea()
         }
+        // C4-Lite FAIL surface — ONLY an obvious integrity failure interrupts. Physical
+        // reason + Try again / Keep anyway. Retake is optional (Keep anyway persists).
+        .sheet(isPresented: integrityFailBinding) {
+            captureIntegrityFailSheet()
+        }
+        // C4-Lite SAVE — neutral, non-interrupting "Moment added" confirmation. No
+        // Continue button, no spinner, no validation page. Auto-dismisses the flow.
+        .overlay(alignment: .bottom) {
+            if showMomentAdded {
+                Text("Moment added")
+                    .font(.system(size: 16, weight: .medium, design: .serif))
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 20).padding(.vertical, 12)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 40)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var integrityFailBinding: Binding<Bool> {
+        Binding(get: { integrityFail != nil },
+                set: { if !$0 { integrityFail = nil } })
+    }
+
+    // C4-Lite FAIL sheet: a physical, non-semantic explanation + two optional choices.
+    @ViewBuilder
+    private func captureIntegrityFailSheet() -> some View {
+        let issue = integrityFail ?? .tooShort
+        VStack(spacing: 22) {
+            Spacer()
+            Text(issue.userReason)                       // physical only, never semantic
+                .font(.system(size: 22, weight: .light, design: .serif))
+                .foregroundStyle(ink).multilineTextAlignment(.center)
+            Spacer()
+            primaryButton("Try again") {                 // discard pending, re-open camera
+                integrityFail = nil
+                pendingCaptureURL = nil
+                showCamera = true
+            }
+            secondaryButton("Keep anyway") {             // user override -> persist as Moment
+                integrityFail = nil
+                keepPendingAnyway()
+            }
+        }
+        .padding(28)
+        .presentationDetents([.medium])
+        .background(bg.ignoresSafeArea())
     }
 
     private var scanningBinding: Binding<Bool> {
@@ -355,17 +411,49 @@ struct SceneScanFlowView: View {
     private func stopPlanningStages() { planningTimer?.invalidate(); planningTimer = nil }
 
     private func handleCapture(tempURL: URL, duration: Double) {
+        // C4-Lite capture-integrity gate (local, synchronous, no AI/network/AWS).
+        // SAVE -> persist Moment + neutral "Moment added" + continue (no interruption).
+        // FAIL -> do NOT auto-adopt; interrupt with a physical reason + Try again / Keep
+        // anyway. NO semantic claim is made; BeatProgress is NOT updated here.
+        showCamera = false
+        let verdict = integrityChecker.evaluate(fileURL: tempURL)
+        switch verdict {
+        case .save:
+            persistMoment(tempURL: tempURL, duration: duration)
+        case .fail(let issue):
+            // Hold the capture so "Keep anyway" can still adopt it.
+            pendingCaptureURL = tempURL
+            pendingCaptureDuration = duration
+            integrityFail = issue
+        }
+    }
+
+    /// Persist a captured clip as a Moment via the existing path, then show the neutral
+    /// SAVE confirmation and leave the flow. No semantic shot/beat claim is attached.
+    private func persistMoment(tempURL: URL, duration: Double) {
         let useCases = StoryUseCases(repository: StoryRepository(context: context))
         do {
             let relativePath = try MediaStore.shared.adoptCapturedFile(tempURL: tempURL)
             _ = try useCases.shootMoment(for: story, relativePath: relativePath,
                                          durationSeconds: duration)
-            showCamera = false
-            dismiss()
+            pendingCaptureURL = nil
+            withAnimation { showMomentAdded = true }
+            // Brief confirmation, then continue the normal Story flow.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                withAnimation { showMomentAdded = false }
+                dismiss()
+            }
         } catch {
             print("Failed to save moment: \(error)")
-            showCamera = false
+            dismiss()
         }
+    }
+
+    /// "Keep anyway" override on a FAIL: persist the held capture as a Moment despite the
+    /// integrity flag. Still no semantic claim.
+    private func keepPendingAnyway() {
+        guard let url = pendingCaptureURL else { dismiss(); return }
+        persistMoment(tempURL: url, duration: pendingCaptureDuration)
     }
 
     private func errorText(_ error: Error, _ fallback: String) -> String {
