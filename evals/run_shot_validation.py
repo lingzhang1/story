@@ -51,6 +51,8 @@ _PRICE_PER_1K = {
     "amazon.nova-pro-v1:0": (0.0008, 0.0032),
     "anthropic.claude-haiku-4-5-20251001-v1:0": (0.001, 0.005),
     "anthropic.claude-sonnet-4-6": (0.003, 0.015),
+    "us.anthropic.claude-sonnet-4-6": (0.003, 0.015),
+    "us.anthropic.claude-opus-4-6-v1": (0.015, 0.075),
 }
 
 
@@ -172,7 +174,19 @@ def run_candidate(model_id: str, n_frames: int, cases: list[FixtureCase],
         if res.usage:
             in_tok += res.usage.input_tokens or 0
             out_tok += res.usage.output_tokens or 0
-        judgment = ShotValidationJudgment.model_validate(res.data)
+        payload = res.data
+        # Tolerant unwrap: some models nest under a single {"judgment": {...}} key.
+        if isinstance(payload, dict) and set(payload) == {"judgment"} and isinstance(payload["judgment"], dict):
+            payload = payload["judgment"]
+        # Drop any unknown keys the model added so strict validation still passes.
+        allowed = set(ShotValidationJudgment.model_fields)
+        payload = {k: v for k, v in payload.items() if k in allowed}
+        try:
+            judgment = ShotValidationJudgment.model_validate(payload)
+        except Exception as e:
+            rows.append({"fixture_id": c.fixture_id, "parse_error": str(e)[:200],
+                         "raw": res.data, "latency_s": round(dt, 3)})
+            continue
         d = derive(judgment)
         rows.append({
             "fixture_id": c.fixture_id,
@@ -187,6 +201,7 @@ def run_candidate(model_id: str, n_frames: int, cases: list[FixtureCase],
         "rows": rows, "latency": _latency_stats(latencies),
         "tokens": {"input": in_tok, "output": out_tok},
         "approx_cost_usd": _cost(model_id, in_tok, out_tok),
+        "parse_errors": sum(1 for r in rows if "parse_error" in r),
         "scores": score_rows(rows) if live else None,
     }
 
@@ -234,11 +249,42 @@ def score_rows(rows: list[dict]) -> dict:
             return None
         return round(sum(1 for r in sub if r["pred"].get(field_) == r["exp"].get(field_)) / len(sub), 3)
 
+    # Per-axis confusion matrices: expected -> {predicted: count}
+    confusion = {}
+    for a in axes:
+        cm: dict[str, dict[str, int]] = {}
+        for r in scored:
+            e = r["exp"].get(a); p = r["pred"].get(a)
+            cm.setdefault(e, {}).setdefault(p, 0)
+            cm[e][p] += 1
+        confusion[a] = cm
+
+    # Critical collapse errors (matter more than aggregate accuracy):
+    def count(exp_axis, exp_val, pred_val):
+        return sum(1 for r in scored
+                   if r["exp"].get(exp_axis) == exp_val and r["pred"].get(exp_axis) == pred_val)
+    exp_alt = sum(1 for r in scored if r["exp"].get("shot_purpose") == "alternative_fulfilled") or 1
+    exp_contra = sum(1 for r in scored if r["exp"].get("execution_match") == "contradicted") or 1
+    collapse = {
+        "alt_to_fulfilled": count("shot_purpose", "alternative_fulfilled", "fulfilled"),
+        "alt_to_unfulfilled": count("shot_purpose", "alternative_fulfilled", "unfulfilled"),
+        "alt_total_expected": exp_alt if exp_alt != 1 else sum(1 for r in scored if r["exp"].get("shot_purpose") == "alternative_fulfilled"),
+        "contradicted_to_deviated": count("execution_match", "contradicted", "deviated"),
+        "contradicted_to_matched": count("execution_match", "contradicted", "matched"),
+        "contradicted_total_expected": sum(1 for r in scored if r["exp"].get("execution_match") == "contradicted"),
+        # contradiction leaking to a POSITIVE requested-shot status (worst case)
+        "contradiction_leaked_to_fulfilled": sum(
+            1 for r in scored
+            if r["exp"].get("execution_match") == "contradicted"
+            and r["pred"].get("requested_shot_status") == "fulfilled"),
+    }
+
     return {
         "n": n,
         "four_axis_accuracy": round(four_axis, 3),
         "axis_accuracy": axis_acc,
         "shot_purpose_accuracy": axis_acc["shot_purpose"],
+        "user_state_accuracy": round(acc("user_state"), 3),
         "false_try_again_rate": round(false_try, 3),
         "false_fulfillment_rate": round(false_fulfill, 3),
         "alternative_success_recognition": subset_acc("alternative_success", "shot_purpose"),
@@ -246,6 +292,8 @@ def score_rows(rows: list[dict]) -> dict:
         "adversarial_catch_rate": subset_acc("adversarial", "requested_shot_status"),
         "temporal_accuracy": subset_acc("temporal"),
         "technical_failure_accuracy": subset_acc("technical", "technical_usability"),
+        "collapse_errors": collapse,
+        "confusion": confusion,
     }
 
 
