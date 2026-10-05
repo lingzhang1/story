@@ -1,0 +1,33 @@
+{
+  "_doc": "Asset Understanding EXPERIMENT subset (bounded; ~26 of 68). References media-map fixture ids. Covers short/medium/long + temporal + semantic + multi-event. Experiment-only; no new data collected. capture_context carries the requested Shot/Beat when the fixture had one (for Story-contribution judging); null = treat as free-form Moment (e.g. Skip-Scan-like).",
+  "subset_version": "asset_understanding.subset/1",
+  "clips": [
+    {"fixture": "T01_technical_controls__A_clean_4s", "band": "short", "tags": ["technical","short"]},
+    {"fixture": "S01_backpack_static__A_exact_good", "band": "short", "tags": ["semantic","setup"]},
+    {"fixture": "S01_backpack_static__F_alternative_good", "band": "short", "tags": ["alternative_success"]},
+    {"fixture": "S02_departure__A_exact_good", "band": "short", "tags": ["temporal","departure"]},
+    {"fixture": "S02_departure__D_walk_away_through_door", "band": "short", "tags": ["temporal","departure","reveal_direction"]},
+    {"fixture": "S02_departure__G_contradictory_action", "band": "short", "tags": ["temporal","contradiction"]},
+    {"fixture": "S03_scenic_reveal__A_exact_friend_to_landscape__take1", "band": "short", "tags": ["temporal","reveal_direction"]},
+    {"fixture": "S03_scenic_reveal__D_reverse_reveal__take1", "band": "short", "tags": ["temporal","reveal_direction","contradiction"]},
+    {"fixture": "S05_trail_progression__A_follow_behind", "band": "short", "tags": ["temporal","progression"]},
+    {"fixture": "A01_semantic_adversarial__A03_backpack_but_arrival_not_departure", "band": "short", "tags": ["temporal","contradiction","adversarial"]},
+    {"fixture": "A01_semantic_adversarial__A05_motion_but_wrong_motion", "band": "short", "tags": ["temporal","contradiction","adversarial"]},
+
+    {"fixture": "S04_human_scale__A_exact_small_person_landscape__take1", "band": "medium", "tags": ["semantic","scale"]},
+    {"fixture": "S05_trail_progression__E_feet_walking__take1", "band": "medium", "tags": ["temporal","progression","alternative_success"]},
+    {"fixture": "S06_difficulty__D_heavy_footsteps", "band": "medium", "tags": ["semantic","difficulty"]},
+    {"fixture": "S06_difficulty__E_cross_river", "band": "long", "tags": ["semantic","difficulty","multi_event"]},
+    {"fixture": "S06_difficulty__G_storm_cold", "band": "long", "tags": ["semantic","difficulty"]},
+    {"fixture": "S07_companionship__A_natural_conversation", "band": "long", "tags": ["semantic","companionship","multi_event"]},
+    {"fixture": "S07_companionship__D_imperfect_but_natural", "band": "medium", "tags": ["semantic","companionship","alternative_success"]},
+    {"fixture": "S07_companionship__E_wrong_people", "band": "medium", "tags": ["semantic","companionship","contradiction"]},
+    {"fixture": "S08_end_of_day__C_sleepy_person", "band": "short", "tags": ["semantic","end_of_day"]},
+    {"fixture": "S08_end_of_day__D_cooking_dinner", "band": "long", "tags": ["semantic","end_of_day","multi_event","longest"]},
+    {"fixture": "S08_end_of_day__F_nice_dinner_window_view", "band": "medium", "tags": ["semantic","end_of_day","beautiful_wrong_purpose"]},
+    {"fixture": "A01_semantic_adversarial__A01_hiking_but_not_difficulty", "band": "long", "tags": ["semantic","adversarial","beautiful_wrong_purpose"]},
+    {"fixture": "A01_semantic_adversarial__A06_beautiful_but_wrong_beat", "band": "long", "tags": ["semantic","adversarial","beautiful_wrong_purpose","shared_source"]},
+    {"fixture": "T01_technical_controls__G_out_of_focus", "band": "short", "tags": ["technical"]},
+    {"fixture": "T01_technical_controls__I_camera_points_away", "band": "short", "tags": ["technical","dead_footage"]}
+  ]
+}
