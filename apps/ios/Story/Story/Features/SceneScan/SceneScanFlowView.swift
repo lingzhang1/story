@@ -458,6 +458,13 @@ struct SceneScanFlowView: View {
             _ = try useCases.shootMoment(for: story, relativePath: relativePath,
                                          durationSeconds: duration)
             pendingCaptureURL = nil
+            // Milestone D §13: also save a user-owned COPY to Apple Photos (add-only),
+            // fire-and-forget. The Moment is ALREADY persisted above; this never blocks
+            // or fails Moment creation, and Photos denial/failure degrades silently.
+            let adoptedURL = MediaStore.shared.absoluteURL(for: relativePath)
+            PhotosSaver.saveVideoCopy(at: adoptedURL) { outcome in
+                if outcome != .saved { print("Photos copy not saved: \(outcome)") }
+            }
             withAnimation { showMomentAdded = true }
             // Brief confirmation, then continue the normal Story flow.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
