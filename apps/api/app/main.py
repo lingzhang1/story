@@ -73,7 +73,10 @@ class DirectorInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     creative_intent: dict = Field(..., description="A CreativeIntent contract object")
-    scene_understanding: dict = Field(..., description="A SceneUnderstanding contract object")
+    scene_understanding: dict | None = Field(
+        default=None,
+        description="A SceneUnderstanding contract object, or null when the user used "
+                    "Skip Scan (Director then recommends environment-agnostically).")
     capture_constraints: dict | None = Field(default=None)
 
 

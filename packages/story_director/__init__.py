@@ -71,10 +71,32 @@ class DirectorOutput(BaseModel):
     plan: StoryPlanContract
     director_state: DirectorState
     decision: DirectorDecision
+    # EPHEMERAL ranked ALTERNATIVES for the current recommendation slot (DIRECT UX).
+    # candidates[0] == `decision`. These are session/UI data only — NOT persisted into
+    # StoryPlan, NOT additional required captures. The user captures AT MOST ONE. They do
+    # not add beats/shots and do not change Story coverage requirements.
+    candidates: list[DirectorDecision] = Field(default_factory=list)
 
 
 def _load_system_prompt() -> str:
     return (_PROMPT_DIR / "system.md").read_text()
+
+
+# Appended to the user content when requesting ephemeral alternatives (DIRECT UX).
+# candidates[0] MUST equal `decision`; #1/#2 are genuinely different approaches to the
+# SAME narrative need, not paraphrases. They are NOT a multi-shot plan and must NOT add
+# beats/shots. The user captures at most one.
+_CANDIDATES_INSTRUCTION = (
+    "\n\nALTERNATIVES: also return `candidates` — up to 3 RANKED alternative decisions for "
+    "the SAME current slot. candidates[0] MUST equal `decision`. candidates[1]/[2] must be "
+    "GENUINELY DIFFERENT creative approaches (different subject_action / framing / angle) to "
+    "serve the SAME narrative need, NOT paraphrases of candidates[0]. They are EPHEMERAL: the "
+    "user captures AT MOST ONE. Do NOT add beats or shots to the plan for them, do NOT treat "
+    "them as additional required captures, and keep plan.beats / plan.shots exactly as minimal "
+    "as for a single recommendation. Every candidate must independently satisfy feasibility, "
+    "safety, scene-grounding (or environment-agnosticism when the scene is null), and narrative "
+    "relevance."
+)
 
 
 def _envelope_schema() -> dict:
@@ -90,7 +112,7 @@ class StoryDirectorEngine(Protocol):
     def initialize(
         self,
         creative_intent: dict[str, Any],
-        scene_understanding: dict[str, Any],
+        scene_understanding: dict[str, Any] | None = None,
         capture_constraints: dict[str, Any] | None = None,
     ) -> DirectorOutput: ...
 
@@ -112,28 +134,44 @@ class RealStoryDirectorEngine:
     def build_initialize_request(
         self,
         creative_intent: dict[str, Any],
-        scene_understanding: dict[str, Any],
+        scene_understanding: dict[str, Any] | None,
         capture_constraints: dict[str, Any] | None,
     ) -> StructuredRequest:
         import json
+        null_scene = not scene_understanding
         content = {
             "operation": "initialize",
             "creative_intent": creative_intent,
-            "scene_understanding": scene_understanding,
+            "scene_understanding": scene_understanding,   # may be null (Skip Scan)
             "capture_constraints": capture_constraints or {},
         }
+        prefix = ""
+        if null_scene:
+            # Skip Scan: no surroundings known. Prompt's SKIP-SCAN clause governs; this
+            # just marks the mode explicitly in the user content.
+            prefix = (
+                "NOTE: scene_understanding is NULL — the user SKIPPED the scene scan, so you "
+                "have NO information about their physical surroundings. Follow the SKIP-SCAN / "
+                "NO SCENE rule: one actionable capture_shot grounded ONLY in the intent and the "
+                "user, environment-agnostic, inventing nothing; exactly one beat and one shot; "
+                "do not rescan.\n\n"
+            )
         return StructuredRequest(
             task=TASK_INIT,
             schema=self._schema,
             prompt_version=PROMPT_VERSION,
             system=self._system,
             user_content=(
-                "INITIALIZE. Produce the concept, plan (beats + shots), initial "
-                "director_state, and the first decision for this task:\n"
+                prefix
+                + "INITIALIZE. Produce the concept, plan (beats + shots), initial "
+                "director_state, the first decision, and up to 3 ranked ephemeral "
+                "`candidates` (alternatives for this ONE slot; candidates[0] == decision; "
+                "do NOT add beats/shots for them) for this task:\n"
                 + json.dumps(content, ensure_ascii=False)
+                + _CANDIDATES_INSTRUCTION
             ),
             max_repair_attempts=self._max_repair_attempts,
-            max_tokens=1600,
+            max_tokens=2200,
             temperature=0.3,
         )
 
@@ -157,7 +195,7 @@ class RealStoryDirectorEngine:
 
     # ---- ops ---------------------------------------------------------------
 
-    def initialize(self, creative_intent, scene_understanding, capture_constraints=None) -> DirectorOutput:
+    def initialize(self, creative_intent, scene_understanding=None, capture_constraints=None) -> DirectorOutput:
         req = self.build_initialize_request(creative_intent, scene_understanding, capture_constraints)
         return self._to_output(self._gateway.generate_structured(req))
 
@@ -211,6 +249,17 @@ class RealStoryDirectorEngine:
                 # If the decision's shot matches a plan shot by old id, reuse its UUID.
                 dshot["id"] = shot_id_map.get(old, str(uuid4())) if isinstance(old, str) else str(uuid4())
         data.setdefault("director_state", {"beat_progress": []})
+        # Ephemeral candidates[]: each carries a shot whose model id must be minted too.
+        # Reuse the plan shot's UUID when a candidate references the same old id; otherwise
+        # mint fresh. candidates do NOT create plan beats/shots.
+        candidates = data.get("candidates")
+        if isinstance(candidates, list):
+            for cand in candidates:
+                if isinstance(cand, dict) and isinstance(cand.get("shot"), dict):
+                    cshot = cand["shot"]
+                    cshot.pop("example_asset_id", None)
+                    old = cshot.get("id")
+                    cshot["id"] = shot_id_map.get(old, str(uuid4())) if isinstance(old, str) else str(uuid4())
         # director_state.last_decision may embed a shot with a model id too.
         ds = data.get("director_state")
         if isinstance(ds, dict):
@@ -243,6 +292,17 @@ class RealStoryDirectorEngine:
             raise StructuredOutputError(f"{act} decision must carry a shot")
         if act in ("create_now", "rescan_scene") and out.decision.shot is not None:
             raise StructuredOutputError(f"{act} decision must not carry a shot")
+        # Ephemeral candidates must NOT inflate the plan (anti-over-planning), and
+        # candidates[0] must mirror the primary decision's action. They add no beats/shots.
+        if out.candidates:
+            if out.candidates[0].action != out.decision.action:
+                raise StructuredOutputError("candidates[0] must equal the primary decision")
+            for c in out.candidates:
+                if c.action in ("capture_shot", "retry_shot") and c.shot is None:
+                    raise StructuredOutputError("a shot-bearing candidate is missing its shot")
+                # a candidate shot (when present) must still reference a real beat
+                if c.shot is not None and c.shot.beat_id is not None and c.shot.beat_id not in beat_ids:
+                    raise StructuredOutputError("candidate shot references a non-existent beat")
 
     @staticmethod
     def _safety_guard(out: DirectorOutput) -> None:
@@ -252,6 +312,10 @@ class RealStoryDirectorEngine:
         if out.decision.shot is not None:
             d = out.decision.shot
             texts += [d.instruction or "", d.purpose or "", d.subject_action or "", d.camera_motion or ""]
+        for c in out.candidates:                       # candidates must be safe too
+            if c.shot is not None:
+                texts += [c.shot.instruction or "", c.shot.purpose or "",
+                          c.shot.subject_action or "", c.shot.camera_motion or ""]
         blob = " ".join(texts).lower()
         hit = next((s for s in _UNSAFE_SUBSTRINGS if s in blob), None)
         if hit is not None:

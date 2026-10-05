@@ -32,9 +32,11 @@ struct StoryDirectorService {
     var baseURL: URL = StoryBackend.baseURL
     var session: URLSession = .shared
 
-    /// Resolve the first Director recommendation for a freshly scanned scene.
+    /// Resolve the first Director recommendation. `sceneUnderstanding` is nil when the
+    /// user used Skip Scan — the body then omits scene_understanding (server treats it as
+    /// null and recommends environment-agnostically).
     func initialize(creativeIntent: CreativeIntentContractDTO,
-                    sceneUnderstanding: SceneUnderstandingContractDTO,
+                    sceneUnderstanding: SceneUnderstandingContractDTO?,
                     targetDurationSeconds: Double?) async throws -> DirectorOutputDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/director/initialize"))
         req.httpMethod = "POST"
@@ -45,14 +47,16 @@ struct StoryDirectorService {
         // we send the exact wire JSON the C1/C2 responses used.
         do {
             let ci = try encoder.encode(creativeIntent)
-            let su = try encoder.encode(sceneUnderstanding)
             var constraints: [String: Any] = [:]
             if let d = targetDurationSeconds { constraints["target_duration_seconds"] = d }
-            let body: [String: Any] = [
+            var body: [String: Any] = [
                 "creative_intent": try JSONSerialization.jsonObject(with: ci),
-                "scene_understanding": try JSONSerialization.jsonObject(with: su),
                 "capture_constraints": constraints
             ]
+            if let su = sceneUnderstanding {       // Skip Scan omits this entirely
+                let suData = try encoder.encode(su)
+                body["scene_understanding"] = try JSONSerialization.jsonObject(with: suData)
+            }
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {
             throw StoryDirectorServiceError.encoding(error)

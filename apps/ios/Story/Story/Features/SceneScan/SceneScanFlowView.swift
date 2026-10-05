@@ -20,11 +20,11 @@ struct SceneScanFlowView: View {
         case intro
         case scanning
         case analyzing                                   // SceneUnderstanding in flight
-        case planning(SceneUnderstandingContractDTO)     // Director in flight
-        case recommendation(SceneUnderstandingContractDTO, DirectorOutputDTO)
+        case planning(SceneUnderstandingContractDTO?)    // Director in flight (nil = Skip Scan)
+        case recommendation(SceneUnderstandingContractDTO?, DirectorOutputDTO)
         case failed(String, retry: RetryKind)
     }
-    enum RetryKind { case rescan, replan(SceneUnderstandingContractDTO) }
+    enum RetryKind { case rescan, replan(SceneUnderstandingContractDTO?) }
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -47,6 +47,10 @@ struct SceneScanFlowView: View {
     @State private var pendingCaptureURL: URL?                       // held for Keep-anyway
     @State private var pendingCaptureDuration: Double = 0
     private let integrityChecker = CaptureIntegrityChecker()
+
+    // DIRECT UX: which alternative candidate is currently displayed (0 = primary).
+    // "Try another idea" advances this locally — NO new Director call.
+    @State private var candidateIndex = 0
 
     private let sceneService = SceneUnderstandingService()
     private let directorService = StoryDirectorService()
@@ -158,6 +162,7 @@ struct SceneScanFlowView: View {
                 .foregroundStyle(ink.opacity(0.7))
             Spacer()
             primaryButton("Start Scan") { state = .scanning }
+            secondaryButton("Skip Scan") { runDirector(nil) }   // DIRECT UX: intent-only path
             Button("Cancel") { dismiss() }
                 .foregroundStyle(.gray).frame(maxWidth: .infinity)
         }
@@ -179,10 +184,17 @@ struct SceneScanFlowView: View {
 
     // MARK: - recommendation (the Director's ONE strong next action)
 
-    private func recommendationView(_ su: SceneUnderstandingContractDTO,
+    private func recommendationView(_ su: SceneUnderstandingContractDTO?,
                                     _ out: DirectorOutputDTO) -> some View {
-        let action = out.decision.action
-        let shot = out.decision.shot ?? (action == .captureShot || action == .retryShot
+        // DIRECT UX: show ONE candidate at a time. candidates[0] == decision; fall back to
+        // the single decision when the server returned no candidates. "Try another idea"
+        // advances candidateIndex locally (no new Director call).
+        let candidates: [DirectorDecisionDTO] = out.candidates.isEmpty ? [out.decision] : out.candidates
+        let idx = min(candidateIndex, candidates.count - 1)
+        let current = candidates[idx]
+        let hasMore = idx < candidates.count - 1
+        let action = current.action
+        let shot = current.shot ?? (action == .captureShot || action == .retryShot
                                          ? out.plan.shots.first : nil)
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -244,6 +256,14 @@ struct SceneScanFlowView: View {
                     }
                     Spacer(minLength: 12)
                     primaryButton("Let's shoot") { showCamera = true }
+                    // DIRECT UX: only one recommendation visible at a time. Advance to the
+                    // next alternative INSTANTLY (local, no new Director call). Hidden on the
+                    // last available candidate (no endless regeneration loop).
+                    if hasMore {
+                        secondaryButton("Try another idea") {
+                            withAnimation { candidateIndex = idx + 1 }
+                        }
+                    }
                     secondaryButton("Rescan") { state = .intro }
 
                 case .rescanScene:
@@ -280,7 +300,7 @@ struct SceneScanFlowView: View {
                     .foregroundStyle(.gray).frame(maxWidth: .infinity)
 
                 #if DEBUG
-                if AppMode.current.showsDiagnostics {
+                if AppMode.current.showsDiagnostics, let su {   // no scene panel on Skip Scan
                     DirectorDebugPanel(story: story,
                                        creativeIntent: CreativeIntentContractDTO(from: story),
                                        scene: su,
@@ -373,7 +393,7 @@ struct SceneScanFlowView: View {
         }
     }
 
-    private func runDirector(_ su: SceneUnderstandingContractDTO, scanStart: Date? = nil) {
+    private func runDirector(_ su: SceneUnderstandingContractDTO?, scanStart: Date? = nil) {
         state = .planning(su)
         startPlanningStages()
         let start = scanStart ?? Date()
@@ -387,6 +407,7 @@ struct SceneScanFlowView: View {
                 await MainActor.run {
                     stopPlanningStages()
                     lastScanToRecommendationMs = ms
+                    candidateIndex = 0                      // show primary first
                     state = .recommendation(su, out)
                 }
             } catch {

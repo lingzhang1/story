@@ -115,3 +115,61 @@ def test_no_beats_rejected():
 def test_provider_error_propagates():
     with pytest.raises(ProviderError):
         RealStoryDirectorEngine(FakeModelGateway(error=ProviderError("down"))).initialize(_CI, _SU)
+
+
+# ---- DIRECT UX enhancements: nullable scene (Skip Scan) + ephemeral candidates ----
+
+def _cand(shot_id, instr):
+    return {"action": "capture_shot",
+            "shot": {"id": shot_id, "order": 1, "beat_id": "b_prep",
+                     "purpose": "alt purpose", "instruction": instr}}
+
+
+def test_initialize_accepts_null_scene():
+    # Skip Scan: scene_understanding is None. Engine must build a request and validate.
+    gw = FakeModelGateway(response=_good())
+    out = RealStoryDirectorEngine(gw).initialize(_CI, None)
+    assert isinstance(out, DirectorOutput)
+    # the request content marks the null-scene mode
+    assert "NULL" in gw.calls[0].user_content and "SKIP-SCAN" in gw.calls[0].user_content
+
+
+def test_candidates_minted_and_do_not_inflate_plan():
+    r = _good()
+    r["candidates"] = [
+        _cand("shot1", "Film the backpack by the door."),          # == decision (candidates[0])
+        _cand("altA", "Capture your hands zipping the bag closed."),
+        _cand("altB", "Film yourself pausing at the doorway before leaving."),
+    ]
+    out = RealStoryDirectorEngine(FakeModelGateway(response=r)).initialize(_CI, _SU)
+    # plan stays minimal — candidates add NO beats/shots (anti-over-planning)
+    assert len(out.plan.beats) == 1 and len(out.plan.shots) == 1
+    assert len(out.candidates) == 3
+    # each candidate shot id was minted to a UUID
+    import uuid
+    for c in out.candidates:
+        uuid.UUID(str(c.shot.id))
+    # candidates[0] mirrors the primary decision action
+    assert out.candidates[0].action == out.decision.action
+
+
+def test_candidates_zero_is_fine():
+    out = RealStoryDirectorEngine(FakeModelGateway(response=_good())).initialize(_CI, _SU)
+    assert out.candidates == []
+
+
+def test_candidate_zero_action_must_match_primary():
+    r = _good()
+    r["candidates"] = [{"action": "rescan_scene"}, _cand("altA", "something")]
+    with pytest.raises(StructuredOutputError):
+        RealStoryDirectorEngine(FakeModelGateway(response=r)).initialize(_CI, _SU)
+
+
+def test_unsafe_candidate_is_rejected():
+    r = _good()
+    r["candidates"] = [
+        _cand("shot1", "Film the backpack by the door."),
+        _cand("altA", "Walk backward toward the edge while filming."),
+    ]
+    with pytest.raises(StructuredOutputError):
+        RealStoryDirectorEngine(FakeModelGateway(response=r)).initialize(_CI, _SU)

@@ -53,6 +53,25 @@ Instead, creatively CONNECT the available real scene to the larger Story (an
 ordinary room before a trip can carry preparation / departure / anticipation —
 but only using what is actually visible). Never pretend absent scenery is present.
 
+SKIP-SCAN / NO SCENE (scene_understanding is null or absent). The user chose to
+skip the scene scan, so you have NO information about their surroundings. This is
+NOT a low-value scene and is NOT a reason to `rescan_scene` (there is nothing to
+rescan). Still produce an actionable `capture_shot` grounded ONLY in the
+CreativeIntent and the user themselves — their preparation, intention, feeling, or
+the act of beginning — expressed in SELF-CONTAINED, environment-agnostic language
+that is true no matter what is physically around them. GOOD: "Capture yourself
+getting ready to begin the journey." / "Film a slow breath before you start."
+BAD (invents surroundings): "Walk toward the window with your backpack." You MUST
+NOT reference or assume any visible object, person, environment, layout, space,
+lighting, safety condition, or camera opportunity that depends on unseen
+surroundings. Keep it simple, safe, and feasible for anyone anywhere. Prefer
+`capture_shot`; use `create_now` only if Story progress already shows enough
+material. Do NOT choose `rescan_scene` solely because the scene is null.
+WITH NO SCENE, THE CURRENT SLOT CONTRIBUTES AT MOST ONE BEAT AND ONE SHOT: there
+is no rich scene in front of the user to justify several beats, so emit exactly
+one beat and one shot for this slot (plan.beats and plan.shots length 1). Do NOT
+enumerate the whole Story's beats here — that is the over-planning failure.
+
 NARRATIVE GROUNDING — scene grounding is NOT enough. A recommendation must be
 BOTH (1) scene-grounded (the subjects/actions/composition exist in
 SceneUnderstanding) AND (2) narratively grounded (that visual material

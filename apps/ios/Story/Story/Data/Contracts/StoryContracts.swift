@@ -301,10 +301,31 @@ struct DirectorOutputDTO: Codable, Equatable {
     var plan: StoryPlanContractDTO
     var directorState: DirectorStateDTO
     var decision: DirectorDecisionDTO
+    /// Ephemeral ranked ALTERNATIVES for the current recommendation slot (DIRECT UX).
+    /// candidates[0] == decision. NOT persisted into StoryPlan, NOT extra required
+    /// captures — the user captures at most one. Defaults to [] when the server omits it.
+    var candidates: [DirectorDecisionDTO] = []
 
     enum CodingKeys: String, CodingKey {
-        case concept, plan, decision
+        case concept, plan, decision, candidates
         case directorState = "director_state"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        concept = try c.decode(StoryConceptContractDTO.self, forKey: .concept)
+        plan = try c.decode(StoryPlanContractDTO.self, forKey: .plan)
+        directorState = try c.decode(DirectorStateDTO.self, forKey: .directorState)
+        decision = try c.decode(DirectorDecisionDTO.self, forKey: .decision)
+        candidates = try c.decodeIfPresent([DirectorDecisionDTO].self, forKey: .candidates) ?? []
+    }
+
+    init(concept: StoryConceptContractDTO, plan: StoryPlanContractDTO,
+         directorState: DirectorStateDTO, decision: DirectorDecisionDTO,
+         candidates: [DirectorDecisionDTO] = []) {
+        self.concept = concept; self.plan = plan
+        self.directorState = directorState; self.decision = decision
+        self.candidates = candidates
     }
 }
 
