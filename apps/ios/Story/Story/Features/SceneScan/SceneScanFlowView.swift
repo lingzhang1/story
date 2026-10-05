@@ -162,7 +162,7 @@ struct SceneScanFlowView: View {
                 .foregroundStyle(ink.opacity(0.7))
             Spacer()
             primaryButton("Start Scan") { state = .scanning }
-            secondaryButton("Skip Scan") { runDirector(nil) }   // DIRECT UX: intent-only path
+            secondaryButton("Skip Scan") { showCamera = true }   // shoot immediately — no scan, no Director, no wait
             Button("Cancel") { dismiss() }
                 .foregroundStyle(.gray).frame(maxWidth: .infinity)
         }
