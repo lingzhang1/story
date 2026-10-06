@@ -526,3 +526,48 @@ def test_moment_understanding_rejects_unknown_field_and_bad_utility():
                          "useful_segments": []},
             "story_context": {"story_utility": "sometimes"},  # not in enum
         })
+
+
+# --------------------------------------------------------------------------
+# StoryCoverage (Milestone E, FROZEN) — hybrid dimensions, nullable idea, categorical
+# --------------------------------------------------------------------------
+
+
+def test_story_coverage_round_trips_hybrid():
+    from contracts.schemas.ai_contracts import StoryCoverageContract
+
+    data = {
+        "story_id": str(uuid4()), "moment_count": 3, "pending_count": 1,
+        "source_understanding_ids": [str(uuid4()), str(uuid4())],
+        "dimensions": [
+            {"id": "human_scale", "label": "Human vs. Landscape Scale", "purpose": "contrast",
+             "coverage": "strong", "note": "many scale shots", "evidence_moment_ids": [str(uuid4())]},
+            {"id": "companionship", "label": "Companionship", "coverage": "could_use_more"},
+        ],
+        "strengths": ["strong landscape"], "redundancies": ["m1..m3 similar panoramas"],
+        "sufficiency": {"status": "workable", "reason": "thin on people"},
+        "story_idea": {"title": "A quiet human moment", "description": "...", "rationale": "..."},
+    }
+    c = StoryCoverageContract.model_validate(data)
+    assert c.dimensions[0].coverage.value == "strong"
+    assert c.sufficiency.status.value == "workable"
+    again = StoryCoverageContract.model_validate_json(c.model_dump_json())
+    assert again.dimensions[1].coverage.value == "could_use_more"
+    assert again.story_idea.title == "A quiet human moment"
+
+
+def test_story_coverage_nullable_idea_and_categorical_only():
+    import pytest
+    from contracts.schemas.ai_contracts import StoryCoverageContract
+
+    c = StoryCoverageContract.model_validate({
+        "story_id": str(uuid4()), "moment_count": 0,
+        "dimensions": [], "strengths": [], "redundancies": [],
+        "sufficiency": {"status": "insufficient"}, "story_idea": None})
+    assert c.story_idea is None and c.pending_count == 0
+    # coverage/sufficiency are categorical enums — a numeric score is rejected
+    with pytest.raises(Exception):
+        StoryCoverageContract.model_validate({
+            "story_id": str(uuid4()), "moment_count": 1,
+            "dimensions": [{"id": "d", "label": "L", "coverage": 0.8}],  # numeric not allowed
+            "strengths": [], "redundancies": [], "sufficiency": {"status": "workable"}, "story_idea": None})

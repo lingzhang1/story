@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "CoverageDimension": {
+      "additionalProperties": false,
+      "description": "One narrative dimension (HYBRID). label/purpose are CreativeIntent-derived\nand Story-specific; `coverage` is categorical. `id` is a handle WITHIN THIS\nsnapshot only \u2014 do NOT key persistent state on it, do NOT expect it stable\nacross recomputes (semantic drift is expected).",
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/NarrativeCoverage",
+          "description": "unknown | could_use_more | looking_good | strong"
+        },
+        "evidence_moment_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Evidence Moment Ids",
+          "type": "array"
+        },
+        "id": {
+          "description": "within-snapshot handle ONLY; not durable identity",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "description": "intent-derived, Story-specific dimension name",
+          "title": "Label",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "what this dimension expresses for the Story",
+          "title": "Purpose"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "coverage"
+      ],
+      "title": "CoverageDimension",
+      "type": "object"
+    },
+    "CoverageStoryIdea": {
+      "additionalProperties": false,
+      "description": "ONE optional high-level narrative opportunity. NOT scene-specific, NOT\ncamera direction. The whole object is nullable at StoryCoverage.story_idea \u2014\nnull is a first-class correct result (no interruption).",
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description"
+      ],
+      "title": "CoverageStoryIdea",
+      "type": "object"
+    },
+    "CoverageSufficiency": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/SufficiencyStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "CoverageSufficiency",
+      "type": "object"
+    },
+    "NarrativeCoverage": {
+      "description": "Advisory, internal only \u2014 never rendered as a progress bar (02 \u00a78).",
+      "enum": [
+        "unknown",
+        "could_use_more",
+        "looking_good",
+        "strong"
+      ],
+      "title": "NarrativeCoverage",
+      "type": "string"
+    },
+    "SufficiencyStatus": {
+      "description": "Can a Story meeting the user's intent be made from the understood material?\nRelative to CreativeIntent + scope + complementarity + redundancy + pending\nuncertainty \u2014 NEVER derived from Moment count.",
+      "enum": [
+        "insufficient",
+        "workable",
+        "sufficient"
+      ],
+      "title": "SufficiencyStatus",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The frozen MVP Story Coverage snapshot (Milestone E). Produced by the\nStoryCoverageEngine from CreativeIntent + completed MomentUnderstanding[] +\npending_count, via Opus. Server/engine mints provenance/version fields.",
+  "properties": {
+    "dimensions": {
+      "items": {
+        "$ref": "#/$defs/CoverageDimension"
+      },
+      "title": "Dimensions",
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "moment_count": {
+      "description": "understood Moments considered",
+      "minimum": 0,
+      "title": "Moment Count",
+      "type": "integer"
+    },
+    "pending_count": {
+      "default": 0,
+      "description": "Moments with AU not yet complete (UNKNOWN, not absent)",
+      "minimum": 0,
+      "title": "Pending Count",
+      "type": "integer"
+    },
+    "redundancies": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Redundancies",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "story_coverage/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_understanding_ids": {
+      "description": "which MomentUnderstanding records this was computed from (staleness/provenance)",
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Source Understanding Ids",
+      "type": "array"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    },
+    "story_idea": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CoverageStoryIdea"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ONE optional opportunity, or null (first-class 'no interruption')"
+    },
+    "strengths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Strengths",
+      "type": "array"
+    },
+    "sufficiency": {
+      "$ref": "#/$defs/CoverageSufficiency"
+    }
+  },
+  "required": [
+    "story_id",
+    "moment_count",
+    "sufficiency"
+  ],
+  "title": "StoryCoverage",
+  "type": "object"
+}

@@ -583,6 +583,78 @@ class MomentUnderstandingContract(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# StoryCoverage (Milestone E, FROZEN 2026-10-06) — "what the collection of
+#   understood Moments MEANS for the Story". DERIVED, RECOMPUTABLE, ADVISORY —
+#   NOT user-authored truth, NOT a checklist. One recomputed snapshot per Story.
+#   HYBRID dimensions (stable structure + intent-derived labels); dimension `id`
+#   is a within-snapshot handle ONLY, never durable identity. No numeric scores.
+# ---------------------------------------------------------------------------
+
+
+class SufficiencyStatus(str, Enum):
+    """Can a Story meeting the user's intent be made from the understood material?
+    Relative to CreativeIntent + scope + complementarity + redundancy + pending
+    uncertainty — NEVER derived from Moment count."""
+
+    INSUFFICIENT = "insufficient"
+    WORKABLE = "workable"
+    SUFFICIENT = "sufficient"
+
+
+class CoverageDimension(_Strict):
+    """One narrative dimension (HYBRID). label/purpose are CreativeIntent-derived
+    and Story-specific; `coverage` is categorical. `id` is a handle WITHIN THIS
+    snapshot only — do NOT key persistent state on it, do NOT expect it stable
+    across recomputes (semantic drift is expected)."""
+
+    id: str = Field(description="within-snapshot handle ONLY; not durable identity")
+    label: str = Field(description="intent-derived, Story-specific dimension name")
+    purpose: str | None = Field(default=None, description="what this dimension expresses for the Story")
+    coverage: NarrativeCoverage = Field(description="unknown | could_use_more | looking_good | strong")
+    note: str | None = Field(default=None)
+    evidence_moment_ids: list[UUID] = Field(default_factory=list)
+
+
+class CoverageSufficiency(_Strict):
+    status: SufficiencyStatus
+    reason: str | None = None
+
+
+class CoverageStoryIdea(_Strict):
+    """ONE optional high-level narrative opportunity. NOT scene-specific, NOT
+    camera direction. The whole object is nullable at StoryCoverage.story_idea —
+    null is a first-class correct result (no interruption)."""
+
+    title: str
+    description: str
+    rationale: str | None = None
+
+
+class StoryCoverageContract(_Strict):
+    """The frozen MVP Story Coverage snapshot (Milestone E). Produced by the
+    StoryCoverageEngine from CreativeIntent + completed MomentUnderstanding[] +
+    pending_count, via Opus. Server/engine mints provenance/version fields."""
+
+    schema_version: str = Field(default="story_coverage/1")
+    story_id: UUID
+    moment_count: int = Field(ge=0, description="understood Moments considered")
+    pending_count: int = Field(default=0, ge=0, description="Moments with AU not yet complete (UNKNOWN, not absent)")
+    source_understanding_ids: list[UUID] = Field(
+        default_factory=list, description="which MomentUnderstanding records this was computed from (staleness/provenance)"
+    )
+
+    dimensions: list[CoverageDimension] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    redundancies: list[str] = Field(default_factory=list)
+    sufficiency: CoverageSufficiency
+    story_idea: CoverageStoryIdea | None = Field(
+        default=None, description="ONE optional opportunity, or null (first-class 'no interruption')"
+    )
+
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Music assets (02 §22-23) — preserved for Milestone I
 # ---------------------------------------------------------------------------
 

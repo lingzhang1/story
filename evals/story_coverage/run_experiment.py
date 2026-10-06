@@ -83,6 +83,20 @@ SYSTEM = (
  "already strongly represented). Call the tool once."
 )
 
+# Phase-0 restraint rule (approved 2026-10-05). GENERAL, not fixture-tuned. Appended when --restraint.
+RESTRAINT = (
+ " (7) RESTRAINT ON STORY IDEA — a weak or missing dimension is NOT by itself a reason to emit a Story "
+ "Idea. `sufficiency` answers 'can a Story meeting the intent be made from current material?'; "
+ "`story_idea` answers 'is there ONE additional opportunity valuable enough to interrupt the user RIGHT "
+ "NOW?' — they are DISTINCT. `workable` does NOT imply an idea; `insufficient` does NOT automatically "
+ "imply an idea; and for MVP a `sufficient` Story should emit story_idea = null (ENOUGH). Before "
+ "emitting a non-null story_idea you must be able to affirm ALL of: (a) it materially serves THIS "
+ "CreativeIntent; (b) it would materially IMPROVE the Story, not merely make it more complete; (c) it is "
+ "complementary to existing material; (d) it is non-redundant; (e) it is important enough to justify "
+ "interrupting the user. If those are not CLEARLY met, output story_idea = null. story_idea = null is a "
+ "first-class SUCCESSFUL result, not a failure. Do not use numeric scores or fixed thresholds — judge it."
+)
+
 
 def compact_moment(m):
     if m.get("pending"):
@@ -98,7 +112,7 @@ def compact_moment(m):
             "requested_beat_contribution": sc.get("requested_beat_contribution")}
 
 
-def call(model_id, strategy, fx):
+def call(model_id, strategy, fx, restraint=False):
     import boto3
     br = boto3.client("bedrock-runtime", region_name="us-east-1")
     schema = coverage_schema(strategy)
@@ -107,10 +121,11 @@ def call(model_id, strategy, fx):
                "moments": [compact_moment(m) for m in fx["moments"]]}
     user = (STRATEGY_NOTE[strategy] + "\n\nSTORY INPUT:\n" + json.dumps(payload)
             + "\n\nReturn ONLY the StoryCoverage via the tool.")
+    system = SYSTEM + (RESTRAINT if restraint else "")
     tool = {"toolSpec": {"name": "emit_coverage", "description": "Emit the StoryCoverage.",
                          "inputSchema": {"json": schema}}}
     t = time.time()
-    r = br.converse(modelId=model_id, system=[{"text": SYSTEM}],
+    r = br.converse(modelId=model_id, system=[{"text": system}],
                     messages=[{"role": "user", "content": [{"text": user}]}],
                     toolConfig={"tools": [tool], "toolChoice": {"tool": {"name": "emit_coverage"}}},
                     inferenceConfig={"maxTokens": 1500, "temperature": 0})
@@ -128,6 +143,8 @@ def main():
     ap.add_argument("--phase", choices=["dims", "models"], required=True)
     ap.add_argument("--strategy", default="hybrid")
     ap.add_argument("--run", action="store_true")
+    ap.add_argument("--restraint", action="store_true", help="append the Phase-0 restraint rule to SYSTEM")
+    ap.add_argument("--only", default="", help="restrict to one model key (e.g. opus)")
     args = ap.parse_args()
 
     rows = []
@@ -135,6 +152,8 @@ def main():
         combos = [("sonnet", s) for s in ("fixed", "derived", "hybrid")]
     else:
         combos = [(m, args.strategy) for m in ("nova_pro", "sonnet", "opus")]
+    if args.only:
+        combos = [(m, s) for (m, s) in combos if m == args.only]
 
     for fid, fx in FIX.items():
         rec = {"fixture": fid, "runs": {}}
@@ -144,7 +163,7 @@ def main():
             if not args.run:
                 print(f"   (dry) {key}"); continue
             try:
-                data, dt, itok, otok = call(MODELS[model_key], strat, fx)
+                data, dt, itok, otok = call(MODELS[model_key], strat, fx, restraint=args.restraint)
                 ok = isinstance(data, dict) and "sufficiency" in data
                 rec["runs"][key] = {"ok": ok, "latency_s": round(dt, 1), "in_tok": itok, "out_tok": otok,
                                     "data": data}
@@ -159,7 +178,8 @@ def main():
                 print(f"   {key:22s} EXC {str(e)[:100]}")
         rows.append(rec)
 
-    out = REPO / f"evals/results/story_coverage_{args.phase}.json"
+    suffix = "_restraint" if args.restraint else ""
+    out = REPO / f"evals/results/story_coverage_{args.phase}{suffix}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"phase": args.phase, "strategy": args.strategy, "rows": rows}, indent=2))
     print("\nwrote", out)

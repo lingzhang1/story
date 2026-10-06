@@ -37,6 +37,12 @@ from asset_engine import (
     MockAssetUnderstandingEngine,
     RealAssetUnderstandingEngine,
 )
+from story_coverage import (
+    StoryCoverageEngine,
+    DEFAULT_COVERAGE_MODEL,
+    MockStoryCoverageEngine,
+    RealStoryCoverageEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -114,3 +120,17 @@ def get_asset_understanding_engine() -> AssetUnderstandingEngine:
         return MockAssetUnderstandingEngine()
     model = os.environ.get("STORY_AU_MODEL", DEFAULT_AU_MODEL)
     return RealAssetUnderstandingEngine(BedrockModelGateway(model_id=model), model_id=model)
+
+
+def get_story_coverage_engine() -> StoryCoverageEngine:
+    """Provide the Story Coverage engine (Milestone E, FROZEN).
+
+    ONE model, config-driven via STORY_COVERAGE_MODEL (default us.anthropic.claude-opus-4-6-v1 —
+    the experiment winner: uniquely avoided false-sufficient AND false-insufficient while missing
+    zero worthwhile ideas). NO Nova/Sonnet fallback, NO routing. Set STORY_COVERAGE_MOCK=1 for the
+    dev/offline mock (never a silent production fallback).
+    """
+    if os.environ.get("STORY_COVERAGE_MOCK") == "1":
+        return MockStoryCoverageEngine()
+    model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_MODEL)
+    return RealStoryCoverageEngine(BedrockModelGateway(model_id=model), model_id=model)

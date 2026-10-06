@@ -22,6 +22,7 @@ from contracts.schemas.ai_contracts import (
     CreativeIntentContract,
     MomentUnderstandingContract,
     SceneUnderstandingContract,
+    StoryCoverageContract,
 )
 from contracts.schemas.dto import (
     CreateStoryRequest,
@@ -53,6 +54,13 @@ from asset_engine import (
     SCHEMA_VERSION as AU_SCHEMA_VERSION,
     EXPECTED_FRAMES as AU_EXPECTED_FRAMES,
 )
+from story_coverage import (
+    CoverageInput,
+    CoverageUnavailableError,
+    StoryCoverageEngine,
+    PROMPT_VERSION as COV_PROMPT_VERSION,
+    SCHEMA_VERSION as COV_SCHEMA_VERSION,
+)
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -65,6 +73,7 @@ from app.deps import (
     get_story_director_engine,
     get_story_engine,
     get_asset_understanding_engine,
+    get_story_coverage_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -81,6 +90,22 @@ _AU_MIN_FRAMES = 24                             # au_frames/1 is EXACTLY 24
 _AU_MAX_FRAME_BYTES = 1 * 1024 * 1024           # 1 MB per frame (768px JPEG is far smaller)
 _AU_MAX_TOTAL_BYTES = 12 * 1024 * 1024          # 12 MB total payload ceiling
 _AU_ALLOWED_TYPES = {"image/jpeg", "image/jpg"}
+
+# Story Coverage (Milestone E) — JSON (text-only, no media). Generous moment cap.
+_COV_MAX_MOMENTS = 200
+
+
+class StoryCoverageRequest(BaseModel):
+    """POST /v1/story-coverage body. COMPACT structured inputs only — the client sends
+    CreativeIntent + COMPLETE MomentUnderstanding records + pending_count. No media/frames."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
+    scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
+    moment_understandings: list[dict] = Field(default_factory=list,
+        description="completed MomentUnderstanding records (observed + story_context)")
+    pending_count: int = Field(default=0, ge=0)
 
 
 class ResolveCreativeIntentRequest(BaseModel):
@@ -368,6 +393,45 @@ def create_app() -> FastAPI:
                    "story_utility": au.understanding.story_context.story_utility.value},
         )
         return au.understanding
+
+    @app.post("/v1/story-coverage", response_model=StoryCoverageContract, status_code=200)
+    def story_coverage(
+        body: StoryCoverageRequest,
+        engine: StoryCoverageEngine = Depends(get_story_coverage_engine),
+    ) -> StoryCoverageContract:
+        """Compute a StoryCoverage snapshot from CreativeIntent + completed MomentUnderstanding[] +
+        pending_count via Opus (FROZEN, Milestone E). Full recomputation; text-only (no media). On
+        model/provider failure, return 503 so the client keeps its previous valid cached coverage —
+        never a fabricated snapshot."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        if len(body.moment_understandings) > _COV_MAX_MOMENTS:
+            raise HTTPException(status_code=413, detail=f"too many moments (max {_COV_MAX_MOMENTS})")
+
+        base_fields = {
+            "operation": "story_coverage", "correlation_id": correlation_id,
+            "task": "story_coverage.compute", "prompt_version": COV_PROMPT_VERSION,
+            "schema_version": COV_SCHEMA_VERSION,
+            "moment_count": len(body.moment_understandings), "pending_count": body.pending_count,
+            # NEVER log: raw understanding prose / summaries. Metadata only (06/E §privacy).
+        }
+        try:
+            cov = engine.compute(CoverageInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                moment_understandings=body.moment_understandings, pending_count=body.pending_count,
+            ))
+        except CoverageUnavailableError as e:
+            log.warning("story_coverage_unavailable",
+                extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(
+                status_code=503,
+                detail="story_coverage_unavailable: could not compute; keep previous cached coverage")
+        log.info("story_coverage_resolved",
+            extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "sufficiency": cov.sufficiency.status.value,
+                   "dimension_count": len(cov.dimensions), "has_story_idea": cov.story_idea is not None})
+        return cov
 
     def _director_log(op: str, out, started, correlation_id):
         log.info(
