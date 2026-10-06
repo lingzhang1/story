@@ -313,3 +313,69 @@ final class AssetUnderstandingJobModel {
         self.updatedAt = updatedAt
     }
 }
+
+// ---------------------------------------------------------------------------
+// Story Coverage — Milestone E (story_coverage/1, FROZEN)
+//
+// The persisted CACHE of the latest valid StoryCoverage snapshot, one per Story
+// (upsert by storyId). DERIVED, RECOMPUTABLE, ADVISORY — never user-authored
+// truth. Full recomputation (no event sourcing, no incremental mutation): a new
+// snapshot REPLACES the old one wholesale.
+//
+// LOCAL-FIRST / layer separation: like MomentUnderstandingModel, the structured
+// result is stored as the snake_case wire JSON (story_coverage/1) and decoded on
+// read into StoryCoverageDTO — we do NOT hand-maintain a second SwiftData shape
+// of the same contract, and dimension ids are NOT persisted as identity (they
+// live only inside the JSON blob as within-snapshot handles).
+//
+// STALENESS is computed from provenance, NOT a flag we mutate on the AI output:
+//   - sourceUnderstandingIdsFingerprint: a stable hash of the SORTED set of
+//     completed MomentUnderstanding ids (+ their updatedAt) the snapshot was
+//     computed from. Changes when AU completes / a Moment is added or re-analyzed.
+//   - creativeIntentFingerprint: a stable hash of the resolved CreativeIntent.
+//   - pendingCount: stored so the UX can be honest about uncertainty.
+// Coverage is STALE when either fingerprint no longer matches the Story's current
+// inputs. A failed recompute preserves this row untouched (keep last valid).
+@Model
+final class StoryCoverageModel {
+    @Attribute(.unique) var storyId: UUID
+
+    // The structured StoryCoverage, stored as snake_case wire JSON (story_coverage/1).
+    var coverageJSON: String
+
+    // Provenance for staleness (NOT the AI's own fields).
+    var sourceUnderstandingIdsFingerprint: String
+    var creativeIntentFingerprint: String
+    var pendingCount: Int
+
+    var schemaVersion: String
+    var modelId: String?
+    var promptVersion: String
+
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        storyId: UUID,
+        coverageJSON: String,
+        sourceUnderstandingIdsFingerprint: String,
+        creativeIntentFingerprint: String,
+        pendingCount: Int,
+        schemaVersion: String = "story_coverage/1",
+        modelId: String? = nil,
+        promptVersion: String = "story_coverage/v1",
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.storyId = storyId
+        self.coverageJSON = coverageJSON
+        self.sourceUnderstandingIdsFingerprint = sourceUnderstandingIdsFingerprint
+        self.creativeIntentFingerprint = creativeIntentFingerprint
+        self.pendingCount = pendingCount
+        self.schemaVersion = schemaVersion
+        self.modelId = modelId
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}

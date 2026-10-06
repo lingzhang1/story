@@ -20,6 +20,14 @@ struct StoryHomeView: View {
     @State private var showMoments = false
     @State private var confirmLifecycle = false
 
+    // Milestone E — Story Coverage (real Story Guide + Story Idea).
+    @State private var coverage: StoryCoverageDTO?
+    @State private var coverageLoading = false
+
+    private var coverageEngine: StoryCoverageEngine {
+        StoryCoverageEngine(context: context)
+    }
+
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
     }
@@ -90,30 +98,17 @@ struct StoryHomeView: View {
 
                 Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
 
-                // Story Idea — neutral unavailable (NOT TMB demo copy)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text("✦").font(.system(size: 9)).foregroundStyle(StoryTheme.cream.opacity(0.28))
-                        StoryEyebrow(text: "Story Idea")
-                    }
-                    Text("Ideas for what to capture next")
-                        .font(StoryTheme.display(16)).foregroundStyle(StoryTheme.cream.opacity(0.72))
-                    Text("Story will suggest ideas as your Story grows. Not available yet.")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.28))
-                        .fixedSize(horizontal: false, vertical: true)
+                // Story Idea — real StoryCoverage.story_idea. ONE optional card,
+                // shown ONLY when non-null; omitted entirely otherwise (no "no ideas"
+                // placeholder — do-nothing intelligence is no interruption).
+                if let idea = coverage?.storyIdea {
+                    StoryIdeaSection(idea: idea) { showCapture = true }
+                    Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
-                .padding(.top, 20)
 
-                Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
-
-                // Story Guide — neutral unavailable
-                VStack(alignment: .leading, spacing: 6) {
-                    StoryEyebrow(text: "Story Guide")
-                    Text("A guide to what would make your Story stronger — coming in a later update.")
-                        .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.cream.opacity(0.3))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 20)
+                // Story Guide — real StoryCoverage (ordinary language; no ids /
+                // scores / percentages / progress / required-shot counts / jargon).
+                StoryGuideSection(coverage: coverage, isLoading: coverageLoading)
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -127,7 +122,12 @@ struct StoryHomeView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
-        .fullScreenCover(isPresented: $showCapture) { ShootMomentView(story: story) }
+        .task(id: story.id) { await loadCoverage() }
+        .fullScreenCover(isPresented: $showCapture, onDismiss: {
+            // Returning from capture: a new Moment may have been added and its AU may
+            // have completed -> coverage is likely stale. Recompute opportunistically.
+            Task { await loadCoverage() }
+        }) { ShootMomentView(story: story) }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems) { picked in
@@ -141,6 +141,34 @@ struct StoryHomeView: View {
                 .presentationDetents([.height(story.status == .active ? 300 : 260)])
                 .presentationBackground(StoryTheme.surfaceAlt)
         }
+    }
+
+    // MARK: - Story Coverage lifecycle (Milestone E §5)
+    //
+    //   - Show the CURRENT cached coverage immediately (no model call).
+    //   - If STALE, keep the last valid coverage visible while recomputing in the
+    //     background; swap in the fresh snapshot when it arrives.
+    //   - If NO coverage exists, show the neutral/loading Guide state while computing.
+    //   - A failed recompute preserves the previous valid coverage (never fabricates).
+    //   - Only recompute when there is at least one understood Moment to reason from;
+    //     an empty / all-pending Story shows the neutral state (pending = unknown).
+    private func loadCoverage() async {
+        let engine = coverageEngine
+        coverage = engine.cachedCoverage(for: story.id)   // immediate (may be nil)
+
+        let inputs = engine.currentInputs(for: story)
+        let hasUnderstood = !inputs.completedMUValues.isEmpty
+        guard hasUnderstood else {
+            // Nothing understood yet -> neutral state; do not call the model.
+            coverageLoading = false
+            return
+        }
+        guard engine.isStale(for: story) else { return }   // cache current: done
+
+        coverageLoading = (coverage == nil)                // loading text only if nothing to show
+        let fresh = await engine.recomputeIfNeeded(for: story)
+        coverageLoading = false
+        if let fresh { coverage = fresh }                  // keep previous on failure (fresh==cached)
     }
 
     private var stateLine: String {

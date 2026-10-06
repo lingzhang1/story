@@ -235,6 +235,46 @@
           "invents a required 'companionship' slot as obligation",
           "emits camera/framing direction"
         ]
+      },
+      "eval_mode": "semantic_envelope",
+      "semantic_envelope": {
+        "acceptable": {
+          "sufficiency": [
+            "workable",
+            "sufficient"
+          ],
+          "story_idea": [
+            "null",
+            "one_optional_complementary_idea"
+          ]
+        },
+        "required": [
+          "recognize scenery / beauty / scale is already strongly represented",
+          "do not treat quantity of scenery as multiple distinct narrative needs"
+        ],
+        "if_story_idea_exists": [
+          "complements existing material",
+          "aligned with CreativeIntent",
+          "high-level",
+          "optional",
+          "does not request more scenery"
+        ],
+        "forbidden": [
+          "sufficiency == insufficient",
+          "claims scenery/scale is missing",
+          "requests more mountain/scenery footage",
+          "treats companionship/human presence as mandatory",
+          "generic Story-template requirements",
+          "scene-specific camera direction",
+          "contradicts CreativeIntent"
+        ],
+        "decision_note": {
+          "initial_human_reference": "workable + idea (implicitly prefers broader human/emotional material beyond strict intent)",
+          "repeated_production_variance": "3 production runs: sufficient+idea / sufficient+null / workable+null \u2014 model wobbles across the sufficient/workable boundary for a 'beauty and scale' intent",
+          "why_ambiguity_accepted": "CreativeIntent is explicitly 'the beauty and scale of the TMB' and the material strongly covers scenery/beauty/scale, so both workable+optional-idea and sufficient+null are semantically defensible; the boundary is a genuine narrative judgment, not a stable model failure",
+          "owner_decision_date": "2026-10-06",
+          "acceptable_envelope": "sufficiency in {workable, sufficient}; story_idea null or one optional complementary (non-scenery, intent-aligned, high-level) idea"
+        }
       }
     },
     "B_broad_coverage": {
@@ -562,7 +602,8 @@
           "invents an arbitrary missing requirement",
           "suggests more of an already-strong dimension"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "C_redundant_scenery": {
       "creative_intent": {
@@ -894,7 +935,8 @@
           "asks for more panoramas",
           "reports environment coverage as stronger because of count"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "D_strong_elsewhere": {
       "creative_intent": {
@@ -985,7 +1027,8 @@
           "discards the Moment because it failed the requested 'walk away' shot",
           "reports no usable departure material at all"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "E_contextless": {
       "creative_intent": {
@@ -1071,7 +1114,8 @@
           "treats the Moment as empty because requested_* is null",
           "claims it cannot assess without a requested shot"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "F1_one_exceptional_short": {
       "creative_intent": {
@@ -1150,7 +1194,8 @@
         "forbidden_properties": [
           "manufactures missing requirements for an 8s single-shot story"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "F2_one_exceptional_rich": {
       "creative_intent": {
@@ -1235,7 +1280,8 @@
         "forbidden_properties": [
           "declares sufficient just because a strong Moment exists"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "G_conflicting": {
       "creative_intent": {
@@ -1445,7 +1491,8 @@
           "claims good footage automatically satisfies the relationship story",
           "discards the Moments as worthless"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "H1_accum": {
       "creative_intent": {
@@ -1579,7 +1626,8 @@
         "forbidden_properties": [
           "already declaring sufficient with only scenery+progression for a 90s trek"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "H2_accum": {
       "creative_intent": {
@@ -1789,7 +1837,8 @@
           "drops environment/progression that H1 had",
           "radically renames stable dimensions"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "H3_accum": {
       "creative_intent": {
@@ -2050,7 +2099,8 @@
           "story idea recommending already-captured material",
           "dimension set churns vs H2"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "I_no_intervention_sufficient": {
       "creative_intent": {
@@ -2183,7 +2233,8 @@
           "any story idea",
           "insists on people/difficulty the intent never asked for"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "J_anti_checklist_solitude": {
       "creative_intent": {
@@ -2393,7 +2444,8 @@
           "treats absence of common travel categories as a gap",
           "any homework-style suggestion"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "K_nontravel_guitar": {
       "creative_intent": {
@@ -2492,7 +2544,8 @@
           "asks for scenery or companionship",
           "overfits to the TMB corpus"
         ]
-      }
+      },
+      "eval_mode": "strict"
     },
     "L_pending_au": {
       "creative_intent": {
@@ -2639,7 +2692,8 @@
           "invents content for the pending Moments",
           "treats pending Moments as empty/absent"
         ]
-      }
+      },
+      "eval_mode": "strict"
     }
   }
 }

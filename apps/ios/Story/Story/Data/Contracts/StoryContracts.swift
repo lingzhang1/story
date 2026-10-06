@@ -357,6 +357,97 @@ struct CaptureSessionContractDTO: Codable, Equatable {
     }
 }
 
+// MARK: - Story Coverage (story_coverage/1 — Milestone E, FROZEN)
+//
+// The DERIVED, RECOMPUTABLE, ADVISORY snapshot of "what the collection of
+// understood Moments MEANS for the Story". Produced by the backend
+// StoryCoverageEngine (Opus 4.6, original pre-restraint prompt) from
+// CreativeIntent + completed MomentUnderstanding[] + pending_count.
+//
+// HARD RULES encoded by this shape (must match ai_contracts.StoryCoverageContract):
+//   - HYBRID dimensions: stable STRUCTURE, intent-derived LABELS/PURPOSES.
+//   - A dimension `id` is a WITHIN-SNAPSHOT handle ONLY. It is NOT durable
+//     identity: never key persistent state on it, never expect it stable across
+//     recomputes (semantic drift is expected and accepted).
+//   - `coverage` is CATEGORICAL (NarrativeCoverage) — NEVER a number/percent.
+//   - `storyIdea` is NULLABLE; null is a first-class correct result (no card).
+//   - pending media is UNKNOWN, not absent (pendingCount is honest, not a gap).
+
+/// Advisory per-dimension coverage (02 §8) — never a progress bar. Matches
+/// ai_contracts.NarrativeCoverage.
+enum NarrativeCoverageDTO: String, Codable {
+    case unknown
+    case couldUseMore = "could_use_more"
+    case lookingGood = "looking_good"
+    case strong
+}
+
+/// Can a Story meeting the user's intent be made from the understood material?
+/// Relative to intent + scope + complementarity + redundancy + pending
+/// uncertainty — NEVER derived from Moment count. Matches ai_contracts.SufficiencyStatus.
+enum SufficiencyStatusDTO: String, Codable {
+    case insufficient
+    case workable
+    case sufficient
+}
+
+struct CoverageDimensionDTO: Codable, Identifiable {
+    /// Within-snapshot handle ONLY — not durable identity (semantic drift expected).
+    let id: String
+    let label: String
+    let purpose: String?
+    let coverage: NarrativeCoverageDTO
+    let note: String?
+    let evidenceMomentIds: [UUID]
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, purpose, coverage, note
+        case evidenceMomentIds = "evidence_moment_ids"
+    }
+}
+
+struct CoverageSufficiencyDTO: Codable {
+    let status: SufficiencyStatusDTO
+    let reason: String?
+}
+
+/// ONE optional high-level narrative opportunity. NOT scene-specific, NOT camera
+/// direction. The whole object is nullable at `StoryCoverageDTO.storyIdea`.
+struct CoverageStoryIdeaDTO: Codable {
+    let title: String
+    let description: String
+    let rationale: String?
+}
+
+struct StoryCoverageDTO: Codable {
+    let schemaVersion: String
+    let storyId: UUID
+    let momentCount: Int
+    let pendingCount: Int
+    /// Which MomentUnderstanding records this was computed from (staleness/provenance).
+    let sourceUnderstandingIds: [UUID]
+
+    let dimensions: [CoverageDimensionDTO]
+    let strengths: [String]
+    let redundancies: [String]
+    let sufficiency: CoverageSufficiencyDTO
+    /// null is a first-class "no interruption" result — DO NOT render a card when nil.
+    let storyIdea: CoverageStoryIdeaDTO?
+
+    let generatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case storyId = "story_id"
+        case momentCount = "moment_count"
+        case pendingCount = "pending_count"
+        case sourceUnderstandingIds = "source_understanding_ids"
+        case dimensions, strengths, redundancies, sufficiency
+        case storyIdea = "story_idea"
+        case generatedAt = "generated_at"
+    }
+}
+
 // MARK: - Shared coder helpers
 
 enum StoryContractCoding {

@@ -141,3 +141,66 @@ def test_endpoint_rejects_extra_field():
     body = _body(1); body["frames"] = ["nope"]   # no media allowed on this endpoint
     r = client.post("/v1/story-coverage", json=body)
     assert r.status_code == 422
+
+
+# --- Phase 10: regression-harness integrity (fixture corpus is FROZEN) --------
+#
+# These guard the permanent Story Coverage regression suite so a future edit cannot
+# silently drop a fixture, un-classify A, or erase the decision history. They do NOT
+# call a model — they assert the corpus + its owner-approved classification.
+
+import pathlib
+
+_FIX_PATH = pathlib.Path(__file__).resolve().parents[3] / "evals/story_coverage/fixtures.json"
+
+
+def _load_fixtures():
+    return json.loads(_FIX_PATH.read_text())["fixtures"]
+
+
+def test_regression_corpus_present_and_complete():
+    """The 15 frozen fixtures (A-L incl. F1/F2, H1/H2/H3) must all remain present."""
+    fx = _load_fixtures()
+    required = {
+        "A_scenery_only", "B_broad_coverage", "C_redundant_scenery", "D_strong_elsewhere",
+        "E_contextless", "F1_one_exceptional_short", "F2_one_exceptional_rich", "G_conflicting",
+        "H1_accum", "H2_accum", "H3_accum", "I_no_intervention_sufficient",
+        "J_anti_checklist_solitude", "K_nontravel_guitar", "L_pending_au",
+    }
+    assert required.issubset(set(fx)), f"missing frozen fixtures: {required - set(fx)}"
+
+
+def test_every_fixture_is_classified_strict_or_envelope():
+    """Each fixture carries an explicit eval_mode; only owner-reviewed ones are envelope."""
+    fx = _load_fixtures()
+    for fid, f in fx.items():
+        assert f.get("eval_mode") in ("strict", "semantic_envelope"), f"{fid} unclassified"
+    # Only A is currently owner-classified ambiguous; new ones require explicit review.
+    envelope = [fid for fid, f in fx.items() if f.get("eval_mode") == "semantic_envelope"]
+    assert envelope == ["A_scenery_only"], f"unexpected envelope set: {envelope}"
+
+
+def test_fixture_A_envelope_and_decision_note_preserved():
+    """A's accepted envelope + the owner decision note (history) must be intact."""
+    a = _load_fixtures()["A_scenery_only"]
+    env = a["semantic_envelope"]
+    assert set(env["acceptable"]["sufficiency"]) == {"workable", "sufficient"}
+    assert "null" in env["acceptable"]["story_idea"]
+    # Forbidden set still bans the two dangerous outcomes.
+    assert any("insufficient" in x for x in env["forbidden"])
+    assert any("more" in x and "scenery" in x for x in env["forbidden"])
+    note = env["decision_note"]
+    assert note["owner_decision_date"] == "2026-10-06"
+    assert "workable + idea" in note["initial_human_reference"]      # original human ref preserved
+    assert note["repeated_production_variance"]                       # history not rewritten
+
+
+def test_strict_fixtures_keep_exact_human_reference():
+    """Strict fixtures retain their exact sufficiency + idea_should_exist expectations."""
+    fx = _load_fixtures()
+    for fid, f in fx.items():
+        if f.get("eval_mode") != "strict":
+            continue
+        hr = f["human_reference"]
+        assert hr["sufficiency"] in ("insufficient", "workable", "sufficient"), fid
+        assert isinstance(hr["idea_should_exist"], bool), fid
