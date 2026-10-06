@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "MomentEvent": {
+      "additionalProperties": false,
+      "description": "One ordered, factual observed event. OBSERVED REALITY.",
+      "properties": {
+        "description": {
+          "description": "what factually happened \u2014 no interpretation",
+          "title": "Description",
+          "type": "string"
+        },
+        "end_time": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "event end, seconds (optional)",
+          "title": "End Time"
+        },
+        "start_time": {
+          "description": "event start, seconds from clip start",
+          "minimum": 0.0,
+          "title": "Start Time",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_time",
+        "description"
+      ],
+      "title": "MomentEvent",
+      "type": "object"
+    },
+    "MomentObserved": {
+      "additionalProperties": false,
+      "description": "OBSERVED REALITY \u2014 request-independent. The same media yields the same\nobserved block under any Story context.",
+      "properties": {
+        "events": {
+          "description": "ordered factual events",
+          "items": {
+            "$ref": "#/$defs/MomentEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "subjects": {
+          "description": "who/what matters",
+          "items": {
+            "type": "string"
+          },
+          "title": "Subjects",
+          "type": "array"
+        },
+        "summary": {
+          "description": "concise whole-Moment summary",
+          "title": "Summary",
+          "type": "string"
+        },
+        "temporal_order_note": {
+          "default": "",
+          "description": "first/then/last; departure vs arrival, reveal direction, progression, contradiction",
+          "title": "Temporal Order Note",
+          "type": "string"
+        },
+        "useful_segments": {
+          "items": {
+            "$ref": "#/$defs/MomentUsefulSegment"
+          },
+          "title": "Useful Segments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "title": "MomentObserved",
+      "type": "object"
+    },
+    "MomentStoryContext": {
+      "additionalProperties": false,
+      "description": "STORY-CONTEXT INTERPRETATION \u2014 depends on the request. requested_shot/beat\ncontribution are NULLABLE: null when no capture context exists (spontaneous /\nimported Moments) \u2014 never fabricate a requested contribution without context.",
+      "properties": {
+        "requested_beat_contribution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "how the Moment contributes to the requested Beat; null if no capture context",
+          "title": "Requested Beat Contribution"
+        },
+        "requested_shot_contribution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "does the footage serve the requested Shot purpose? null if no capture context",
+          "title": "Requested Shot Contribution"
+        },
+        "story_utility": {
+          "$ref": "#/$defs/StoryUtility",
+          "description": "broader-Story usefulness"
+        }
+      },
+      "required": [
+        "story_utility"
+      ],
+      "title": "MomentStoryContext",
+      "type": "object"
+    },
+    "MomentUsefulSegment": {
+      "additionalProperties": false,
+      "description": "A coherent candidate region worth considering for editing. ASSET-GROUNDED \u2014\nNOT a final cut. 'complete action of X', not 'perfect opening for the Story'.",
+      "properties": {
+        "end_time": {
+          "exclusiveMinimum": 0.0,
+          "title": "End Time",
+          "type": "number"
+        },
+        "start_time": {
+          "minimum": 0.0,
+          "title": "Start Time",
+          "type": "number"
+        },
+        "why_useful": {
+          "description": "why this region is coherent candidate material",
+          "title": "Why Useful",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_time",
+        "end_time",
+        "why_useful"
+      ],
+      "title": "MomentUsefulSegment",
+      "type": "object"
+    },
+    "StoryUtility": {
+      "description": "How useful this Moment is to the broader Story (06-asset-understanding.md \u00a71,\nFROZEN). Story-context interpretation, NOT an observed fact.",
+      "enum": [
+        "none",
+        "useful_elsewhere",
+        "strong_elsewhere"
+      ],
+      "title": "StoryUtility",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Canonical MVP Asset Understanding output (06-asset-understanding.md \u00a71, FROZEN).\nOne current record per Moment (upsert by moment_id). Provenance/version fields are\nserver-assigned, not model-produced.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "frame_policy": {
+      "default": "au_frames/1",
+      "title": "Frame Policy",
+      "type": "string"
+    },
+    "model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "provenance: which model produced this",
+      "title": "Model Id"
+    },
+    "moment_id": {
+      "format": "uuid",
+      "title": "Moment Id",
+      "type": "string"
+    },
+    "n_frames": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "evidence frame count (24 for au_frames/1)",
+      "title": "N Frames"
+    },
+    "observed": {
+      "$ref": "#/$defs/MomentObserved"
+    },
+    "prompt_version": {
+      "default": "au_prompt/1",
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "moment_understanding/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_capture_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "CaptureSession id when DIRECT; null for spontaneous/imported",
+      "title": "Source Capture Id"
+    },
+    "story_context": {
+      "$ref": "#/$defs/MomentStoryContext"
+    }
+  },
+  "required": [
+    "moment_id",
+    "observed",
+    "story_context"
+  ],
+  "title": "MomentUnderstanding",
+  "type": "object"
+}

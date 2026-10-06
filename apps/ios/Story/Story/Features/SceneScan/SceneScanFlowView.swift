@@ -46,6 +46,9 @@ struct SceneScanFlowView: View {
     @State private var integrityFail: CaptureIntegrityIssue?         // non-nil => FAIL sheet
     @State private var pendingCaptureURL: URL?                       // held for Keep-anyway
     @State private var pendingCaptureDuration: Double = 0
+    // Milestone D: capture context (requested Shot/Beat) for the AU job, set when the
+    // camera opens from a Director recommendation; nil for Skip Scan (contextless Moment).
+    @State private var pendingCaptureContext: [String: Any]?
     private let integrityChecker = CaptureIntegrityChecker()
 
     // DIRECT UX: which alternative candidate is currently displayed (0 = primary).
@@ -162,7 +165,7 @@ struct SceneScanFlowView: View {
                 .foregroundStyle(ink.opacity(0.7))
             Spacer()
             primaryButton("Start Scan") { state = .scanning }
-            secondaryButton("Skip Scan") { showCamera = true }   // shoot immediately — no scan, no Director, no wait
+            secondaryButton("Skip Scan") { pendingCaptureContext = nil; showCamera = true }   // shoot immediately — no scan, no Director, no wait, no context
             Button("Cancel") { dismiss() }
                 .foregroundStyle(.gray).frame(maxWidth: .infinity)
         }
@@ -255,7 +258,22 @@ struct SceneScanFlowView: View {
                         .padding(.top, 2)
                     }
                     Spacer(minLength: 12)
-                    primaryButton("Let's shoot") { showCamera = true }
+                    primaryButton("Let's shoot") {
+                        // Carry the requested Shot/Beat as AU capture context (06 §1).
+                        var ctx: [String: Any] = [:]
+                        if let shot {
+                            var s: [String: Any] = [:]
+                            s["instruction"] = shot.instruction
+                            if let a = shot.subjectAction { s["subject_action"] = a }
+                            if let m = shot.cameraMotion { s["camera_motion"] = m }
+                            ctx["shot"] = s
+                        }
+                        if let beatId = out.plan.shots.first?.beatId {
+                            ctx["beat"] = ["id": beatId]
+                        }
+                        pendingCaptureContext = ctx.isEmpty ? nil : ctx
+                        showCamera = true
+                    }
                     // DIRECT UX: only one recommendation visible at a time. Advance to the
                     // next alternative INSTANTLY (local, no new Director call). Hidden on the
                     // last available candidate (no endless regeneration loop).
@@ -455,9 +473,22 @@ struct SceneScanFlowView: View {
         let useCases = StoryUseCases(repository: StoryRepository(context: context))
         do {
             let relativePath = try MediaStore.shared.adoptCapturedFile(tempURL: tempURL)
-            _ = try useCases.shootMoment(for: story, relativePath: relativePath,
-                                         durationSeconds: duration)
+            let moment = try useCases.shootMoment(for: story, relativePath: relativePath,
+                                                  durationSeconds: duration)
             pendingCaptureURL = nil
+            // Milestone D §6: enqueue an Asset Understanding job AFTER the Moment is
+            // persisted. Moment creation NEVER blocks on AU; the job runs opportunistically
+            // (here + on launch/network). Capture context is the requested Shot/Beat when the
+            // camera came from a recommendation, nil for Skip Scan (contextless Moment).
+            let auQueue = AssetUnderstandingQueue(context: context)
+            auQueue.enqueue(
+                momentId: moment.id,
+                relativeMediaPath: relativePath,
+                sourceCaptureId: captureSessionId,
+                captureContext: pendingCaptureContext
+            )
+            pendingCaptureContext = nil
+            Task { await auQueue.drain() }   // opportunistic; failures leave the job PENDING
             // Milestone D §13: also save a user-owned COPY to Apple Photos (add-only),
             // fire-and-forget. The Moment is ALREADY persisted above; this never blocks
             // or fails Moment creation, and Photos denial/failure degrades silently.

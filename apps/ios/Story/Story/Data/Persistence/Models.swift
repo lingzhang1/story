@@ -187,3 +187,129 @@ final class LocalIdentityModel {
         self.createdAt = createdAt
     }
 }
+
+// ---------------------------------------------------------------------------
+// Asset Understanding — Milestone D (06-asset-understanding.md, FROZEN)
+//
+// Two persisted records, both local-first:
+//   - MomentUnderstandingModel: the ONE current understanding per Moment
+//     (upsert by momentId). Stores the structured result as snake_case JSON
+//     (the moment_understanding/1 wire contract) + provenance/version strings.
+//     NEVER stores frame/image blobs (frames are transient request inputs).
+//   - AssetUnderstandingJobModel: the persistent AU job queue state machine
+//     (PENDING -> RUNNING -> COMPLETE; RUNNING -> PENDING on interruption),
+//     with bounded exponential backoff. Keyed to the Moment + version triple
+//     for idempotency; survives app termination.
+// ---------------------------------------------------------------------------
+
+enum AUJobState: String, Codable {
+    case pending
+    case running
+    case complete
+}
+
+@Model
+final class MomentUnderstandingModel {
+    // One current record per Moment (upsert target). momentId is unique so a
+    // re-run REPLACES rather than duplicates (idempotency, 06 §9).
+    @Attribute(.unique) var momentId: UUID
+    var sourceCaptureId: UUID?
+
+    // Provenance / version (06 §3). Lets a corpus re-score know what produced this.
+    var schemaVersion: String
+    var framePolicy: String
+    var promptVersion: String
+    var modelId: String?
+    var nFrames: Int?
+
+    // The structured MomentUnderstanding, stored as the snake_case wire JSON
+    // (moment_understanding/1). Decoded on read into the DTO. Keeping it as JSON
+    // avoids a second hand-maintained SwiftData shape of the same contract.
+    var understandingJSON: String
+
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        momentId: UUID,
+        sourceCaptureId: UUID? = nil,
+        schemaVersion: String,
+        framePolicy: String,
+        promptVersion: String,
+        modelId: String?,
+        nFrames: Int?,
+        understandingJSON: String,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.momentId = momentId
+        self.sourceCaptureId = sourceCaptureId
+        self.schemaVersion = schemaVersion
+        self.framePolicy = framePolicy
+        self.promptVersion = promptVersion
+        self.modelId = modelId
+        self.nFrames = nFrames
+        self.understandingJSON = understandingJSON
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+@Model
+final class AssetUnderstandingJobModel {
+    // One job per Moment. momentId unique so enqueue is idempotent — re-adding a
+    // Moment that already has a job does not create a second (06 §9).
+    @Attribute(.unique) var momentId: UUID
+    var relativeMediaPath: String
+    var sourceCaptureId: UUID?
+
+    // Capture context (requested Shot/Beat) as JSON, or nil for spontaneous/imported.
+    var captureContextJSON: String?
+
+    // Version triple the job is pinned to; a version change permits re-analysis.
+    var framePolicy: String
+    var promptVersion: String
+    var schemaVersion: String
+
+    var stateRaw: String
+    var attempts: Int
+    var lastError: String?
+    // Earliest wall-clock time this job is eligible to run again (backoff).
+    var nextEligibleAt: Date
+    var createdAt: Date
+    var updatedAt: Date
+
+    var state: AUJobState {
+        get { AUJobState(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+
+    init(
+        momentId: UUID,
+        relativeMediaPath: String,
+        sourceCaptureId: UUID? = nil,
+        captureContextJSON: String? = nil,
+        framePolicy: String,
+        promptVersion: String,
+        schemaVersion: String,
+        state: AUJobState = .pending,
+        attempts: Int = 0,
+        nextEligibleAt: Date = .now,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.momentId = momentId
+        self.relativeMediaPath = relativeMediaPath
+        self.sourceCaptureId = sourceCaptureId
+        self.captureContextJSON = captureContextJSON
+        self.framePolicy = framePolicy
+        self.promptVersion = promptVersion
+        self.schemaVersion = schemaVersion
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.lastError = nil
+        self.nextEligibleAt = nextEligibleAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}

@@ -188,6 +188,15 @@ class MusicSectionType(str, Enum):
     OTHER = "other"
 
 
+class StoryUtility(str, Enum):
+    """How useful this Moment is to the broader Story (06-asset-understanding.md §1,
+    FROZEN). Story-context interpretation, NOT an observed fact."""
+
+    NONE = "none"
+    USEFUL_ELSEWHERE = "useful_elsewhere"
+    STRONG_ELSEWHERE = "strong_elsewhere"
+
+
 # ---------------------------------------------------------------------------
 # CreativeIntent (full frozen shape; 02 §4-5)
 # ---------------------------------------------------------------------------
@@ -483,7 +492,9 @@ class TimeRange(_Strict):
 
 
 class AssetUnderstandingContract(_Strict):
-    """Machine-generated description of an Asset (02 §13). MVP fields optional."""
+    """LEGACY (pre-experiment, 02 §13). Superseded for MVP by MomentUnderstandingContract
+    (06-asset-understanding.md, FROZEN 2026-10-05). Kept only for the Milestone-B contract
+    tests / schema registry; NOT produced by the MVP AssetUnderstandingEngine."""
 
     asset_id: UUID
     semantic_description: str | None = None
@@ -492,6 +503,83 @@ class AssetUnderstandingContract(_Strict):
     actions: list[str] = Field(default_factory=list)
     quality: AssetQuality | None = None
     usable_segments: list[TimeRange] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MomentUnderstanding (06-asset-understanding.md, FROZEN 2026-10-05)
+#   The MVP Asset Understanding contract. Minimum, consumer-justified. A hard
+#   split separates OBSERVED REALITY (request-independent) from STORY-CONTEXT
+#   INTERPRETATION (depends on the request). Produced by AssetUnderstandingEngine
+#   from a 24-frame timeline via Sonnet 4.6. Dropped vs the experiment schema:
+#   environment, dead_or_setup_segments (no consumer).
+# ---------------------------------------------------------------------------
+
+
+class MomentEvent(_Strict):
+    """One ordered, factual observed event. OBSERVED REALITY."""
+
+    start_time: float = Field(ge=0.0, description="event start, seconds from clip start")
+    end_time: float | None = Field(default=None, ge=0.0, description="event end, seconds (optional)")
+    description: str = Field(description="what factually happened — no interpretation")
+
+
+class MomentUsefulSegment(_Strict):
+    """A coherent candidate region worth considering for editing. ASSET-GROUNDED —
+    NOT a final cut. 'complete action of X', not 'perfect opening for the Story'."""
+
+    start_time: float = Field(ge=0.0)
+    end_time: float = Field(gt=0.0)
+    why_useful: str = Field(description="why this region is coherent candidate material")
+
+
+class MomentObserved(_Strict):
+    """OBSERVED REALITY — request-independent. The same media yields the same
+    observed block under any Story context."""
+
+    summary: str = Field(description="concise whole-Moment summary")
+    subjects: list[str] = Field(default_factory=list, description="who/what matters")
+    events: list[MomentEvent] = Field(default_factory=list, description="ordered factual events")
+    temporal_order_note: str = Field(
+        default="",
+        description="first/then/last; departure vs arrival, reveal direction, progression, contradiction",
+    )
+    useful_segments: list[MomentUsefulSegment] = Field(default_factory=list)
+
+
+class MomentStoryContext(_Strict):
+    """STORY-CONTEXT INTERPRETATION — depends on the request. requested_shot/beat
+    contribution are NULLABLE: null when no capture context exists (spontaneous /
+    imported Moments) — never fabricate a requested contribution without context."""
+
+    story_utility: StoryUtility = Field(description="broader-Story usefulness")
+    requested_shot_contribution: str | None = Field(
+        default=None,
+        description="does the footage serve the requested Shot purpose? null if no capture context",
+    )
+    requested_beat_contribution: str | None = Field(
+        default=None,
+        description="how the Moment contributes to the requested Beat; null if no capture context",
+    )
+
+
+class MomentUnderstandingContract(_Strict):
+    """Canonical MVP Asset Understanding output (06-asset-understanding.md §1, FROZEN).
+    One current record per Moment (upsert by moment_id). Provenance/version fields are
+    server-assigned, not model-produced."""
+
+    moment_id: UUID
+    source_capture_id: UUID | None = Field(
+        default=None, description="CaptureSession id when DIRECT; null for spontaneous/imported"
+    )
+    schema_version: str = Field(default="moment_understanding/1")
+    frame_policy: str = Field(default="au_frames/1")
+    prompt_version: str = Field(default="au_prompt/1")
+    model_id: str | None = Field(default=None, description="provenance: which model produced this")
+    n_frames: int | None = Field(default=None, ge=1, description="evidence frame count (24 for au_frames/1)")
+
+    observed: MomentObserved
+    story_context: MomentStoryContext
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------

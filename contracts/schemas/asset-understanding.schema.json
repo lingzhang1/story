@@ -87,7 +87,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Machine-generated description of an Asset (02 \u00a713). MVP fields optional.",
+  "description": "LEGACY (pre-experiment, 02 \u00a713). Superseded for MVP by MomentUnderstandingContract\n(06-asset-understanding.md, FROZEN 2026-10-05). Kept only for the Milestone-B contract\ntests / schema registry; NOT produced by the MVP AssetUnderstandingEngine.",
   "properties": {
     "actions": {
       "items": {

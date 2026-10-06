@@ -31,6 +31,12 @@ from story_director import (
     RealStoryDirectorEngine,
     StoryDirectorEngine,
 )
+from asset_engine import (
+    AssetUnderstandingEngine,
+    DEFAULT_AU_MODEL,
+    MockAssetUnderstandingEngine,
+    RealAssetUnderstandingEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -95,3 +101,16 @@ def get_story_director_engine() -> StoryDirectorEngine:
         return MockStoryDirectorEngine()
     model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-opus-4-5-20251101-v1:0")
     return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))
+
+
+def get_asset_understanding_engine() -> AssetUnderstandingEngine:
+    """Provide the Asset Understanding analyzer (Milestone D, FROZEN).
+
+    ONE model, config-driven via STORY_AU_MODEL (default us.anthropic.claude-sonnet-4-6 —
+    the frozen production AU model). NO routing/escalation/native-video. Set
+    STORY_ASSET_UNDERSTANDING_MOCK=1 for the dev/offline mock (never a silent fallback).
+    """
+    if os.environ.get("STORY_ASSET_UNDERSTANDING_MOCK") == "1":
+        return MockAssetUnderstandingEngine()
+    model = os.environ.get("STORY_AU_MODEL", DEFAULT_AU_MODEL)
+    return RealAssetUnderstandingEngine(BedrockModelGateway(model_id=model), model_id=model)

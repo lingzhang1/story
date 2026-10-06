@@ -18,7 +18,11 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts.schemas.ai_contracts import CreativeIntentContract, SceneUnderstandingContract
+from contracts.schemas.ai_contracts import (
+    CreativeIntentContract,
+    MomentUnderstandingContract,
+    SceneUnderstandingContract,
+)
 from contracts.schemas.dto import (
     CreateStoryRequest,
     GeneratedOutputDTO,
@@ -38,6 +42,17 @@ from story_director import (
 )
 from director_engine import DirectorEngine  # noqa: F401  (available for future shoot endpoint)
 from edit_engine import EditEngine
+from asset_engine import (
+    AURequestMeta,
+    AUFrame,
+    AURetryableError,
+    CaptureContext,
+    AssetUnderstandingEngine,
+    FRAME_POLICY as AU_FRAME_POLICY,
+    PROMPT_VERSION as AU_PROMPT_VERSION,
+    SCHEMA_VERSION as AU_SCHEMA_VERSION,
+    EXPECTED_FRAMES as AU_EXPECTED_FRAMES,
+)
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -49,6 +64,7 @@ from app.deps import (
     get_scene_understanding_engine,
     get_story_director_engine,
     get_story_engine,
+    get_asset_understanding_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -57,6 +73,14 @@ _SU_MAX_FRAMES = 6
 _SU_MAX_FRAME_BYTES = 2 * 1024 * 1024          # 2 MB per frame
 _SU_MAX_TOTAL_BYTES = 8 * 1024 * 1024          # 8 MB total payload
 _SU_ALLOWED_TYPES = {"image/jpeg", "image/jpg", "image/png"}
+
+# Asset Understanding multipart limits (06-asset-understanding.md §2/§8).
+# 24 timestamped frames @ 768px/JPEG ~0.6 ≈ 1-3 MB total; cap generously.
+_AU_MAX_FRAMES = 24
+_AU_MIN_FRAMES = 24                             # au_frames/1 is EXACTLY 24
+_AU_MAX_FRAME_BYTES = 1 * 1024 * 1024           # 1 MB per frame (768px JPEG is far smaller)
+_AU_MAX_TOTAL_BYTES = 12 * 1024 * 1024          # 12 MB total payload ceiling
+_AU_ALLOWED_TYPES = {"image/jpeg", "image/jpg"}
 
 
 class ResolveCreativeIntentRequest(BaseModel):
@@ -232,6 +256,118 @@ def create_app() -> FastAPI:
                    "success": True, "subject_count": len(scene.subjects)},
         )
         return scene
+
+    @app.post("/v1/asset-understanding", response_model=MomentUnderstandingContract, status_code=200)
+    async def asset_understanding(
+        meta: str = Form(..., description="JSON: {moment_id, source_capture_id?, capture_context?}"),
+        frames_meta: str = Form(..., description="JSON: [{t_ms}, ...] ordered, one per frame"),
+        frames: list[UploadFile] = File(..., description="exactly 24 ordered JPEG timeline frames"),
+        engine: AssetUnderstandingEngine = Depends(get_asset_understanding_engine),
+    ) -> MomentUnderstandingContract:
+        """Analyze a 24-frame ORDERED timestamped Moment timeline into a canonical
+        MomentUnderstanding via Sonnet 4.6 (FROZEN, 06-asset-understanding.md). Frames are
+        ephemeral — NOT persisted server-side. On exhausted retry/provider failure, return a
+        designed RETRYABLE failure (503) so the on-device queue leaves the job PENDING; never a
+        fabricated understanding and never a model fallback."""
+        import json as _json
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+
+        # --- parse meta --------------------------------------------------------
+        try:
+            m = _json.loads(meta)
+            if not isinstance(m, dict) or "moment_id" not in m:
+                raise ValueError("meta must be a JSON object with moment_id")
+            moment_id = UUID(str(m["moment_id"]))
+            source_capture_id = UUID(str(m["source_capture_id"])) if m.get("source_capture_id") else None
+        except (ValueError, KeyError) as e:
+            raise HTTPException(status_code=422, detail=f"invalid meta json: {e}")
+
+        cap_ctx_raw = m.get("capture_context")
+        capture_context = None
+        if isinstance(cap_ctx_raw, dict):
+            capture_context = CaptureContext(shot=cap_ctx_raw.get("shot"), beat=cap_ctx_raw.get("beat"))
+
+        # --- validate frames + timestamps -------------------------------------
+        try:
+            fmeta = _json.loads(frames_meta)
+            if not isinstance(fmeta, list):
+                raise ValueError("frames_meta must be a JSON array")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"invalid frames_meta json: {e}")
+
+        if not frames:
+            raise HTTPException(status_code=422, detail="no frames provided")
+        if len(frames) != _AU_MIN_FRAMES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"au_frames/1 requires exactly {_AU_MIN_FRAMES} frames; got {len(frames)}",
+            )
+        if len(fmeta) != len(frames):
+            raise HTTPException(status_code=422, detail="frames_meta length must match frames count")
+
+        au_frames: list[AUFrame] = []
+        total = 0
+        last_t = -1
+        for f, fm in zip(frames, fmeta):
+            if (f.content_type or "").lower() not in _AU_ALLOWED_TYPES:
+                raise HTTPException(status_code=415, detail=f"unsupported frame type: {f.content_type}")
+            if not isinstance(fm, dict) or "t_ms" not in fm:
+                raise HTTPException(status_code=422, detail="each frames_meta entry needs t_ms")
+            try:
+                t_ms = int(fm["t_ms"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="t_ms must be an integer (ms)")
+            if t_ms < 0 or t_ms <= last_t:
+                raise HTTPException(status_code=422, detail="frame timestamps must be monotonically increasing")
+            last_t = t_ms
+            data = await f.read()
+            if len(data) > _AU_MAX_FRAME_BYTES:
+                raise HTTPException(status_code=413, detail="a frame exceeds the per-frame size limit")
+            total += len(data)
+            if total > _AU_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="total payload exceeds the size limit")
+            au_frames.append(AUFrame(data=data, t_ms=t_ms))
+
+        base_fields = {
+            "operation": "asset_understanding",
+            "correlation_id": correlation_id,
+            "task": "asset_understanding.analyze",
+            "prompt_version": AU_PROMPT_VERSION,
+            "schema_version": AU_SCHEMA_VERSION,
+            "frame_policy": AU_FRAME_POLICY,
+            "frame_count": len(au_frames),
+            "compressed_payload_bytes": total,
+            "has_capture_context": capture_context is not None,
+            # NEVER log: frame bytes, raw prose, filenames, moment prose (06 §11).
+        }
+
+        req_meta = AURequestMeta(
+            moment_id=moment_id, source_capture_id=source_capture_id, capture_context=capture_context
+        )
+        try:
+            au = engine.analyze(au_frames, req_meta)
+        except AURetryableError as e:
+            log.warning(
+                "asset_understanding_retryable_failure",
+                extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "retryable": True, "error": str(e)[:300]},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="asset_understanding_unavailable: analysis failed after retry; job stays pending",
+            )
+        # Frames discarded here (not persisted) — ephemeral inference input.
+        log.info(
+            "asset_understanding_resolved",
+            extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "retried": au.retried, "attempts": au.attempts,
+                   "model": au.model, "input_tokens": au.usage_input_tokens,
+                   "output_tokens": au.usage_output_tokens,
+                   "event_count": len(au.understanding.observed.events),
+                   "story_utility": au.understanding.story_context.story_utility.value},
+        )
+        return au.understanding
 
     def _director_log(op: str, out, started, correlation_id):
         log.info(

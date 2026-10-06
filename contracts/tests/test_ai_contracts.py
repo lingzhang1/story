@@ -456,3 +456,73 @@ def test_ai_contract_schemas_build():
         assert schema["title"] == title
         assert "properties" in schema
         assert schema["$schema"].startswith("https://json-schema.org/")
+
+
+# --------------------------------------------------------------------------
+# MomentUnderstanding (06-asset-understanding.md, FROZEN) — observed vs story_context
+# --------------------------------------------------------------------------
+
+
+def test_moment_understanding_round_trips_with_context():
+    from contracts.schemas.ai_contracts import MomentUnderstandingContract
+
+    data = {
+        "moment_id": str(uuid4()),
+        "source_capture_id": str(uuid4()),
+        "model_id": "us.anthropic.claude-sonnet-4-6",
+        "n_frames": 24,
+        "observed": {
+            "summary": "A woman shoulders a pack and departs down a corridor.",
+            "subjects": ["woman", "backpack"],
+            "events": [{"start_time": 0.0, "end_time": 4.0, "description": "shoulders the pack"}],
+            "temporal_order_note": "gear-up then departure",
+            "useful_segments": [{"start_time": 0.0, "end_time": 20.0, "why_useful": "complete departure"}],
+        },
+        "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "fulfilled",
+            "requested_beat_contribution": "serves beat_departure",
+        },
+    }
+    m = MomentUnderstandingContract.model_validate(data)
+    assert m.observed.summary.startswith("A woman")
+    assert m.story_context.story_utility.value == "strong_elsewhere"
+    # round-trip through JSON preserves the observed/story_context split
+    again = MomentUnderstandingContract.model_validate_json(m.model_dump_json())
+    assert again.observed.events[0].description == "shoulders the pack"
+    assert again.story_context.requested_beat_contribution == "serves beat_departure"
+
+
+def test_moment_understanding_nullable_contributions_for_spontaneous():
+    from contracts.schemas.ai_contracts import MomentUnderstandingContract
+
+    m = MomentUnderstandingContract.model_validate({
+        "moment_id": str(uuid4()),
+        "observed": {"summary": "spontaneous clip", "subjects": [], "events": [],
+                     "temporal_order_note": "", "useful_segments": []},
+        "story_context": {"story_utility": "none"},
+    })
+    assert m.source_capture_id is None
+    assert m.story_context.requested_shot_contribution is None
+    assert m.story_context.requested_beat_contribution is None
+
+
+def test_moment_understanding_rejects_unknown_field_and_bad_utility():
+    import pytest
+    from contracts.schemas.ai_contracts import MomentUnderstandingContract
+
+    with pytest.raises(Exception):
+        MomentUnderstandingContract.model_validate({
+            "moment_id": str(uuid4()),
+            "observed": {"summary": "x", "subjects": [], "events": [], "temporal_order_note": "",
+                         "useful_segments": []},
+            "story_context": {"story_utility": "none"},
+            "environment": "should-be-rejected",  # dropped field must not be accepted
+        })
+    with pytest.raises(Exception):
+        MomentUnderstandingContract.model_validate({
+            "moment_id": str(uuid4()),
+            "observed": {"summary": "x", "subjects": [], "events": [], "temporal_order_note": "",
+                         "useful_segments": []},
+            "story_context": {"story_utility": "sometimes"},  # not in enum
+        })
