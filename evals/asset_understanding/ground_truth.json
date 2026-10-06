@@ -1,0 +1,356 @@
+{
+  "_doc": "AU ground-truth annotations — OWNER-APPROVED 2026-10-05 (visually grounded by contact-sheet review). Owner rulings applied: (1) S02_A departure begins at GEAR-UP (0s) not walk-out; (2) S02_D = departure/threshold-crossing; (3) S07_A = companionship partial + useful_elsewhere; (4) S08_D = EATING a pouch meal (filename 'cooking' is a hallucination trap, kept as-is); (5) S08_F = BREAKFAST not dinner, strong_elsewhere (filename kept as-is); (6) S04_A tiny person confirmed present. These are now the AU evaluation scoring ground truth. shot/beat contribution reuses C4 vocabulary where it applies; story_utility ∈ {none, useful_elsewhere, strong_elsewhere}.",
+  "annotations_version": "au.ground_truth/1-approved",
+  "owner_approved": {"by": "Ling", "date": "2026-10-05", "rulings": ["S02_A departure=gear-up(0s)", "S02_D=departure/threshold-crossing", "S07_A=companionship-partial+useful_elsewhere", "S08_D=eating-not-cooking", "S08_F=breakfast+strong_elsewhere", "S04_A person-present-confirmed"], "filenames": "kept as-is on purpose — fixture names encode requested capture intent, not footage content"},
+  "reviewed_from": "contact sheets @ evals/assets/private_local/frames/au_contact_sheets/",
+  "clips": [
+    {
+      "fixture": "T01_technical_controls__A_clean_4s",
+      "duration_s": 6.5, "band": "short",
+      "capture_context": {"shot_purpose": "clean steady shot of the subject", "beat": "beat_object (clean usable shot)"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 6.5, "description": "a red hiking backpack stands on the floor beside a green sofa; camera static, no action"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 6.5, "why_useful": "clean steady object shot of the gear, usable throughout"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "no temporal development — single continuous static object shot",
+      "requested_shot_contribution": "fulfilled — clean steady shot of the backpack object",
+      "requested_beat_contribution": "serves beat_object (establish the gear) directly",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["OVER-SEGMENTATION CONTROL: a model that emits >1 event here is over-segmenting a single static shot"]
+    },
+    {
+      "fixture": "T01_technical_controls__I_camera_points_away",
+      "duration_s": 2.0, "band": "short",
+      "capture_context": {"shot_purpose": "clean steady shot of the subject", "beat": "beat_object (clean usable shot)"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 2.0, "description": "backpack fills the lower frame while the camera is aimed up and past it at a shelf/cabinet; subject not properly framed"}
+      ],
+      "useful_segments": [],
+      "dead_or_setup_segments": [
+        {"t_start_s": 0.0, "t_end_s": 2.0, "note": "camera points away from the intended subject; whole clip is effectively unusable framing"}
+      ],
+      "temporal_order": "no meaningful order; very short mis-aimed clip",
+      "requested_shot_contribution": "unfulfilled — subject not framed; camera points away",
+      "requested_beat_contribution": "does not serve beat_object",
+      "story_utility": "none",
+      "ambiguity_flags": ["HALLUCINATION CONTROL: there is no clean subject shot here; a model claiming a good object shot is hallucinating usefulness"]
+    },
+    {
+      "fixture": "S01_backpack_static__A_exact_good",
+      "duration_s": 6.5, "band": "short",
+      "capture_context": {"shot_purpose": "steady clear shot of the backpack as object of the moment", "beat": "beat_object (establish gear/object)"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 6.5, "description": "red hiking backpack stands on the floor by a sofa indoors; static, no action (same footage as T01_A)"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 6.5, "why_useful": "clean steady gear/object shot, usable throughout"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "no temporal development — single continuous static object shot",
+      "requested_shot_contribution": "fulfilled — establishes the backpack object clearly",
+      "requested_beat_contribution": "serves beat_object directly",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["OVER-SEGMENTATION CONTROL (shares physical footage with T01_A_clean_4s)"]
+    },
+    {
+      "fixture": "S01_backpack_static__F_alternative_good",
+      "duration_s": 15.7, "band": "short",
+      "capture_context": {"shot_purpose": "steady clear shot of the backpack as object", "beat": "beat_object (establish gear/object)"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 3.0, "description": "backpack and trekking poles lean against a railing with red geranium flowers; alpine village street"},
+        {"t_start_s": 3.0, "t_end_s": 11.0, "description": "camera pans up/across to a pink alpine church and parked cars on the village street"},
+        {"t_start_s": 11.0, "t_end_s": 15.7, "description": "camera continues to stone village buildings and a parking area"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 3.0, "why_useful": "gear-in-place against a scenic village backdrop — an alternative 'object' shot with context"},
+        {"t_start_s": 3.0, "t_end_s": 11.0, "why_useful": "establishing shot of the pink church / village — strong place-establishing material"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "gear foreground first, then camera reveals the village/church — object-then-place pan",
+      "requested_shot_contribution": "alternative_fulfilled — gear shown but as part of a wider village establishing pan, not a tight object hold",
+      "requested_beat_contribution": "loosely serves beat_object; also strong establishing material for a place/arrival beat",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["Is the primary subject the gear or the village? Reasonable annotators could split. Flagged as object+place."]
+    },
+    {
+      "fixture": "S02_departure__A_exact_good",
+      "duration_s": 22.2, "band": "short-ish (long for its scenario)",
+      "capture_context": {"shot_purpose": "communicate departure / beginning of journey", "beat": "beat_departure"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 4.0, "description": "woman shoulders a large red backpack indoors (putting it on / adjusting)"},
+        {"t_start_s": 4.0, "t_end_s": 8.0, "description": "she walks across the room toward the camera, fastening the hip belt"},
+        {"t_start_s": 8.0, "t_end_s": 13.0, "description": "close pass of her face/pack, then she moves into a hotel corridor"},
+        {"t_start_s": 13.0, "t_end_s": 20.0, "description": "she walks away down the corridor (back to camera), departing"},
+        {"t_start_s": 20.0, "t_end_s": 22.2, "description": "she turns back toward camera at the far end"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 20.0, "why_useful": "complete departure action — gear-up is PART of the departure (owner ruling): shoulders the pack, walks out, proceeds down the hall"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "indoor gear-up FIRST (part of the departure), then walk toward camera, then depart down the corridor — a departure (outbound) that begins at gear-up",
+      "requested_shot_contribution": "fulfilled — clearly communicates departure/beginning of journey; departure begins at gear-up (0s)",
+      "requested_beat_contribution": "serves beat_departure strongly",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): departure begins at GEAR-UP (0s), not the walk-out. The 0-4s gear-up is departure material, not setup."]
+    },
+    {
+      "fixture": "S02_departure__D_walk_away_through_door",
+      "duration_s": 9.7, "band": "short",
+      "capture_context": {"shot_purpose": "communicate departure (instruction: walk toward camera down hallway)", "beat": "beat_departure"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 1.0, "description": "closed dark door, nobody visible"},
+        {"t_start_s": 1.0, "t_end_s": 4.0, "description": "woman with backpack steps OUT through the doorway into the corridor"},
+        {"t_start_s": 4.0, "t_end_s": 9.7, "description": "she walks TOWARD the camera down the corridor, ending in close-up"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 1.0, "t_end_s": 9.7, "why_useful": "emerging through a doorway and approaching — a threshold-crossing / setting-out beat"}
+      ],
+      "dead_or_setup_segments": [
+        {"t_start_s": 0.0, "t_end_s": 1.0, "note": "brief empty-doorway lead-in"}
+      ],
+      "temporal_order": "emerges THROUGH a door then walks toward the camera — reads as setting out / crossing a threshold (approach to camera, a deviation from 'walk away')",
+      "requested_shot_contribution": "alternative_fulfilled — communicates setting-out via a doorway, though the motion is toward (not away from) camera",
+      "requested_beat_contribution": "serves beat_departure as a threshold-crossing variant",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): this is DEPARTURE / threshold-crossing. She crosses a threshold then approaches camera; scored as departure, not arrival."]
+    },
+    {
+      "fixture": "S02_departure__G_contradictory_action",
+      "duration_s": 14.3, "band": "short",
+      "capture_context": {"shot_purpose": "communicate departure", "beat": "beat_departure"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 3.0, "description": "woman stands by a mirror; backpack resting on a chair beside her"},
+        {"t_start_s": 3.0, "t_end_s": 8.0, "description": "she lifts the backpack off the chair and swings it onto her back (gearing up)"},
+        {"t_start_s": 8.0, "t_end_s": 12.0, "description": "she adjusts the pack / straps, still standing in place"},
+        {"t_start_s": 12.0, "t_end_s": 14.3, "description": "she bends to the chair again; remains indoors, has not left"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 3.0, "t_end_s": 10.0, "why_useful": "gearing-up / preparation action — useful for a 'getting ready' beat, not departure"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "picks pack up and puts it on, stays indoors — PREPARATION, not departure (no exit happens). Contradicts the requested departure.",
+      "requested_shot_contribution": "unfulfilled (contradicted) — shows preparation/gearing-up, never departs",
+      "requested_beat_contribution": "does not serve beat_departure; could serve a 'preparation' beat",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["TEMPORAL-HARD: must NOT be read as departure. A model calling this 'departure' has mis-ordered intent vs action."]
+    },
+    {
+      "fixture": "S03_scenic_reveal__D_reverse_reveal__take1",
+      "duration_s": 15.0, "band": "short",
+      "capture_context": {"shot_purpose": "reveal landscape by moving from friend to vista (friend->landscape)", "beat": "beat_reveal"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 4.0, "description": "frame holds on jagged snow-capped mountains / alpine vista above larch trees (landscape FIRST)"},
+        {"t_start_s": 4.0, "t_end_s": 8.5, "description": "camera tilts/pans DOWN to the dirt trail through the trees"},
+        {"t_start_s": 8.5, "t_end_s": 15.0, "description": "a hiker with trekking poles appears on the trail and walks toward camera (person revealed LAST)"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 8.5, "why_useful": "strong landscape/vista reveal footage on its own"},
+        {"t_start_s": 8.5, "t_end_s": 15.0, "why_useful": "person-on-trail footage, usable for progression/companion beats"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "LANDSCAPE first, then camera moves down to reveal the PERSON last — this is landscape->person, the REVERSE of the requested friend->landscape reveal",
+      "requested_shot_contribution": "unfulfilled (contradicted) — reveal direction is reversed",
+      "requested_beat_contribution": "does not serve beat_reveal as specified; the vista itself is still strong place material",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["TEMPORAL-HARD / REVEAL-DIRECTION: the key signal is landscape-first/person-last. A model must get the direction, not just 'has person and landscape'."]
+    },
+    {
+      "fixture": "S05_trail_progression__A_follow_behind",
+      "duration_s": 19.6, "band": "medium",
+      "capture_context": {"shot_purpose": "show progression deeper into the landscape", "beat": "beat_progress"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 13.0, "description": "camera follows a hiker (trekking poles) from behind up a forested alpine trail; sustained progression"},
+        {"t_start_s": 13.0, "t_end_s": 19.6, "description": "camera tilts up off the hiker to the snow-capped mountains ahead; hiker leaves frame"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 13.0, "why_useful": "clean follow-behind progression — the requested shot"},
+        {"t_start_s": 13.0, "t_end_s": 19.6, "why_useful": "mountains-ahead vista — bonus establishing/payoff material"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "follow the hiker uphill FIRST, then reveal the mountains ahead — progression into the landscape",
+      "requested_shot_contribution": "fulfilled — forward progression along the trail",
+      "requested_beat_contribution": "serves beat_progress directly",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["Two mild segments (follow, then vista). >2 events would be over-segmentation of a single sustained walk."]
+    },
+    {
+      "fixture": "A01_semantic_adversarial__A03_backpack_but_arrival_not_departure",
+      "duration_s": 15.1, "band": "short",
+      "capture_context": {"shot_purpose": "communicate DEPARTURE / beginning of journey", "beat": "beat_departure"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 4.0, "description": "woman with large pack walks AWAY down a hotel corridor toward a door"},
+        {"t_start_s": 4.0, "t_end_s": 9.0, "description": "she opens the door and ENTERS a hotel room"},
+        {"t_start_s": 9.0, "t_end_s": 13.0, "description": "inside, she moves to a table and sets the backpack DOWN"},
+        {"t_start_s": 13.0, "t_end_s": 15.1, "description": "she stands in the room, pack off — settled/arrived"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 4.0, "t_end_s": 13.0, "why_useful": "entering a room and setting the pack down — a clean ARRIVAL/settling beat"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "walks to a door, ENTERS a room, puts the pack DOWN — this is ARRIVAL (ending a journey), the OPPOSITE of the requested departure",
+      "requested_shot_contribution": "unfulfilled (contradicted) — footage shows arrival, request asked for departure",
+      "requested_beat_contribution": "does not serve beat_departure; serves an arrival/end-of-day beat",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["TEMPORAL-HARD / ARRIVAL-vs-DEPARTURE: a model that reads 'backpack + corridor' as departure has fallen for the surface cue and missed the enter+set-down ordering."]
+    },
+    {
+      "fixture": "S04_human_scale__A_exact_small_person_landscape__take1",
+      "duration_s": 6.1, "band": "medium",
+      "capture_context": {"shot_purpose": "establish scale contrast between small human and large landscape", "beat": "beat_scale"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 3.5, "description": "cloud-draped ridgelines and a deep valley; mostly landscape, no clear person"},
+        {"t_start_s": 3.5, "t_end_s": 6.1, "description": "a tiny human figure appears on the ridgeline, dwarfed by the mountains"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 3.5, "t_end_s": 6.1, "why_useful": "small-person-against-large-landscape — the scale-contrast payoff"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "landscape first, tiny person enters on the ridge later — scale contrast established when the figure appears",
+      "requested_shot_contribution": "fulfilled — small person in large landscape (scale contrast)",
+      "requested_beat_contribution": "serves beat_scale directly",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed a tiny person DOES appear (~3.5s). GT asserts a person is present — this is a RECALL PROBE; a model that misses the human is evidence/attention-limited, not correct."]
+    },
+    {
+      "fixture": "S06_difficulty__E_cross_river",
+      "duration_s": 38.0, "band": "long",
+      "capture_context": {"shot_purpose": "convey difficulty/effort of the hike", "beat": "beat_difficulty"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 38.0, "description": "a hiker carrying a pack wades carefully across a wide, braided glacial river, mountains behind; sustained effortful crossing"},
+        {"t_start_s": 36.0, "t_end_s": 38.0, "description": "a second tiny figure appears at far left near the end"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 2.0, "t_end_s": 34.0, "why_useful": "the full river crossing — strong difficulty/effort material with a clear start and end"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "one continuous river crossing from near bank to far; effort evident in careful footing",
+      "requested_shot_contribution": "fulfilled — river crossing clearly conveys difficulty/effort",
+      "requested_beat_contribution": "serves beat_difficulty directly",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["OVER-SEGMENTATION PROBE: this is ONE sustained crossing. Many 'events' (each step) = over-segmentation. The late 2nd figure is a minor real detail."]
+    },
+    {
+      "fixture": "S07_companionship__A_natural_conversation",
+      "duration_s": 95.3, "band": "long",
+      "capture_context": {"shot_purpose": "convey genuine companionship between people", "beat": "beat_companion"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 55.0, "description": "a person in a blue jacket reclines/rests on a grassy alpine slope under a big sky; mostly still, resting (one companion, foreground red garment)"},
+        {"t_start_s": 55.0, "t_end_s": 90.0, "description": "other hikers appear climbing the slope in the background (people arriving/passing on the trail)"},
+        {"t_start_s": 90.0, "t_end_s": 95.3, "description": "camera turns to a selfie — a face fills the frame at the end (camera being lowered/turned)"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 5.0, "t_end_s": 50.0, "why_useful": "resting-on-the-slope companion footage — calm end-of-effort / togetherness mood"},
+        {"t_start_s": 55.0, "t_end_s": 88.0, "why_useful": "other hikers on the slope — potential people/scale/trail-life material"}
+      ],
+      "dead_or_setup_segments": [
+        {"t_start_s": 90.0, "t_end_s": 95.3, "note": "end selfie / camera turning — tail material, likely not usable as companion footage"}
+      ],
+      "temporal_order": "long static resting FIRST (~0-55s), THEN other hikers appear (~55s), THEN end selfie (~90s) — a late second event after a long quiet stretch",
+      "requested_shot_contribution": "partially — shows a companion resting; genuine two-person interaction is weak, mostly one reclining person + distant others",
+      "requested_beat_contribution": "loosely serves beat_companion (people present) but not a strong interaction moment",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): companionship PARTIAL + story_utility useful_elsewhere (mostly one reclining person; distant others appear late — not a strong two-person interaction).", "OVER-SEGMENTATION PROBE (long static front): 0-55s is ONE continuous resting state, not many events.", "MULTI-EVENT RECALL PROBE: the late appearance of other hikers (~55s) is a distinct second event a model must RECALL despite the long quiet lead-in."]
+    },
+    {
+      "fixture": "S07_companionship__E_wrong_people",
+      "duration_s": 9.5, "band": "medium",
+      "capture_context": {"shot_purpose": "convey companionship with YOUR friend", "beat": "beat_companion"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 9.5, "description": "several hikers in bright jackets (green/pink/orange packs) climb a dark rocky ridge; filmed from behind at a distance; the shooter's own foot is visible at bottom (POV)"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 9.5, "why_useful": "trail-life / other-hikers-on-the-ridge footage — usable as atmosphere, not as the user's companions"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "one continuous shot of strangers ascending; no strong internal ordering",
+      "requested_shot_contribution": "unfulfilled — the people are strangers/other hikers, not the requested companion",
+      "requested_beat_contribution": "does not serve beat_companion (wrong people)",
+      "story_utility": "useful_elsewhere",
+      "ambiguity_flags": ["SEMANTIC: 'has people' must NOT be read as 'companionship fulfilled'. The people are the wrong people. Key GOOD-FOOTAGE-WRONG-SHOT case."]
+    },
+    {
+      "fixture": "S08_end_of_day__D_cooking_dinner",
+      "duration_s": 154.1, "band": "long (longest)",
+      "capture_context": {"shot_purpose": "convey quiet end-of-day winding-down mood", "beat": "beat_endofday"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 20.0, "description": "two people at an outdoor table in cold weather; one holds up and opens a dehydrated meal pouch (chicken fried rice)"},
+        {"t_start_s": 20.0, "t_end_s": 45.0, "description": "they eat from an orange bowl together; a hand close-up (~35s) and a close-up of the food in the bowl (~39s)"},
+        {"t_start_s": 45.0, "t_end_s": 140.0, "description": "sustained eating and quiet interaction; the woman in blue eats, looks around, talks intermittently"},
+        {"t_start_s": 140.0, "t_end_s": 154.1, "description": "camera turns toward a selfie; a face fills the frame at the very end"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 20.0, "why_useful": "opening/holding the meal pouch — a clear 'preparing/eating dinner' beat with a beginning"},
+        {"t_start_s": 45.0, "t_end_s": 120.0, "why_useful": "quiet eating-together footage — strong end-of-day companionship/mood material"}
+      ],
+      "dead_or_setup_segments": [
+        {"t_start_s": 34.0, "t_end_s": 40.0, "note": "a hand close-up / near-abstract frame — low-value filler"},
+        {"t_start_s": 150.0, "t_end_s": 154.1, "note": "end selfie / camera turning — tail material"}
+      ],
+      "temporal_order": "pouch opened FIRST, then eating together, long sustained eating, then an end selfie — a meal from start toward finish",
+      "requested_shot_contribution": "fulfilled — a calm end-of-day eating moment conveys the winding-down mood",
+      "requested_beat_contribution": "serves beat_endofday (settling, the day ending)",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed EATING a pre-made pouch meal, NOT cooking. Filename kept as-is on purpose (it encodes the requested intent, not the content) — a model that says 'cooking' is reading the label and scores as a hallucination.", "OVER-SEGMENTATION PROBE: 90s of sustained eating is NOT dozens of events.", "SEGMENTATION PROBE: can a model find the dead hand-close-up (~35s) and the end selfie?"]
+    },
+    {
+      "fixture": "S08_end_of_day__F_nice_dinner_window_view",
+      "duration_s": 9.1, "band": "medium",
+      "capture_context": {"shot_purpose": "convey quiet end-of-day winding-down mood", "beat": "beat_endofday"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 3.0, "description": "a bowl of muesli, a bread roll and fruit on a restaurant table; a hand with chopsticks reaches in"},
+        {"t_start_s": 3.0, "t_end_s": 9.1, "description": "camera pans up/right to reveal snow-capped mountains through the restaurant window"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 3.0, "why_useful": "the meal on the table — a settling/meal detail"},
+        {"t_start_s": 3.0, "t_end_s": 9.1, "why_useful": "the alpine mountain view through the window — strong, beautiful place material"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "food on the table FIRST, then camera reveals the mountain window view — meal-to-vista reveal",
+      "requested_shot_contribution": "fulfilled for mood (a calm meal with a view) — reads as a quiet moment, though the view is the real payoff",
+      "requested_beat_contribution": "serves beat_endofday; also strong place/establishing material",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed BREAKFAST (muesli), not dinner; filename kept as-is (requested intent, not content). story_utility strong_elsewhere stands — the beauty/payoff is the window vista, not the food."]
+    },
+    {
+      "fixture": "A01_semantic_adversarial__A01_hiking_but_not_difficulty",
+      "duration_s": 38.9, "band": "long",
+      "capture_context": {"shot_purpose": "convey the DIFFICULTY of the hike", "beat": "beat_difficulty"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 20.0, "description": "a gentle sunlit alpine trail with blue sky; a tiny hiker is a distant speck approaching"},
+        {"t_start_s": 20.0, "t_end_s": 37.0, "description": "the hiker approaches steadily, growing from distant to near; relaxed, easy walking with trekking poles"},
+        {"t_start_s": 37.0, "t_end_s": 38.9, "description": "camera pans off to the green valley below"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 37.0, "why_useful": "beautiful easy approach on a scenic trail — strong landscape/approach material"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "distant speck FIRST, grows to a near figure — a long easy approach; relaxed, NOT difficult",
+      "requested_shot_contribution": "unfulfilled — footage is beautiful and easy, does NOT convey difficulty/effort",
+      "requested_beat_contribution": "does not serve beat_difficulty; serves a scenic/approach beat strongly",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["SEMANTIC: 'has a hiker on a mountain trail' must NOT be read as 'difficulty conveyed'. Beautiful-but-wrong-purpose, valuable elsewhere.", "Shared physical footage with A06 (different requested beat)."]
+    },
+    {
+      "fixture": "A01_semantic_adversarial__A06_beautiful_but_wrong_beat",
+      "duration_s": 38.9, "band": "long",
+      "capture_context": {"shot_purpose": "convey the DIFFICULTY of the hike", "beat": "beat_difficulty"},
+      "observed_events": [
+        {"t_start_s": 0.0, "t_end_s": 20.0, "description": "gentle sunlit alpine trail, blue sky; a tiny hiker is a distant speck (SAME footage as A01)"},
+        {"t_start_s": 20.0, "t_end_s": 37.0, "description": "the hiker approaches steadily, growing from distant to near; relaxed easy walking"},
+        {"t_start_s": 37.0, "t_end_s": 38.9, "description": "camera pans to the valley below"}
+      ],
+      "useful_segments": [
+        {"t_start_s": 0.0, "t_end_s": 37.0, "why_useful": "beautiful easy approach on a scenic trail"}
+      ],
+      "dead_or_setup_segments": [],
+      "temporal_order": "distant speck first, grows nearer — long easy approach; NOT difficult",
+      "requested_shot_contribution": "unfulfilled — beautiful but does not convey the requested difficulty beat",
+      "requested_beat_contribution": "does not serve beat_difficulty as requested; strong elsewhere as scenic material",
+      "story_utility": "strong_elsewhere",
+      "ambiguity_flags": ["SHARED-SOURCE CONTROL: identical footage to A01 under the same requested beat here — raw observed events MUST match A01; only the Story-contribution framing may differ. A model giving materially different OBSERVED events for the same bytes is unstable."]
+    }
+  ]
+}

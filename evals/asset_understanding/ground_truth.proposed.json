@@ -1,6 +1,7 @@
 {
-  "_doc": "AU ground-truth annotations — AI-PROPOSED, visually grounded by contact-sheet review (NOT yet owner-approved). Each clip annotated from the actual frames, not the filename. Scoring ground truth ONLY after owner review. Timestamps are approximate (±1-2s on short clips, ±3-5s on long). shot/beat contribution reuses C4 vocabulary where it applies; story_utility ∈ {none, useful_elsewhere, strong_elsewhere}. 'prior_c4' echoes the committed C4 expectations.json for cross-reference (a different, Shot-level judgment).",
-  "annotations_version": "au.ground_truth/1-proposed",
+  "_doc": "AU ground-truth annotations — OWNER-APPROVED 2026-10-05 (visually grounded by contact-sheet review). Owner rulings applied: (1) S02_A departure begins at GEAR-UP (0s) not walk-out; (2) S02_D = departure/threshold-crossing; (3) S07_A = companionship partial + useful_elsewhere; (4) S08_D = EATING a pouch meal (filename 'cooking' is a hallucination trap, kept as-is); (5) S08_F = BREAKFAST not dinner, strong_elsewhere (filename kept as-is); (6) S04_A tiny person confirmed present. These are now the AU evaluation scoring ground truth. shot/beat contribution reuses C4 vocabulary where it applies; story_utility ∈ {none, useful_elsewhere, strong_elsewhere}.",
+  "annotations_version": "au.ground_truth/1-approved",
+  "owner_approved": {"by": "Ling", "date": "2026-10-05", "rulings": ["S02_A departure=gear-up(0s)", "S02_D=departure/threshold-crossing", "S07_A=companionship-partial+useful_elsewhere", "S08_D=eating-not-cooking", "S08_F=breakfast+strong_elsewhere", "S04_A person-present-confirmed"], "filenames": "kept as-is on purpose — fixture names encode requested capture intent, not footage content"},
   "reviewed_from": "contact sheets @ evals/assets/private_local/frames/au_contact_sheets/",
   "clips": [
     {
@@ -86,16 +87,14 @@
         {"t_start_s": 20.0, "t_end_s": 22.2, "description": "she turns back toward camera at the far end"}
       ],
       "useful_segments": [
-        {"t_start_s": 4.0, "t_end_s": 20.0, "why_useful": "complete departure action: gears up, walks out, proceeds down the hall — clean departure arc"}
+        {"t_start_s": 0.0, "t_end_s": 20.0, "why_useful": "complete departure action — gear-up is PART of the departure (owner ruling): shoulders the pack, walks out, proceeds down the hall"}
       ],
-      "dead_or_setup_segments": [
-        {"t_start_s": 0.0, "t_end_s": 4.0, "note": "putting the pack on indoors — arguably setup/preamble before the departure proper"}
-      ],
-      "temporal_order": "indoor gear-up FIRST, then walk toward camera, then depart down the corridor — a departure (outbound)",
-      "requested_shot_contribution": "fulfilled — clearly communicates departure/beginning of journey",
+      "dead_or_setup_segments": [],
+      "temporal_order": "indoor gear-up FIRST (part of the departure), then walk toward camera, then depart down the corridor — a departure (outbound) that begins at gear-up",
+      "requested_shot_contribution": "fulfilled — clearly communicates departure/beginning of journey; departure begins at gear-up (0s)",
       "requested_beat_contribution": "serves beat_departure strongly",
       "story_utility": "strong_elsewhere",
-      "ambiguity_flags": ["Where does 'departure' start — at gear-up (0s) or at the walk-out (4s)? Boundary flagged."]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): departure begins at GEAR-UP (0s), not the walk-out. The 0-4s gear-up is departure material, not setup."]
     },
     {
       "fixture": "S02_departure__D_walk_away_through_door",
@@ -116,7 +115,7 @@
       "requested_shot_contribution": "alternative_fulfilled — communicates setting-out via a doorway, though the motion is toward (not away from) camera",
       "requested_beat_contribution": "serves beat_departure as a threshold-crossing variant",
       "story_utility": "strong_elsewhere",
-      "ambiguity_flags": ["Direction nuance: she crosses a threshold then approaches camera. 'Departure' is arguable vs 'arrival/approach'. FLAGGED for owner — key temporal-direction case."]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): this is DEPARTURE / threshold-crossing. She crosses a threshold then approaches camera; scored as departure, not arrival."]
     },
     {
       "fixture": "S02_departure__G_contradictory_action",
@@ -213,7 +212,7 @@
       "requested_shot_contribution": "fulfilled — small person in large landscape (scale contrast)",
       "requested_beat_contribution": "serves beat_scale directly",
       "story_utility": "strong_elsewhere",
-      "ambiguity_flags": ["Person is very small/late; a model may miss the human entirely (evidence-limited risk on frame timeline). FLAGGED as a recall probe."]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed a tiny person DOES appear (~3.5s). GT asserts a person is present — this is a RECALL PROBE; a model that misses the human is evidence/attention-limited, not correct."]
     },
     {
       "fixture": "S06_difficulty__E_cross_river",
@@ -253,7 +252,7 @@
       "requested_shot_contribution": "partially — shows a companion resting; genuine two-person interaction is weak, mostly one reclining person + distant others",
       "requested_beat_contribution": "loosely serves beat_companion (people present) but not a strong interaction moment",
       "story_utility": "useful_elsewhere",
-      "ambiguity_flags": ["OVER-SEGMENTATION PROBE (long static front): 0-55s is ONE continuous resting state, not many events.", "MULTI-EVENT RECALL PROBE: the late appearance of other hikers (~55s) is a distinct second event a model must RECALL despite the long quiet lead-in."]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): companionship PARTIAL + story_utility useful_elsewhere (mostly one reclining person; distant others appear late — not a strong two-person interaction).", "OVER-SEGMENTATION PROBE (long static front): 0-55s is ONE continuous resting state, not many events.", "MULTI-EVENT RECALL PROBE: the late appearance of other hikers (~55s) is a distinct second event a model must RECALL despite the long quiet lead-in."]
     },
     {
       "fixture": "S07_companionship__E_wrong_people",
@@ -294,7 +293,7 @@
       "requested_shot_contribution": "fulfilled — a calm end-of-day eating moment conveys the winding-down mood",
       "requested_beat_contribution": "serves beat_endofday (settling, the day ending)",
       "story_utility": "strong_elsewhere",
-      "ambiguity_flags": ["HALLUCINATION TRAP: filename says 'cooking' but they are EATING a pre-made pouch meal. A model that says 'cooking dinner' is reading the label, not the footage.", "OVER-SEGMENTATION PROBE: 90s of sustained eating is NOT dozens of events.", "SEGMENTATION PROBE: can a model find the dead hand-close-up (~35s) and the end selfie?"]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed EATING a pre-made pouch meal, NOT cooking. Filename kept as-is on purpose (it encodes the requested intent, not the content) — a model that says 'cooking' is reading the label and scores as a hallucination.", "OVER-SEGMENTATION PROBE: 90s of sustained eating is NOT dozens of events.", "SEGMENTATION PROBE: can a model find the dead hand-close-up (~35s) and the end selfie?"]
     },
     {
       "fixture": "S08_end_of_day__F_nice_dinner_window_view",
@@ -313,7 +312,7 @@
       "requested_shot_contribution": "fulfilled for mood (a calm meal with a view) — reads as a quiet moment, though the view is the real payoff",
       "requested_beat_contribution": "serves beat_endofday; also strong place/establishing material",
       "story_utility": "strong_elsewhere",
-      "ambiguity_flags": ["Food looks like breakfast muesli, not 'dinner'. A model over-indexing on 'dinner' may mislabel the meal. Beauty is in the window view, not the food."]
+      "ambiguity_flags": ["RESOLVED (owner 2026-10-05): confirmed BREAKFAST (muesli), not dinner; filename kept as-is (requested intent, not content). story_utility strong_elsewhere stands — the beauty/payoff is the window vista, not the food."]
     },
     {
       "fixture": "A01_semantic_adversarial__A01_hiking_but_not_difficulty",
