@@ -1,0 +1,1003 @@
+{
+  "T01_technical_controls__A_clean_4s": {
+    "band": "short",
+    "dur_s": 6.5,
+    "observed": {
+      "summary": "A rust/terracotta-colored Osprey large hiking backpack (appears to be an Aura or Ariel model) sits upright on a hardwood floor in a living room, with a rain cover loosely draped and bunched over the top. The pack is fully loaded and packed, with all straps and buckles visible. A matching rust bean bag chair sits behind it against a green sofa. The scene is static throughout the entire ~6.5-second clip.",
+      "subjects": [
+        "Osprey hiking backpack (large, rust/terracotta color)",
+        "rain cover (loosely draped on top of pack)",
+        "bean bag chair",
+        "green sofa"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.533,
+          "description": "Packed Osprey backpack with rain cover bunched on top sits stationary on the living room floor; camera is static and the scene does not change throughout the clip."
+        }
+      ],
+      "temporal_order_note": "The scene is entirely static from first to last frame \u2014 no movement, no change in subject state, no camera motion. The pack appears the same at the end as at the start.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.533,
+          "why_useful": "Full clip is a clean, static, well-lit close-up of the packed Osprey backpack; any sub-segment provides a usable still-like shot of the gear subject."
+        },
+        {
+          "t_start_s": 1.5,
+          "t_end_s": 5.5,
+          "why_useful": "Mid-clip window avoids any potential camera settle at start/end; steady, in-focus, well-exposed view of the backpack front and rain cover."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The footage fulfils the requested Shot purpose well: the backpack subject is clearly framed, the camera is static, the shot is held for the full clip duration (~6.5 s, exceeding the 4 s target), and exposure and focus are consistent. The rain cover is loosely bunched rather than neatly stowed, which is a minor compositional note but does not undermine the clean gear shot.",
+      "requested_beat_contribution": "Delivers a clean, usable static shot of the Osprey backpack as a gear/object beat. The fully packed pack with rain cover visible communicates trip-readiness and could serve as an establishing gear shot for a travel or hiking story."
+    }
+  },
+  "T01_technical_controls__I_camera_points_away": {
+    "band": "short",
+    "dur_s": 2.0,
+    "observed": {
+      "summary": "A large red Osprey Aura AG 50 hiking backpack sits on a chair in a home living room. The camera slowly tilts/pans upward and back over approximately 2 seconds, starting with a close-up of the backpack dominating the frame and gradually revealing more of the room \u2014 a glass-door display cabinet filled with figurines and collectibles, a flat-screen TV on a media unit, and a window with an urban outdoor view.",
+      "subjects": [
+        "Osprey Aura AG 50 hiking backpack (red)",
+        "glass display cabinet with figurines/collectibles",
+        "flat-screen TV and media unit"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 0.5,
+          "description": "Backpack fills most of the frame in close-up; camera is low and close, showing the back panel, straps, and buckles of the red Osprey pack on a chair."
+        },
+        {
+          "t_start_s": 0.5,
+          "t_end_s": 2.0,
+          "description": "Camera gradually tilts upward and pulls back, progressively revealing the living room background \u2014 the glass display cabinet, TV, and window \u2014 while the backpack recedes toward the bottom of the frame."
+        }
+      ],
+      "temporal_order_note": "The clip moves from a tight close-up of the backpack (backpack-first reveal) to a wider view of the room; the backpack is the initial subject and the room context is revealed last. The camera is not static \u2014 it tilts/pans upward throughout.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 0.5,
+          "why_useful": "Closest, clearest view of the backpack with brand/model text visible \u2014 best candidate for a clean object identification shot."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.0,
+          "why_useful": "Full clip showing the backpack in its home environment; usable as a contextual establishing shot of packed gear before a trip."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The shot does not fully meet the requested purpose. The camera is not static \u2014 it tilts upward throughout the clip \u2014 and the backpack is never held in a clean, steady, well-framed composition for a sustained period. The closest frames (0\u20130.5s) show the pack clearly but are very tight and the motion begins immediately.",
+      "requested_beat_contribution": "The clip does provide a recognisable view of the subject (the packed backpack) and could serve as a usable object shot with caveats about camera movement. The early frames contain the clearest, most stable view of the pack."
+    }
+  },
+  "S01_backpack_static__A_exact_good": {
+    "band": "short",
+    "dur_s": 6.5,
+    "observed": {
+      "summary": "A rust/terracotta-colored Osprey hiking backpack (appears to be an Aura or Ariel model) sits upright on a hardwood floor in a living room, with a rain cover loosely draped and bunched over the top. The pack is fully loaded and all straps/buckles are visible. The scene is static throughout the entire clip \u2014 the pack does not move and the camera holds a consistent angle.",
+      "subjects": [
+        "Osprey hiking backpack (loaded, with rain cover)",
+        "living room floor"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.533,
+          "description": "Loaded Osprey backpack with rain cover bunched at the top sits stationary on a hardwood floor in front of a green sofa. Camera holds a steady low-angle side view throughout. No movement occurs."
+        }
+      ],
+      "temporal_order_note": "The clip is entirely static \u2014 the backpack and camera position remain unchanged from first to last frame. No progression or change occurs.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.533,
+          "why_useful": "Complete, uninterrupted static shot of the loaded backpack; any sub-segment provides a clean still of the gear object."
+        },
+        {
+          "t_start_s": 1.5,
+          "t_end_s": 5.0,
+          "why_useful": "Mid-clip window avoids any potential micro-shake at clip start/end; pack is clearly framed with brand label and rain cover visible."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "Footage directly fulfils the requested shot purpose: the backpack is stationary, clearly framed, and the camera is held steady for the full clip duration (~6.5 s, exceeding the 4 s target). The rain cover is loosely bunched at the top rather than neatly stowed, which is a minor aesthetic note but does not undermine the gear-establishment purpose.",
+      "requested_beat_contribution": "Serves the 'establish the gear/object' beat well \u2014 the loaded Osprey pack is the sole subject, fully visible with brand markings, straps, and buckles readable, conveying trip-readiness."
+    }
+  },
+  "S01_backpack_static__F_alternative_good": {
+    "band": "short",
+    "dur_s": 15.7,
+    "observed": {
+      "summary": "A slow pan shot starting on two grey Durston hiking backpacks and trekking poles resting against a stone wall with red geraniums, in front of a distinctive pink church, then gradually tilting/panning up and away to reveal the full church facade, the surrounding alpine village square, and finally settling on a stone building across the parking area.",
+      "subjects": [
+        "Durston hiking backpacks (two, grey)",
+        "trekking poles (two)",
+        "pink church with granite trim",
+        "alpine village square",
+        "stone village building"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 3.5,
+          "description": "Camera holds close on two grey Durston backpacks and trekking poles leaning against a stone wall/railing, red geraniums visible beside them, pink church entrance in background."
+        },
+        {
+          "t_start_s": 3.5,
+          "t_end_s": 8.5,
+          "description": "Camera gradually tilts and pulls back, backpacks recede to bottom of frame, revealing more of the pink church facade \u2014 arched doorway, granite pilasters, cross, date inscription (~1888)."
+        },
+        {
+          "t_start_s": 8.5,
+          "t_end_s": 12.0,
+          "description": "Camera continues panning/tilting to reveal the full church including bell tower and steeple; backpacks and poles drop out of frame entirely; alpine forested hillside visible behind church."
+        },
+        {
+          "t_start_s": 12.0,
+          "t_end_s": 15.7,
+          "description": "Camera pans further right and away from the church, framing the adjacent stone village building with parked cars (orange Subaru, white Renault van, grey VW Golf) in the village square; a person briefly visible near the stone building entrance."
+        }
+      ],
+      "temporal_order_note": "The clip begins gear-first (backpacks fill the foreground) and progressively reveals the wider village context \u2014 a gear-to-location reveal direction. The backpacks are prominent only in the first ~3\u20134 seconds; the remainder is a location/environment pan.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 3.5,
+          "why_useful": "Closest to a static backpack shot \u2014 both packs and poles are clearly framed with the pink church as backdrop; the most gear-focused portion of the clip."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 8.5,
+          "why_useful": "Complete gear-to-church reveal: starts on backpacks and opens up to the full pink church facade \u2014 usable as an establishing sequence linking gear to location."
+        },
+        {
+          "t_start_s": 8.5,
+          "t_end_s": 15.7,
+          "why_useful": "Clean village-square environment footage: pink church with steeple, alpine backdrop, stone buildings \u2014 useful as a location/arrival establishing shot independent of the gear."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The clip does not fulfil the requested static backpack shot. The camera begins on the backpacks but immediately starts panning away; there is no sustained steady hold on the gear. Only the first ~3 seconds approximate the requested framing before the shot becomes a wide village pan.",
+      "requested_beat_contribution": "The opening frames do establish the hiking gear (Durston packs, trekking poles) as the journey's key objects, partially serving the 'establish the gear/object' beat purpose. However, the pan away from the gear means the beat is only weakly supported; the clip is more useful as a location-arrival or village-context beat."
+    }
+  },
+  "S02_departure__A_exact_good": {
+    "band": "short-ish (long for its scenario)",
+    "dur_s": 22.2,
+    "observed": {
+      "summary": "A woman wearing a cream button-down dress and green slides, carrying a large red Osprey hiking backpack, moves from her apartment (daytime, then transitioning to night) through a building corridor, ending by walking toward the camera down a hotel hallway.",
+      "subjects": [
+        "woman with glasses",
+        "large red Osprey hiking backpack"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 3.0,
+          "description": "Woman stands in a daylit apartment living room, holding the large red backpack on one shoulder, looking down and adjusting straps."
+        },
+        {
+          "t_start_s": 3.0,
+          "t_end_s": 7.5,
+          "description": "Lighting shifts to evening/night; woman continues adjusting and settling the backpack on her back in the apartment, moving and turning while straps are handled."
+        },
+        {
+          "t_start_s": 7.5,
+          "t_end_s": 11.0,
+          "description": "Camera moves close to the woman's face and then to the backpack in a corridor/transitional space outside the apartment, showing close-up details of the pack and her profile."
+        },
+        {
+          "t_start_s": 11.0,
+          "t_end_s": 14.5,
+          "description": "Woman is seen from behind walking away down a hotel corridor, backpack fully on, moving steadily away from camera."
+        },
+        {
+          "t_start_s": 14.5,
+          "t_end_s": 22.2,
+          "description": "Woman turns and walks toward the camera down the hotel hallway, face visible, backpack straps held, striding forward until she passes close to the camera."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from apartment departure preparation (day\u2192night) through a transitional corridor, then culminates in the woman walking toward the camera down a hotel hallway \u2014 the direction reverses from away-from-camera to toward-camera in the final segment.",
+      "useful_segments": [
+        {
+          "t_start_s": 14.5,
+          "t_end_s": 22.2,
+          "why_useful": "Complete action of woman walking toward camera down hotel hallway with backpack \u2014 directly matches the requested shot of departing toward camera."
+        },
+        {
+          "t_start_s": 11.0,
+          "t_end_s": 14.5,
+          "why_useful": "Woman walking away down corridor with full backpack visible \u2014 useful as a departure/leaving shot from behind."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 3.0,
+          "why_useful": "Daytime apartment scene with backpack being shouldered \u2014 useful as a pre-departure / packing-up establishing moment."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The final segment (\u224814.5\u201322s) directly fulfills the requested shot: the woman walks toward a static camera down a hallway with her large backpack, communicating departure. The earlier apartment and away-walking segments do not fulfill the shot but provide complementary departure context.",
+      "requested_beat_contribution": "The Moment strongly supports the departure beat. It shows the full arc of leaving \u2014 backpack on in the apartment, transitioning through corridors, and finally striding toward camera \u2014 establishing the beginning of the journey both visually and narratively."
+    }
+  },
+  "S02_departure__D_walk_away_through_door": {
+    "band": "short",
+    "dur_s": 9.7,
+    "observed": {
+      "summary": "A woman carrying a large red hiking backpack exits a hotel room, closes the door behind her, and walks down the hotel corridor toward the camera for approximately 9.7 seconds.",
+      "subjects": [
+        "woman with large red hiking backpack",
+        "hotel room door",
+        "hotel corridor"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 0.843,
+          "description": "Camera shows a closed dark hotel room door from the corridor; no person visible yet."
+        },
+        {
+          "t_start_s": 0.843,
+          "t_end_s": 2.109,
+          "description": "Door opens and the woman \u2014 wearing a beige button-down dress, glasses, and green sandals, with a large red Osprey backpack \u2014 appears in the doorway, holding the door handle and stepping out from the room."
+        },
+        {
+          "t_start_s": 2.109,
+          "t_end_s": 3.374,
+          "description": "Woman fully exits the room and pulls the door closed behind her while turning to face the corridor."
+        },
+        {
+          "t_start_s": 3.374,
+          "t_end_s": 9.7,
+          "description": "Woman walks steadily toward the camera down the hotel corridor, filling the frame progressively as she approaches; her expression is neutral to focused."
+        }
+      ],
+      "temporal_order_note": "Action moves from closed door (departure point) \u2192 door opening and woman emerging from room \u2192 door closing \u2192 sustained walk toward camera. The reveal direction is room interior to corridor, then subject approaching camera \u2014 a clear departure sequence.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.843,
+          "t_end_s": 3.374,
+          "why_useful": "Complete action of woman exiting the room and closing the door \u2014 a self-contained departure beat."
+        },
+        {
+          "t_start_s": 3.374,
+          "t_end_s": 9.7,
+          "why_useful": "Sustained walk toward camera down corridor with backpack fully visible \u2014 strong travel/departure walking shot."
+        },
+        {
+          "t_start_s": 0.843,
+          "t_end_s": 9.7,
+          "why_useful": "Full continuous sequence from door opening through corridor walk \u2014 covers the entire departure action in one unbroken take."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "Footage directly fulfils the requested Shot purpose: the subject exits the room with a loaded backpack and walks toward the camera down the corridor for the full clip duration. The camera is static and the walk is sustained and clear, matching the instruction closely.",
+      "requested_beat_contribution": "Strongly serves the 'beginning of the journey' beat \u2014 the room door opening, the loaded backpack, and the purposeful corridor walk together communicate departure and the start of travel."
+    }
+  },
+  "S02_departure__G_contradictory_action": {
+    "band": "short",
+    "dur_s": 14.3,
+    "observed": {
+      "summary": "A woman in a beige knit cardigan dress and green platform sandals picks up a large red hiking backpack from a chair, puts it on, moves around the room testing the fit, then sets it back down \u2014 all in a living room with a large arched floor mirror.",
+      "subjects": [
+        "woman",
+        "large red hiking backpack",
+        "arched floor mirror",
+        "chair"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.5,
+          "description": "Woman stands in profile near the chair, backpack resting on the chair beside her; she is stationary, looking forward."
+        },
+        {
+          "t_start_s": 2.5,
+          "t_end_s": 5.5,
+          "description": "Woman lifts the backpack off the chair and begins putting it on, bending forward and slinging straps over her shoulders."
+        },
+        {
+          "t_start_s": 5.5,
+          "t_end_s": 9.5,
+          "description": "Woman stands upright with the backpack fully on her back, adjusting straps; she turns and walks toward the mirror, then pivots back \u2014 moving around the room with the pack on."
+        },
+        {
+          "t_start_s": 9.5,
+          "t_end_s": 12.5,
+          "description": "Woman continues moving and rotating in place with the backpack on, adjusting straps and looking down; at one point a smaller red bag is also visible at her hip."
+        },
+        {
+          "t_start_s": 12.5,
+          "t_end_s": 14.3,
+          "description": "Woman removes the backpack and sets it back down on the chair, returning to a standing position beside it."
+        }
+      ],
+      "temporal_order_note": "The clip begins with the backpack off (on the chair) and the woman standing still; she then puts it on, moves around the room, and ends by taking it off and placing it back on the chair \u2014 a full on-and-off cycle, not a departure walk toward camera.",
+      "useful_segments": [
+        {
+          "t_start_s": 2.5,
+          "t_end_s": 6.5,
+          "why_useful": "Complete action of picking up and putting on the large backpack \u2014 a clear gear-up / pre-departure gesture."
+        },
+        {
+          "t_start_s": 6.5,
+          "t_end_s": 10.5,
+          "why_useful": "Woman fully loaded with backpack, moving and turning in the room \u2014 shows the pack worn and the contrast of homey outfit vs. large travel pack."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The footage does not fulfil the requested Shot. The instruction called for walking toward the camera down a hallway as a departure move; instead the woman puts on a backpack, moves around a living room, and then removes it. There is no hallway, no camera-approach walk, and no departure exit.",
+      "requested_beat_contribution": "The clip contains thematic material relevant to a departure beat \u2014 a large travel backpack being loaded onto the subject in a home setting \u2014 but the action is preparatory/exploratory rather than an actual departure. It could support a 'getting ready to leave' moment but does not deliver the departure itself."
+    }
+  },
+  "S03_scenic_reveal__D_reverse_reveal__take1": {
+    "band": "short",
+    "dur_s": 15.0,
+    "observed": {
+      "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+      "subjects": [
+        "male hiker with trekking poles and camera",
+        "alpine mountain massif with glacier",
+        "larch-lined mountain trail"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 7.8,
+          "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+        },
+        {
+          "t_start_s": 7.8,
+          "t_end_s": 9.1,
+          "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+        },
+        {
+          "t_start_s": 9.1,
+          "t_end_s": 14.97,
+          "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+        }
+      ],
+      "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 7.8,
+          "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+        },
+        {
+          "t_start_s": 9.1,
+          "t_end_s": 14.97,
+          "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+        },
+        {
+          "t_start_s": 7.8,
+          "t_end_s": 14.97,
+          "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+      "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+    }
+  },
+  "S05_trail_progression__A_follow_behind": {
+    "band": "medium",
+    "dur_s": 19.6,
+    "observed": {
+      "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+      "subjects": [
+        "woman hiker with trekking poles",
+        "mountain trail (gravel path)",
+        "larch forest",
+        "alpine massif / glacier peaks"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 14.0,
+          "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+        },
+        {
+          "t_start_s": 14.0,
+          "t_end_s": 18.0,
+          "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+        },
+        {
+          "t_start_s": 18.0,
+          "t_end_s": 19.6,
+          "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 18.0,
+          "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+        },
+        {
+          "t_start_s": 8.0,
+          "t_end_s": 18.0,
+          "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+        },
+        {
+          "t_start_s": 17.0,
+          "t_end_s": 19.6,
+          "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+      "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+    }
+  },
+  "A01_semantic_adversarial__A03_backpack_but_arrival_not_departure": {
+    "band": "short",
+    "dur_s": 15.1,
+    "observed": {
+      "summary": "A woman carrying a large red Osprey backpack walks down a hotel corridor, unlocks and enters a hotel room, moves through the room, sets the backpack down on a chair, and then stands in the room without the pack.",
+      "subjects": [
+        "woman",
+        "large red Osprey backpack",
+        "hotel corridor",
+        "hotel room"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.5,
+          "description": "Woman with large red Osprey backpack walks away from camera down a long hotel corridor toward an EXIT sign, passing multiple room doors."
+        },
+        {
+          "t_start_s": 6.5,
+          "t_end_s": 9.2,
+          "description": "Woman reaches a hotel room door, uses keycard/handle to unlock and open it, then steps inside."
+        },
+        {
+          "t_start_s": 9.2,
+          "t_end_s": 11.5,
+          "description": "Woman moves through the hotel room interior (still wearing the backpack), pausing near a coat rack and counter area; room interior with daylight window visible."
+        },
+        {
+          "t_start_s": 11.5,
+          "t_end_s": 13.5,
+          "description": "Woman sets the large backpack down onto a chair next to a dining table, removing it from her back."
+        },
+        {
+          "t_start_s": 13.5,
+          "t_end_s": 15.1,
+          "description": "Woman stands in the room without the backpack, seen in profile near the dining table with the backpack now resting on the chair behind her."
+        }
+      ],
+      "temporal_order_note": "The clip moves from corridor (departure-suggestive walk away from camera) to arrival: the woman enters the room, sets down her pack, and ends standing still without it. The direction is arrival/settling-in, not departure \u2014 the backpack goes from being worn to being put down.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.5,
+          "why_useful": "Clean continuous shot of woman walking away down hotel corridor with large travel backpack \u2014 strong visual of a traveler in motion, corridor receding into distance."
+        },
+        {
+          "t_start_s": 6.5,
+          "t_end_s": 9.5,
+          "why_useful": "Complete action of unlocking and entering the hotel room \u2014 a clear arrival beat."
+        },
+        {
+          "t_start_s": 11.5,
+          "t_end_s": 13.5,
+          "why_useful": "Woman sets down the backpack \u2014 a settling-in / arrival completion moment."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The corridor walk (0\u20136.5s) superficially resembles a departure shot \u2014 person walking away with a loaded travel pack \u2014 but the full clip reveals this is an ARRIVAL: she walks toward and enters a room, then removes her pack. The footage does not communicate departure; it communicates arrival/settling-in. The corridor segment alone could be repurposed to suggest departure if cut before the door entry, but as captured the action contradicts the requested departure purpose.",
+      "requested_beat_contribution": "The clip does not serve the 'beginning of journey' beat as shot \u2014 the journey appears to be ending (arriving at the room, setting down the pack). The corridor walk segment has visual energy consistent with travel/movement and could weakly suggest a journey in progress, but the overall arc is arrival, not departure."
+    }
+  },
+  "S04_human_scale__A_exact_small_person_landscape__take1": {
+    "band": "medium",
+    "dur_s": 6.1,
+    "observed": {
+      "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+      "subjects": [
+        "lone hiker with trekking poles",
+        "alpine valley and rocky ridgeline",
+        "drifting low clouds",
+        "wildflower-covered foreground slope"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.5,
+          "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+        },
+        {
+          "t_start_s": 2.5,
+          "t_end_s": 6.1,
+          "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+        }
+      ],
+      "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.5,
+          "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+        },
+        {
+          "t_start_s": 2.5,
+          "t_end_s": 6.1,
+          "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.1,
+          "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+      "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+    }
+  },
+  "S06_difficulty__E_cross_river": {
+    "band": "long",
+    "dur_s": 38.0,
+    "observed": {
+      "summary": "A solo backpacker wades barefoot across a wide, fast-flowing glacial river in an Icelandic highland valley, using two trekking poles for balance, while a second hiker waits on the far bank. The crossing takes roughly 38 seconds and is set against a dramatic backdrop of snow-patched green mountains.",
+      "subjects": [
+        "primary backpacker (blue jacket, large pack, trekking poles, barefoot)",
+        "second hiker (waiting on far bank)",
+        "glacial river",
+        "Icelandic highland mountains"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 3.3,
+          "description": "Backpacker stands at the near rocky bank, one foot just entering the water, beginning the ford with poles planted for stability."
+        },
+        {
+          "t_start_s": 3.3,
+          "t_end_s": 22.0,
+          "description": "Backpacker wades steadily through the deepest mid-channel section, water rising to shin/knee level; body leans forward against current, poles braced; second hiker becomes visible waiting on the far gravel bar."
+        },
+        {
+          "t_start_s": 22.0,
+          "t_end_s": 37.97,
+          "description": "Backpacker reaches the shallower far channel and gravel bar, water dropping to ankle depth; final steps onto dry ground as second hiker stands nearby."
+        }
+      ],
+      "temporal_order_note": "Direction is left-bank entry to right-bank exit \u2014 the hiker moves away from camera throughout, progressing from deep mid-river struggle to arrival on the far shore. The crossing goes from most difficult (deepest water, most visible effort) to easiest (shallow exit), so the strongest hardship imagery is in the first two-thirds of the clip.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 14.0,
+          "why_useful": "Complete entry and deepest-water phase of the crossing; shows barefoot wading, pole-bracing effort, and the scale of the river against the hiker \u2014 strongest evidence of physical difficulty."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 37.97,
+          "why_useful": "Full unbroken crossing from first step to far-bank arrival; captures the entire arc of the challenge with the spectacular mountain backdrop."
+        },
+        {
+          "t_start_s": 14.0,
+          "t_end_s": 37.97,
+          "why_useful": "Second half shows the hiker pushing through to completion with the second hiker visible waiting \u2014 conveys perseverance and the social context of the group crossing."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage directly serves the requested Shot purpose. It shows unambiguous physical hardship \u2014 barefoot glacial river crossing, knee-deep fast water, heavy pack, trekking poles needed for balance \u2014 all clear visual evidence of effort and difficulty on the hike.",
+      "requested_beat_contribution": "Strong contribution to the 'Show the effort it took' beat. The river crossing is a classic, visceral hardship moment: cold water, unstable footing, heavy load, and the vulnerability of bare feet all communicate the toll of the trek without narration."
+    }
+  },
+  "S07_companionship__A_natural_conversation": {
+    "band": "long",
+    "dur_s": 95.3,
+    "observed": {
+      "summary": "Two hikers rest on a steep volcanic hillside during what appears to be a group trek. One person (blue jacket, brown bucket hat) sits upright while a companion (red jacket, pink/red beanie, glasses) lies on the slope. The sitting person tends to the lying person mid-clip, then both end up lying flat as additional hikers from the group pass by descending/ascending the hill. The clip ends with a close-up POV of the lying person's face looking up at the sky.",
+      "subjects": [
+        "Person in blue jacket and brown bucket hat (sitting/tending)",
+        "Person in red jacket and pink beanie with glasses (lying on slope)",
+        "Trekking poles",
+        "Group of hikers with large backpacks passing on the hillside"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 12.0,
+          "description": "Person in blue jacket sits upright on the hillside gazing into the distance; companion in red jacket lies flat beside them, partially visible. Both are stationary and relaxed."
+        },
+        {
+          "t_start_s": 12.0,
+          "t_end_s": 28.0,
+          "description": "Person in blue jacket turns attention downward toward the lying companion, leaning over and appearing to check on or interact with them; the lying person's face becomes visible \u2014 smiling, wearing glasses and pink beanie."
+        },
+        {
+          "t_start_s": 28.0,
+          "t_end_s": 50.0,
+          "description": "Both people settle into lying flat on the slope side by side, resting. The person in blue jacket looks upward; the companion in red jacket lies still. The sitting person occasionally shifts posture."
+        },
+        {
+          "t_start_s": 50.0,
+          "t_end_s": 78.0,
+          "description": "Other hikers from the group (carrying large backpacks, using trekking poles) appear on the hillside above and pass by, observing or pausing near the two resting hikers."
+        },
+        {
+          "t_start_s": 78.0,
+          "t_end_s": 91.0,
+          "description": "The person in blue jacket sits up and leans over the companion again while group members continue moving on the slope behind them."
+        },
+        {
+          "t_start_s": 91.0,
+          "t_end_s": 95.0,
+          "description": "Close-up POV shot of the companion's face (pink beanie, glasses) looking upward at the sky from ground level \u2014 likely a self-held or ground-placed camera angle."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from a quiet two-person rest (sitting + lying) to an intimate moment of one tending to the other, then to both lying flat together, and finally to the wider group arriving and passing \u2014 ending with a playful close-up of the lying person's face. The arc moves from stillness \u2192 interaction \u2192 group context \u2192 intimate close-up.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 28.0,
+          "why_useful": "Clean two-person composition: one sitting contemplatively, one lying \u2014 establishes companionship and rest on the dramatic volcanic hillside."
+        },
+        {
+          "t_start_s": 12.0,
+          "t_end_s": 28.0,
+          "why_useful": "Genuine interaction moment \u2014 blue-jacket person leans over smiling companion; candid and warm, strong interpersonal connection visible."
+        },
+        {
+          "t_start_s": 50.0,
+          "t_end_s": 78.0,
+          "why_useful": "Group hikers passing in background while the two rest in foreground creates a layered, contextual scene showing the pair within the larger trek group."
+        },
+        {
+          "t_start_s": 91.0,
+          "t_end_s": 95.0,
+          "why_useful": "Playful close-up POV of companion's face looking skyward \u2014 charming, character-revealing end beat."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage does capture authentic interaction between two companions resting together on a hillside \u2014 the tending gesture, side-by-side lying, and smiling close-up all convey genuine companionship. However, the clip is longer than the 5-second target and the most compelling interaction moments are brief and embedded within a longer rest sequence. The shot partially fulfils the purpose of conveying genuine companionship, though it is not a tight, composed 'together' shot.",
+      "requested_beat_contribution": "Directly serves the 'people you shared it with' beat \u2014 the clip documents a candid, unguarded rest moment between two companions on a challenging hike, with a warm interaction and a playful close-up that humanise the relationship. The passing group members add context showing these two as part of a shared adventure."
+    }
+  },
+  "S07_companionship__E_wrong_people": {
+    "band": "medium",
+    "dur_s": 9.5,
+    "observed": {
+      "summary": "A group of roughly six hikers with large colorful backpacks (green, red, orange pack covers) ascends a steep dark volcanic rock face in an Icelandic highland landscape. The camera is stationary, filming from below as the group climbs upward and away. Over the ~9.5 seconds, the lead hiker (orange pack) progressively moves toward and then over the ridgeline, while the rear hikers (green packs) steadily work their way up the lower portion of the rock. By the final frames, the group has thinned to three visible hikers still on the rock face, with the lead having crested the ridge.",
+      "subjects": [
+        "group of hikers (approx. 6 people)",
+        "colorful backpack rain covers (green, red, orange)",
+        "steep dark volcanic rock face",
+        "snow-patched Icelandic highland mountains (background)"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 9.5,
+          "description": "Entire group climbs continuously up a steep dark volcanic rock slope, moving from lower-left to upper-right toward the ridgeline. Lead hiker with orange pack is already near the top at the start and crests the ridge mid-clip; rear hikers with green packs ascend the lower section throughout."
+        }
+      ],
+      "temporal_order_note": "The clip shows a single sustained upward progression: the lead hiker (orange pack) starts near the top and disappears over the ridge around mid-clip, while the trailing hikers (green packs) advance steadily upward from the lower rock face. Direction is consistently bottom-to-top / departure away from camera.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 9.5,
+          "why_useful": "Complete action of the full group ascending the volcanic rock face \u2014 colorful packs against dark rock and snowy mountains provide strong visual contrast; the procession of hikers moving upward is a coherent, visually compelling sequence."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 4.5,
+          "why_useful": "Early portion with the most hikers visible simultaneously, including the lead hiker near the ridgeline and the full spread of the group on the slope \u2014 best for conveying group scale and effort."
+        },
+        {
+          "t_start_s": 5.5,
+          "t_end_s": 9.5,
+          "why_useful": "Later portion where the background mountains become more prominent as the group thins; cleaner composition with fewer hikers and more landscape visible \u2014 useful for landscape-forward storytelling."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The footage does not fulfil the requested Shot. No authentic face-to-face or side-by-side companionship interaction is visible \u2014 all hikers are seen only from behind, spread out in a climbing line, with no interpersonal interaction captured. The shot purpose (genuine companionship between people) is not served.",
+      "requested_beat_contribution": "The clip does contribute weakly to the 'people you shared it with' beat by showing the group hiking together in a challenging environment, implying shared experience and collective effort. However, the lack of any visible faces or interaction limits its emotional resonance for a companionship-focused beat."
+    }
+  },
+  "S08_end_of_day__D_cooking_dinner": {
+    "band": "long (longest)",
+    "dur_s": 154.1,
+    "observed": {
+      "summary": "Two people in outdoor/hiking gear shelter under a translucent canopy and eat freeze-dried backpacking meals (Refuel Chicken Teriyaki Rice) from collapsible camp bowls. The man pours food from the pouch into a bowl early on; the woman in an orange cap is the primary subject for most of the clip, eating with camp utensils, opening a secondary snack packet (Maishine hot-and-spicy), and continuing to eat. The clip ends with a close selfie-style shot of the woman's face.",
+      "subjects": [
+        "Woman in orange cap and blue Arc'teryx jacket",
+        "Man in Arc'teryx puffer hat and red jacket",
+        "Refuel Chicken Teriyaki Rice freeze-dried meal pouch",
+        "Collapsible camp bowls (orange and teal)",
+        "Maishine hot-and-spicy snack packet",
+        "Camp spork/utensils"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 6.7,
+          "description": "Camera is tilted/unstable; partial view of the two people seated under a canopy \u2014 woman's back and the man partially visible, meal not yet in frame."
+        },
+        {
+          "t_start_s": 6.7,
+          "t_end_s": 20.1,
+          "description": "Man pours contents of the Refuel Chicken Teriyaki Rice pouch into an orange collapsible camp bowl while leaning over toward the woman; both are focused on the food."
+        },
+        {
+          "t_start_s": 20.1,
+          "t_end_s": 53.6,
+          "description": "Both subjects sit together at the table; woman begins eating from the orange bowl with a camp spork, taking multiple bites. Man is present but less active on camera."
+        },
+        {
+          "t_start_s": 53.6,
+          "t_end_s": 80.4,
+          "description": "Camera focuses on the food bowls on the table (orange and teal bowls visible, both containing rice dishes); woman continues eating, scooping and bringing spork to mouth."
+        },
+        {
+          "t_start_s": 80.4,
+          "t_end_s": 107.2,
+          "description": "Woman opens a small Maishine hot-and-spicy snack packet, examines it, and adds or eats from it alongside the main meal."
+        },
+        {
+          "t_start_s": 107.2,
+          "t_end_s": 147.4,
+          "description": "Woman continues eating from the bowl with a spork, taking multiple bites; close-up shots show her chewing and looking down at the food. A second teal bowl with a different dish appears."
+        },
+        {
+          "t_start_s": 147.4,
+          "t_end_s": 154.1,
+          "description": "Clip ends with a close selfie-style shot of the woman's face looking directly at the camera with a neutral/tired expression."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from food preparation (pouring the freeze-dried meal) through sustained eating by the woman, with a brief snack-packet interlude, and concludes with a direct-to-camera face shot \u2014 moving from shared meal activity to a solo close-up.",
+      "useful_segments": [
+        {
+          "t_start_s": 6.7,
+          "t_end_s": 26.8,
+          "why_useful": "Complete action of man pouring freeze-dried meal into bowl \u2014 clear product reveal and camp-meal setup moment."
+        },
+        {
+          "t_start_s": 33.5,
+          "t_end_s": 73.7,
+          "why_useful": "Sustained eating sequence with both subjects at table; natural, candid camp-meal atmosphere with good framing of faces and food."
+        },
+        {
+          "t_start_s": 107.2,
+          "t_end_s": 147.4,
+          "why_useful": "Close-up eating shots of the woman \u2014 expressive, intimate frames showing the meal experience in detail."
+        },
+        {
+          "t_start_s": 147.4,
+          "t_end_s": 154.1,
+          "why_useful": "Direct-to-camera face close-up; could serve as a reaction or end-of-meal beat."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "useful_elsewhere",
+      "requested_shot_contribution": "The footage does not convey a quiet, winding-down end-of-day mood. It shows an active, engaged meal \u2014 pouring food, eating, opening snack packets \u2014 which is energetic and task-focused rather than calm or settling. The requested shot purpose is not fulfilled.",
+      "requested_beat_contribution": "The meal scene has some thematic adjacency to 'settling, the day ending' (sheltering under a canopy, eating camp food suggests a rest stop or end of a hiking day), but the energy and activity level of the clip \u2014 active eating, snack opening, close-up reactions \u2014 does not convey the quiet winding-down mood the beat calls for. It could support the beat as a 'refueling before rest' transitional moment but does not directly embody the settling/ending tone."
+    }
+  },
+  "S08_end_of_day__F_nice_dinner_window_view": {
+    "band": "medium",
+    "dur_s": 9.1,
+    "observed": {
+      "summary": "A clip that begins with a close-up of a breakfast plate (muesli bowl, two boiled eggs, a seeded bread roll) on a restaurant table with a dining companion visible in the background, then pans away from the food across the restaurant interior and progressively reveals a dramatic alpine mountain panorama through a large panoramic window, ending on a sustained wide view of snow-capped peaks, glacier, and pine forest.",
+      "subjects": [
+        "breakfast plate with muesli bowl, boiled eggs, and seeded roll",
+        "alpine mountain panorama (snow-capped peaks, glacier, pine forest) seen through restaurant window",
+        "restaurant interior (pine-wood panelling, set tables, warm LED strip lighting)",
+        "dining companion (partially visible, holding food item)"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.8,
+          "description": "Camera holds close on a white plate bearing a glass bowl of muesli topped with seeds and nuts, two brown boiled eggs, and a sesame-seeded bread roll; a dining companion is blurred in the background holding a small food item."
+        },
+        {
+          "t_start_s": 2.8,
+          "t_end_s": 4.5,
+          "description": "Camera tilts and pans away from the food, moving across the restaurant interior \u2014 set tables with white placemats, upholstered chairs, pine-wood bench seating \u2014 progressively losing the food from frame."
+        },
+        {
+          "t_start_s": 4.5,
+          "t_end_s": 9.1,
+          "description": "Camera settles on and slowly pans across the large panoramic window, revealing a sweeping alpine landscape: dense pine forest in the valley, a glacier tongue, and dramatic rocky snow-capped peaks under a clear blue sky. The warm LED ceiling strip reflects in the glass throughout."
+        }
+      ],
+      "temporal_order_note": "The clip moves from food (interior, close) \u2192 restaurant room \u2192 mountain panorama (exterior, wide). The reveal direction is food-first then landscape-last; the mountain view is the destination of the pan, not the starting point.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 2.8,
+          "why_useful": "Clean, well-lit close-up of the breakfast spread \u2014 usable as a food/meal detail shot."
+        },
+        {
+          "t_start_s": 4.5,
+          "t_end_s": 9.1,
+          "why_useful": "Sustained, visually strong alpine panorama through the restaurant window \u2014 dramatic mountain scenery with warm interior framing; the steadiest and most resolved portion of the clip."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 9.1,
+          "why_useful": "Full clip as a single continuous reveal: breakfast in an alpine restaurant with a spectacular mountain backdrop \u2014 captures the setting and atmosphere together."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage does not fulfil the requested shot. Rather than a quiet end-of-day winding-down moment, this is a morning breakfast scene (muesli, eggs, bread roll) with an energetic camera pan revealing a mountain view. The mood is discovery and arrival, not settling or winding down.",
+      "requested_beat_contribution": "The clip does not serve the 'day ending / settling' beat \u2014 the food and bright morning light suggest the start of the day. However, the calm, unhurried pan across the alpine panorama carries a contemplative, still quality that could be repurposed for a reflective or transitional beat elsewhere in the Story."
+    }
+  },
+  "A01_semantic_adversarial__A01_hiking_but_not_difficulty": {
+    "band": "long",
+    "dur_s": 38.9,
+    "observed": {
+      "summary": "A solo hiker with a large backpack and trekking poles walks uphill along a narrow alpine trail, moving toward the camera over approximately 39 seconds. The landscape is a high-altitude alpine valley with golden-brown autumn grass, red shrubs, and dramatic snow-capped peaks partially shrouded in moving clouds. The hiker begins as a small distant figure and progressively grows larger as they approach, ending in a close medium shot with the full valley and Mont Blanc massif visible behind them.",
+      "subjects": [
+        "solo hiker (woman, blue jacket, large backpack, trekking poles)",
+        "alpine trail",
+        "high-altitude mountain valley",
+        "snow-capped peaks / Mont Blanc massif",
+        "moving clouds"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 5.0,
+          "description": "Trail visible without hiker; wide alpine landscape with golden grass, red shrubs, and cloud-wrapped peaks fills the frame."
+        },
+        {
+          "t_start_s": 5.0,
+          "t_end_s": 15.0,
+          "description": "Hiker appears as a small figure in the mid-distance, walking uphill along the trail toward the camera with trekking poles, back to camera."
+        },
+        {
+          "t_start_s": 15.0,
+          "t_end_s": 30.0,
+          "description": "Hiker continues ascending steadily, growing progressively larger in frame; clouds shift over the peaks behind her, revealing more of the massif."
+        },
+        {
+          "t_start_s": 30.0,
+          "t_end_s": 37.0,
+          "description": "Hiker now in medium shot, face partially visible, clearly using trekking poles with effort on the steep slope; full valley and Mont Blanc massif visible behind her."
+        },
+        {
+          "t_start_s": 37.0,
+          "t_end_s": 38.9,
+          "description": "Camera angle shifts to a downhill valley view without the hiker, showing the steep descent and the valley far below."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from a landscape-first reveal (no hiker) to a distant hiker, then steadily closes in as she walks uphill toward the camera \u2014 a landscape-to-person reveal direction. The hiker moves from small and distant to a close medium shot, emphasizing the scale of the terrain relative to the person. The final frame cuts to a pure valley lookdown, reinforcing the elevation gained.",
+      "useful_segments": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 15.0,
+          "why_useful": "Clean landscape-only opening transitioning to hiker appearing as a tiny figure \u2014 establishes the vast, imposing scale of the terrain before the human subject is prominent."
+        },
+        {
+          "t_start_s": 5.0,
+          "t_end_s": 38.9,
+          "why_useful": "Complete action of hiker ascending toward camera from distant figure to close medium shot \u2014 full arc of the approach showing sustained physical effort against a dramatic alpine backdrop."
+        },
+        {
+          "t_start_s": 30.0,
+          "t_end_s": 38.9,
+          "why_useful": "Closest framing of the hiker: face visible, trekking poles in use, steep slope evident, valley far below \u2014 most legible depiction of physical exertion and scale."
+        },
+        {
+          "t_start_s": 37.0,
+          "t_end_s": 38.9,
+          "why_useful": "Final downhill valley lookdown shot \u2014 shows the steep drop and distance covered, useful as a cutaway emphasizing elevation and terrain difficulty."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "The footage partially serves the purpose of conveying hike difficulty. The hiker's sustained uphill effort with trekking poles, the steep trail, the imposing scale of the peaks, and the valley far below all communicate physical challenge. However, the hiker's face is only briefly visible and her expression of strain is not clearly legible until the final few seconds; the overall tone reads more as scenic grandeur than raw difficulty. The close approach at the end (~30\u201338s) is the strongest material for conveying effort.",
+      "requested_beat_contribution": "Contributes meaningfully to the 'show the effort it took' beat: the long uphill approach, use of trekking poles, heavy pack, and the vast terrain dwarfing the hiker all communicate sustained physical effort. The final close-up frames where the hiker's face and labored pole-plant are visible are the most direct evidence of effort. The landscape scale reinforces how demanding the terrain is."
+    }
+  },
+  "A01_semantic_adversarial__A06_beautiful_but_wrong_beat": {
+    "band": "long",
+    "dur_s": 38.9,
+    "observed": {
+      "summary": "A solo hiker with a large backpack and trekking poles walks uphill along a narrow alpine trail, moving toward the camera over approximately 39 seconds. The landscape is a high-altitude alpine valley with golden-brown autumn grass, red shrubs, and dramatic snow-capped peaks partially shrouded in moving clouds. The hiker begins as a small distant figure and progressively grows larger as they approach, ending in a close medium shot with the full valley and Mont Blanc massif visible behind them.",
+      "subjects": [
+        "Solo hiker (woman, blue jacket, large backpack, trekking poles)",
+        "Alpine trail",
+        "Snow-capped mountain peaks (Mont Blanc massif)",
+        "Alpine valley with autumn vegetation"
+      ],
+      "events": [
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 5.0,
+          "description": "Trail and landscape visible without a hiker in frame; empty path winds along the hillside with dramatic mountain backdrop and low clouds."
+        },
+        {
+          "t_start_s": 5.0,
+          "t_end_s": 15.0,
+          "description": "Hiker appears as a small figure in the mid-distance, walking uphill along the trail toward the camera, backpack and poles visible."
+        },
+        {
+          "t_start_s": 15.0,
+          "t_end_s": 30.0,
+          "description": "Hiker continues steadily uphill, growing progressively larger in frame; clouds shift over the peaks behind them; hiker's deliberate pole-assisted stride is visible."
+        },
+        {
+          "t_start_s": 30.0,
+          "t_end_s": 38.0,
+          "description": "Hiker reaches close medium distance; face, sunglasses, and full gear clearly visible; hiker pauses briefly or slows, then continues; valley and Mont Blanc massif fully revealed behind them."
+        },
+        {
+          "t_start_s": 38.0,
+          "t_end_s": 38.868,
+          "description": "Camera tilts or pans slightly downhill, losing the hiker from frame and revealing the steep valley descent below."
+        }
+      ],
+      "temporal_order_note": "The clip progresses from a landscape-first reveal (empty trail, no subject) to a person-approaching reveal \u2014 the hiker starts tiny and distant and walks toward the camera, ending in a close medium shot. The final frame cuts away to a downhill valley view, suggesting the hiker has passed the camera position.",
+      "useful_segments": [
+        {
+          "t_start_s": 5.0,
+          "t_end_s": 38.0,
+          "why_useful": "Complete action of the hiker walking uphill toward camera from distant to close medium \u2014 sustained uphill effort with trekking poles against a grand alpine backdrop."
+        },
+        {
+          "t_start_s": 28.0,
+          "t_end_s": 38.0,
+          "why_useful": "Close-range portion where hiker's face, heavy pack, and labored pole-assisted stride are clearly legible \u2014 strongest material for conveying physical effort."
+        },
+        {
+          "t_start_s": 0.0,
+          "t_end_s": 8.0,
+          "why_useful": "Clean landscape-only opening with dramatic mountain and cloud backdrop; useful as an establishing shot of the terrain scale before the hiker enters."
+        }
+      ]
+    },
+    "story_context": {
+      "story_utility": "strong_elsewhere",
+      "requested_shot_contribution": "Partially fulfills the requested shot. The footage shows a hiker working uphill with trekking poles and a heavy pack against a vast alpine backdrop, which conveys physical exertion and scale of terrain. However, the hiker's expression of strain is only briefly visible in the final close frames, and the overall pace appears steady rather than visibly labored. The close-up segment (~28\u201338s) is the strongest material for communicating difficulty.",
+      "requested_beat_contribution": "Contributes meaningfully to the 'Show the effort it took' beat. The sustained uphill walk with poles, heavy pack, and the sheer scale of the mountain environment communicates effort and endurance. The progressive reveal from tiny distant figure to close medium shot reinforces the distance covered. The final close frames where the hiker's face and full gear are visible are the most direct expression of the beat's purpose."
+    }
+  }
+}

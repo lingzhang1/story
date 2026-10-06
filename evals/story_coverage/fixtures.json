@@ -1,0 +1,2645 @@
+{
+  "fixtures": {
+    "A_scenery_only": {
+      "creative_intent": {
+        "raw_text": "the beauty and scale of the Tour du Mont Blanc",
+        "theme": "landscape journey",
+        "tone": "awe",
+        "subject": "the mountains",
+        "desired_feeling": [
+          "awe",
+          "vastness"
+        ],
+        "emphasis": [
+          "landscape"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 60,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+            "subjects": [
+              "male hiker with trekking poles and camera",
+              "alpine mountain massif with glacier",
+              "larch-lined mountain trail"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 9.1,
+                "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 14.97,
+                "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+            "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo hiker with a large backpack and trekking poles walks uphill along a narrow alpine trail, moving toward the camera over approximately 39 seconds. The landscape is a high-altitude alpine valley with golden-brown autumn grass, red shrubs, and dramatic snow-capped peaks partially shrouded in moving clouds. The hiker begins as a small distant figure and progressively grows larger as they approach, ending in a close medium shot with the full valley and Mont Blanc massif visible behind them.",
+            "subjects": [
+              "solo hiker (woman, blue jacket, large backpack, trekking poles)",
+              "alpine trail",
+              "high-altitude mountain valley",
+              "snow-capped peaks / Mont Blanc massif",
+              "moving clouds"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 5.0,
+                "description": "Trail visible without hiker; wide alpine landscape with golden grass, red shrubs, and cloud-wrapped peaks fills the frame."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 15.0,
+                "description": "Hiker appears as a small figure in the mid-distance, walking uphill along the trail toward the camera with trekking poles, back to camera."
+              },
+              {
+                "t_start_s": 15.0,
+                "t_end_s": 30.0,
+                "description": "Hiker continues ascending steadily, growing progressively larger in frame; clouds shift over the peaks behind her, revealing more of the massif."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 37.0,
+                "description": "Hiker now in medium shot, face partially visible, clearly using trekking poles with effort on the steep slope; full valley and Mont Blanc massif visible behind her."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "description": "Camera angle shifts to a downhill valley view without the hiker, showing the steep descent and the valley far below."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a landscape-first reveal (no hiker) to a distant hiker, then steadily closes in as she walks uphill toward the camera \u2014 a landscape-to-person reveal direction. The hiker moves from small and distant to a close medium shot, emphasizing the scale of the terrain relative to the person. The final frame cuts to a pure valley lookdown, reinforcing the elevation gained.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 15.0,
+                "why_useful": "Clean landscape-only opening transitioning to hiker appearing as a tiny figure \u2014 establishes the vast, imposing scale of the terrain before the human subject is prominent."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 38.9,
+                "why_useful": "Complete action of hiker ascending toward camera from distant figure to close medium shot \u2014 full arc of the approach showing sustained physical effort against a dramatic alpine backdrop."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 38.9,
+                "why_useful": "Closest framing of the hiker: face visible, trekking poles in use, steep slope evident, valley far below \u2014 most legible depiction of physical exertion and scale."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "why_useful": "Final downhill valley lookdown shot \u2014 shows the steep drop and distance covered, useful as a cutaway emphasizing elevation and terrain difficulty."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage partially serves the purpose of conveying hike difficulty. The hiker's sustained uphill effort with trekking poles, the steep trail, the imposing scale of the peaks, and the valley far below all communicate physical challenge. However, the hiker's face is only briefly visible and her expression of strain is not clearly legible until the final few seconds; the overall tone reads more as scenic grandeur than raw difficulty. The close approach at the end (~30\u201338s) is the strongest material for conveying effort.",
+            "requested_beat_contribution": "Contributes meaningfully to the 'show the effort it took' beat: the long uphill approach, use of trekking poles, heavy pack, and the vast terrain dwarfing the hiker all communicate sustained physical effort. The final close-up frames where the hiker's face and labored pole-plant are visible are the most direct evidence of effort. The landscape scale reinforces how demanding the terrain is."
+          }
+        },
+        {
+          "id": "m4",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 1): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "a human/relational or quiet end-of-day moment to complement the strong landscape coverage",
+        "expected_properties": [
+          "environment/place = strong",
+          "recognizes landscape is well covered",
+          "may suggest a human/emotional opportunity (intent permits)"
+        ],
+        "forbidden_properties": [
+          "asks for more scenery",
+          "invents a required 'companionship' slot as obligation",
+          "emits camera/framing direction"
+        ]
+      }
+    },
+    "B_broad_coverage": {
+      "creative_intent": {
+        "raw_text": "our 8-day Tour du Mont Blanc trek",
+        "theme": "journey",
+        "tone": "reflective",
+        "subject": "our trek",
+        "desired_feeling": [
+          "adventure",
+          "togetherness"
+        ],
+        "emphasis": [
+          "journey",
+          "people"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 90,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman wearing a cream button-down dress and green slides, carrying a large red Osprey hiking backpack, moves from her apartment (daytime, then transitioning to night) through a building corridor, ending by walking toward the camera down a hotel hallway.",
+            "subjects": [
+              "woman with glasses",
+              "large red Osprey hiking backpack"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 3.0,
+                "description": "Woman stands in a daylit apartment living room, holding the large red backpack on one shoulder, looking down and adjusting straps."
+              },
+              {
+                "t_start_s": 3.0,
+                "t_end_s": 7.5,
+                "description": "Lighting shifts to evening/night; woman continues adjusting and settling the backpack on her back in the apartment, moving and turning while straps are handled."
+              },
+              {
+                "t_start_s": 7.5,
+                "t_end_s": 11.0,
+                "description": "Camera moves close to the woman's face and then to the backpack in a corridor/transitional space outside the apartment, showing close-up details of the pack and her profile."
+              },
+              {
+                "t_start_s": 11.0,
+                "t_end_s": 14.5,
+                "description": "Woman is seen from behind walking away down a hotel corridor, backpack fully on, moving steadily away from camera."
+              },
+              {
+                "t_start_s": 14.5,
+                "t_end_s": 22.2,
+                "description": "Woman turns and walks toward the camera down the hotel hallway, face visible, backpack straps held, striding forward until she passes close to the camera."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from apartment departure preparation (day\u2192night) through a transitional corridor, then culminates in the woman walking toward the camera down a hotel hallway \u2014 the direction reverses from away-from-camera to toward-camera in the final segment.",
+            "useful_segments": [
+              {
+                "t_start_s": 14.5,
+                "t_end_s": 22.2,
+                "why_useful": "Complete action of woman walking toward camera down hotel hallway with backpack \u2014 directly matches the requested shot of departing toward camera."
+              },
+              {
+                "t_start_s": 11.0,
+                "t_end_s": 14.5,
+                "why_useful": "Woman walking away down corridor with full backpack visible \u2014 useful as a departure/leaving shot from behind."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 3.0,
+                "why_useful": "Daytime apartment scene with backpack being shouldered \u2014 useful as a pre-departure / packing-up establishing moment."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The final segment (\u224814.5\u201322s) directly fulfills the requested shot: the woman walks toward a static camera down a hallway with her large backpack, communicating departure. The earlier apartment and away-walking segments do not fulfill the shot but provide complementary departure context.",
+            "requested_beat_contribution": "The Moment strongly supports the departure beat. It shows the full arc of leaving \u2014 backpack on in the apartment, transitioning through corridors, and finally striding toward camera \u2014 establishing the beginning of the journey both visually and narratively."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+            "subjects": [
+              "woman hiker with trekking poles",
+              "mountain trail (gravel path)",
+              "larch forest",
+              "alpine massif / glacier peaks"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 18.0,
+                "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+              },
+              {
+                "t_start_s": 18.0,
+                "t_end_s": 19.6,
+                "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 18.0,
+                "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+              },
+              {
+                "t_start_s": 8.0,
+                "t_end_s": 18.0,
+                "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+              },
+              {
+                "t_start_s": 17.0,
+                "t_end_s": 19.6,
+                "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+            "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo backpacker wades barefoot across a wide, fast-flowing glacial river in an Icelandic highland valley, using two trekking poles for balance, while a second hiker waits on the far bank. The crossing takes roughly 38 seconds and is set against a dramatic backdrop of snow-patched green mountains.",
+            "subjects": [
+              "primary backpacker (blue jacket, large pack, trekking poles, barefoot)",
+              "second hiker (waiting on far bank)",
+              "glacial river",
+              "Icelandic highland mountains"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 3.3,
+                "description": "Backpacker stands at the near rocky bank, one foot just entering the water, beginning the ford with poles planted for stability."
+              },
+              {
+                "t_start_s": 3.3,
+                "t_end_s": 22.0,
+                "description": "Backpacker wades steadily through the deepest mid-channel section, water rising to shin/knee level; body leans forward against current, poles braced; second hiker becomes visible waiting on the far gravel bar."
+              },
+              {
+                "t_start_s": 22.0,
+                "t_end_s": 37.97,
+                "description": "Backpacker reaches the shallower far channel and gravel bar, water dropping to ankle depth; final steps onto dry ground as second hiker stands nearby."
+              }
+            ],
+            "temporal_order_note": "Direction is left-bank entry to right-bank exit \u2014 the hiker moves away from camera throughout, progressing from deep mid-river struggle to arrival on the far shore. The crossing goes from most difficult (deepest water, most visible effort) to easiest (shallow exit), so the strongest hardship imagery is in the first two-thirds of the clip.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "why_useful": "Complete entry and deepest-water phase of the crossing; shows barefoot wading, pole-bracing effort, and the scale of the river against the hiker \u2014 strongest evidence of physical difficulty."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 37.97,
+                "why_useful": "Full unbroken crossing from first step to far-bank arrival; captures the entire arc of the challenge with the spectacular mountain backdrop."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 37.97,
+                "why_useful": "Second half shows the hiker pushing through to completion with the second hiker visible waiting \u2014 conveys perseverance and the social context of the group crossing."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly serves the requested Shot purpose. It shows unambiguous physical hardship \u2014 barefoot glacial river crossing, knee-deep fast water, heavy pack, trekking poles needed for balance \u2014 all clear visual evidence of effort and difficulty on the hike.",
+            "requested_beat_contribution": "Strong contribution to the 'Show the effort it took' beat. The river crossing is a classic, visceral hardship moment: cold water, unstable footing, heavy load, and the vulnerability of bare feet all communicate the toll of the trek without narration."
+          }
+        },
+        {
+          "id": "m4",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "Two hikers rest on a steep volcanic hillside during what appears to be a group trek. One person (blue jacket, brown bucket hat) sits upright while a companion (red jacket, pink/red beanie, glasses) lies on the slope. The sitting person tends to the lying person mid-clip, then both end up lying flat as additional hikers from the group pass by descending/ascending the hill. The clip ends with a close-up POV of the lying person's face looking up at the sky.",
+            "subjects": [
+              "Person in blue jacket and brown bucket hat (sitting/tending)",
+              "Person in red jacket and pink beanie with glasses (lying on slope)",
+              "Trekking poles",
+              "Group of hikers with large backpacks passing on the hillside"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 12.0,
+                "description": "Person in blue jacket sits upright on the hillside gazing into the distance; companion in red jacket lies flat beside them, partially visible. Both are stationary and relaxed."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "description": "Person in blue jacket turns attention downward toward the lying companion, leaning over and appearing to check on or interact with them; the lying person's face becomes visible \u2014 smiling, wearing glasses and pink beanie."
+              },
+              {
+                "t_start_s": 28.0,
+                "t_end_s": 50.0,
+                "description": "Both people settle into lying flat on the slope side by side, resting. The person in blue jacket looks upward; the companion in red jacket lies still. The sitting person occasionally shifts posture."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "description": "Other hikers from the group (carrying large backpacks, using trekking poles) appear on the hillside above and pass by, observing or pausing near the two resting hikers."
+              },
+              {
+                "t_start_s": 78.0,
+                "t_end_s": 91.0,
+                "description": "The person in blue jacket sits up and leans over the companion again while group members continue moving on the slope behind them."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "description": "Close-up POV shot of the companion's face (pink beanie, glasses) looking upward at the sky from ground level \u2014 likely a self-held or ground-placed camera angle."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a quiet two-person rest (sitting + lying) to an intimate moment of one tending to the other, then to both lying flat together, and finally to the wider group arriving and passing \u2014 ending with a playful close-up of the lying person's face. The arc moves from stillness \u2192 interaction \u2192 group context \u2192 intimate close-up.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 28.0,
+                "why_useful": "Clean two-person composition: one sitting contemplatively, one lying \u2014 establishes companionship and rest on the dramatic volcanic hillside."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "why_useful": "Genuine interaction moment \u2014 blue-jacket person leans over smiling companion; candid and warm, strong interpersonal connection visible."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "why_useful": "Group hikers passing in background while the two rest in foreground creates a layered, contextual scene showing the pair within the larger trek group."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "why_useful": "Playful close-up POV of companion's face looking skyward \u2014 charming, character-revealing end beat."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does capture authentic interaction between two companions resting together on a hillside \u2014 the tending gesture, side-by-side lying, and smiling close-up all convey genuine companionship. However, the clip is longer than the 5-second target and the most compelling interaction moments are brief and embedded within a longer rest sequence. The shot partially fulfils the purpose of conveying genuine companionship, though it is not a tight, composed 'together' shot.",
+            "requested_beat_contribution": "Directly serves the 'people you shared it with' beat \u2014 the clip documents a candid, unguarded rest moment between two companions on a challenging hike, with a warm interaction and a playful close-up that humanise the relationship. The passing group members add context showing these two as part of a shared adventure."
+          }
+        },
+        {
+          "id": "m5",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+            "subjects": [
+              "male hiker with trekking poles and camera",
+              "alpine mountain massif with glacier",
+              "larch-lined mountain trail"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 9.1,
+                "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 14.97,
+                "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+            "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "recognizes complementary coverage across departure/progression/difficulty/companionship/scenery",
+          "concludes sufficient or near-sufficient for a 90s story"
+        ],
+        "forbidden_properties": [
+          "invents an arbitrary missing requirement",
+          "suggests more of an already-strong dimension"
+        ]
+      }
+    },
+    "C_redundant_scenery": {
+      "creative_intent": {
+        "raw_text": "mountains of the TMB",
+        "theme": "landscape",
+        "tone": "awe",
+        "subject": "mountains",
+        "desired_feeling": [
+          "vastness"
+        ],
+        "emphasis": [
+          "landscape"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 45,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 1): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 2): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 3): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m4",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 4): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m5",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 5): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m6",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 6): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m7",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 7): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m8",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A wide static mountain panorama (variant 8): snow-capped peaks under blue sky, no people.",
+            "subjects": [
+              "mountain range",
+              "sky"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "description": "static wide shot of snow-capped peaks"
+              }
+            ],
+            "temporal_order_note": "single continuous static vista, no development",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 6.0,
+                "why_useful": "clean establishing vista"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        },
+        {
+          "id": "m9",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "variety beyond repeated panoramas \u2014 a human or progression moment",
+        "expected_properties": [
+          "identifies redundancy among the panoramas",
+          "environment = strong (ONE strong, not eight)",
+          "quantity does not inflate coverage"
+        ],
+        "forbidden_properties": [
+          "treats 8 similar panoramas as 8 distinct needs met",
+          "asks for more panoramas",
+          "reports environment coverage as stronger because of count"
+        ]
+      }
+    },
+    "D_strong_elsewhere": {
+      "creative_intent": {
+        "raw_text": "our departure and the start of the journey",
+        "theme": "journey",
+        "tone": "hopeful",
+        "subject": "setting out",
+        "desired_feeling": [
+          "anticipation"
+        ],
+        "emphasis": [
+          "departure"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 30,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman carrying a large red hiking backpack exits a hotel room, closes the door behind her, and walks down the hotel corridor toward the camera for approximately 9.7 seconds.",
+            "subjects": [
+              "woman with large red hiking backpack",
+              "hotel room door",
+              "hotel corridor"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 0.843,
+                "description": "Camera shows a closed dark hotel room door from the corridor; no person visible yet."
+              },
+              {
+                "t_start_s": 0.843,
+                "t_end_s": 2.109,
+                "description": "Door opens and the woman \u2014 wearing a beige button-down dress, glasses, and green sandals, with a large red Osprey backpack \u2014 appears in the doorway, holding the door handle and stepping out from the room."
+              },
+              {
+                "t_start_s": 2.109,
+                "t_end_s": 3.374,
+                "description": "Woman fully exits the room and pulls the door closed behind her while turning to face the corridor."
+              },
+              {
+                "t_start_s": 3.374,
+                "t_end_s": 9.7,
+                "description": "Woman walks steadily toward the camera down the hotel corridor, filling the frame progressively as she approaches; her expression is neutral to focused."
+              }
+            ],
+            "temporal_order_note": "Action moves from closed door (departure point) \u2192 door opening and woman emerging from room \u2192 door closing \u2192 sustained walk toward camera. The reveal direction is room interior to corridor, then subject approaching camera \u2014 a clear departure sequence.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.843,
+                "t_end_s": 3.374,
+                "why_useful": "Complete action of woman exiting the room and closing the door \u2014 a self-contained departure beat."
+              },
+              {
+                "t_start_s": 3.374,
+                "t_end_s": 9.7,
+                "why_useful": "Sustained walk toward camera down corridor with backpack fully visible \u2014 strong travel/departure walking shot."
+              },
+              {
+                "t_start_s": 0.843,
+                "t_end_s": 9.7,
+                "why_useful": "Full continuous sequence from door opening through corridor walk \u2014 covers the entire departure action in one unbroken take."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "Footage directly fulfils the requested Shot purpose: the subject exits the room with a loaded backpack and walks toward the camera down the corridor for the full clip duration. The camera is static and the walk is sustained and clear, matching the instruction closely.",
+            "requested_beat_contribution": "Strongly serves the 'beginning of the journey' beat \u2014 the room door opening, the loaded backpack, and the purposeful corridor walk together communicate departure and the start of travel."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "complementary departure/journey material; the existing clip still contributes threshold-crossing value",
+        "expected_properties": [
+          "preserves the Moment's broader value (strong_elsewhere, threshold-crossing)",
+          "does NOT treat requested-shot failure as zero contribution"
+        ],
+        "forbidden_properties": [
+          "discards the Moment because it failed the requested 'walk away' shot",
+          "reports no usable departure material at all"
+        ]
+      }
+    },
+    "E_contextless": {
+      "creative_intent": {
+        "raw_text": "a quiet trip",
+        "theme": "travel",
+        "tone": "calm",
+        "subject": "the trip",
+        "desired_feeling": [
+          "calm"
+        ],
+        "emphasis": []
+      },
+      "scope": {
+        "target_duration_seconds": 30,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL(context-stripped)",
+          "observed": {
+            "summary": "A clip that begins with a close-up of a breakfast plate (muesli bowl, two boiled eggs, a seeded bread roll) on a restaurant table with a dining companion visible in the background, then pans away from the food across the restaurant interior and progressively reveals a dramatic alpine mountain panorama through a large panoramic window, ending on a sustained wide view of snow-capped peaks, glacier, and pine forest.",
+            "subjects": [
+              "breakfast plate with muesli bowl, boiled eggs, and seeded roll",
+              "alpine mountain panorama (snow-capped peaks, glacier, pine forest) seen through restaurant window",
+              "restaurant interior (pine-wood panelling, set tables, warm LED strip lighting)",
+              "dining companion (partially visible, holding food item)"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.8,
+                "description": "Camera holds close on a white plate bearing a glass bowl of muesli topped with seeds and nuts, two brown boiled eggs, and a sesame-seeded bread roll; a dining companion is blurred in the background holding a small food item."
+              },
+              {
+                "t_start_s": 2.8,
+                "t_end_s": 4.5,
+                "description": "Camera tilts and pans away from the food, moving across the restaurant interior \u2014 set tables with white placemats, upholstered chairs, pine-wood bench seating \u2014 progressively losing the food from frame."
+              },
+              {
+                "t_start_s": 4.5,
+                "t_end_s": 9.1,
+                "description": "Camera settles on and slowly pans across the large panoramic window, revealing a sweeping alpine landscape: dense pine forest in the valley, a glacier tongue, and dramatic rocky snow-capped peaks under a clear blue sky. The warm LED ceiling strip reflects in the glass throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves from food (interior, close) \u2192 restaurant room \u2192 mountain panorama (exterior, wide). The reveal direction is food-first then landscape-last; the mountain view is the destination of the pan, not the starting point.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.8,
+                "why_useful": "Clean, well-lit close-up of the breakfast spread \u2014 usable as a food/meal detail shot."
+              },
+              {
+                "t_start_s": 4.5,
+                "t_end_s": 9.1,
+                "why_useful": "Sustained, visually strong alpine panorama through the restaurant window \u2014 dramatic mountain scenery with warm interior framing; the steadiest and most resolved portion of the clip."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 9.1,
+                "why_useful": "Full clip as a single continuous reveal: breakfast in an alpine restaurant with a spectacular mountain backdrop \u2014 captures the setting and atmosphere together."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "complementary material; reasons purely from observed meal+window-vista content",
+        "expected_properties": [
+          "reasons from observed content alone",
+          "does not require a Director history",
+          "recognizes an end-of-day / place detail from observed content"
+        ],
+        "forbidden_properties": [
+          "treats the Moment as empty because requested_* is null",
+          "claims it cannot assess without a requested shot"
+        ]
+      }
+    },
+    "F1_one_exceptional_short": {
+      "creative_intent": {
+        "raw_text": "one perfect shot of the valley",
+        "theme": "a single moment",
+        "tone": "awe",
+        "subject": "the valley",
+        "desired_feeling": [
+          "awe"
+        ],
+        "emphasis": [
+          "landscape"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 8,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "for an intentionally tiny story, one exceptional Moment may be sufficient"
+        ],
+        "forbidden_properties": [
+          "manufactures missing requirements for an 8s single-shot story"
+        ]
+      }
+    },
+    "F2_one_exceptional_rich": {
+      "creative_intent": {
+        "raw_text": "the full story of our whole trek",
+        "theme": "epic journey",
+        "tone": "reflective",
+        "subject": "the whole trek",
+        "desired_feeling": [
+          "adventure",
+          "togetherness",
+          "accomplishment"
+        ],
+        "emphasis": [
+          "journey",
+          "people",
+          "difficulty"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 120,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "insufficient",
+        "idea_should_exist": true,
+        "idea_opportunity": "the journey/people/difficulty the rich intent asks for, none of which one landscape clip covers",
+        "expected_properties": [
+          "SAME single Moment is NOT sufficient for a rich 120s whole-trek story",
+          "sufficiency is relative to CreativeIntent scope, not Moment count"
+        ],
+        "forbidden_properties": [
+          "declares sufficient just because a strong Moment exists"
+        ]
+      }
+    },
+    "G_conflicting": {
+      "creative_intent": {
+        "raw_text": "an intimate film about my relationship with my partner",
+        "theme": "relationship",
+        "tone": "tender",
+        "subject": "my partner and me",
+        "desired_feeling": [
+          "intimacy",
+          "love"
+        ],
+        "emphasis": [
+          "people",
+          "faces"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 60,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo backpacker wades barefoot across a wide, fast-flowing glacial river in an Icelandic highland valley, using two trekking poles for balance, while a second hiker waits on the far bank. The crossing takes roughly 38 seconds and is set against a dramatic backdrop of snow-patched green mountains.",
+            "subjects": [
+              "primary backpacker (blue jacket, large pack, trekking poles, barefoot)",
+              "second hiker (waiting on far bank)",
+              "glacial river",
+              "Icelandic highland mountains"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 3.3,
+                "description": "Backpacker stands at the near rocky bank, one foot just entering the water, beginning the ford with poles planted for stability."
+              },
+              {
+                "t_start_s": 3.3,
+                "t_end_s": 22.0,
+                "description": "Backpacker wades steadily through the deepest mid-channel section, water rising to shin/knee level; body leans forward against current, poles braced; second hiker becomes visible waiting on the far gravel bar."
+              },
+              {
+                "t_start_s": 22.0,
+                "t_end_s": 37.97,
+                "description": "Backpacker reaches the shallower far channel and gravel bar, water dropping to ankle depth; final steps onto dry ground as second hiker stands nearby."
+              }
+            ],
+            "temporal_order_note": "Direction is left-bank entry to right-bank exit \u2014 the hiker moves away from camera throughout, progressing from deep mid-river struggle to arrival on the far shore. The crossing goes from most difficult (deepest water, most visible effort) to easiest (shallow exit), so the strongest hardship imagery is in the first two-thirds of the clip.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "why_useful": "Complete entry and deepest-water phase of the crossing; shows barefoot wading, pole-bracing effort, and the scale of the river against the hiker \u2014 strongest evidence of physical difficulty."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 37.97,
+                "why_useful": "Full unbroken crossing from first step to far-bank arrival; captures the entire arc of the challenge with the spectacular mountain backdrop."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 37.97,
+                "why_useful": "Second half shows the hiker pushing through to completion with the second hiker visible waiting \u2014 conveys perseverance and the social context of the group crossing."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly serves the requested Shot purpose. It shows unambiguous physical hardship \u2014 barefoot glacial river crossing, knee-deep fast water, heavy pack, trekking poles needed for balance \u2014 all clear visual evidence of effort and difficulty on the hike.",
+            "requested_beat_contribution": "Strong contribution to the 'Show the effort it took' beat. The river crossing is a classic, visceral hardship moment: cold water, unstable footing, heavy load, and the vulnerability of bare feet all communicate the toll of the trek without narration."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo hiker with a large backpack and trekking poles walks uphill along a narrow alpine trail, moving toward the camera over approximately 39 seconds. The landscape is a high-altitude alpine valley with golden-brown autumn grass, red shrubs, and dramatic snow-capped peaks partially shrouded in moving clouds. The hiker begins as a small distant figure and progressively grows larger as they approach, ending in a close medium shot with the full valley and Mont Blanc massif visible behind them.",
+            "subjects": [
+              "solo hiker (woman, blue jacket, large backpack, trekking poles)",
+              "alpine trail",
+              "high-altitude mountain valley",
+              "snow-capped peaks / Mont Blanc massif",
+              "moving clouds"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 5.0,
+                "description": "Trail visible without hiker; wide alpine landscape with golden grass, red shrubs, and cloud-wrapped peaks fills the frame."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 15.0,
+                "description": "Hiker appears as a small figure in the mid-distance, walking uphill along the trail toward the camera with trekking poles, back to camera."
+              },
+              {
+                "t_start_s": 15.0,
+                "t_end_s": 30.0,
+                "description": "Hiker continues ascending steadily, growing progressively larger in frame; clouds shift over the peaks behind her, revealing more of the massif."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 37.0,
+                "description": "Hiker now in medium shot, face partially visible, clearly using trekking poles with effort on the steep slope; full valley and Mont Blanc massif visible behind her."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "description": "Camera angle shifts to a downhill valley view without the hiker, showing the steep descent and the valley far below."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a landscape-first reveal (no hiker) to a distant hiker, then steadily closes in as she walks uphill toward the camera \u2014 a landscape-to-person reveal direction. The hiker moves from small and distant to a close medium shot, emphasizing the scale of the terrain relative to the person. The final frame cuts to a pure valley lookdown, reinforcing the elevation gained.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 15.0,
+                "why_useful": "Clean landscape-only opening transitioning to hiker appearing as a tiny figure \u2014 establishes the vast, imposing scale of the terrain before the human subject is prominent."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 38.9,
+                "why_useful": "Complete action of hiker ascending toward camera from distant figure to close medium shot \u2014 full arc of the approach showing sustained physical effort against a dramatic alpine backdrop."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 38.9,
+                "why_useful": "Closest framing of the hiker: face visible, trekking poles in use, steep slope evident, valley far below \u2014 most legible depiction of physical exertion and scale."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "why_useful": "Final downhill valley lookdown shot \u2014 shows the steep drop and distance covered, useful as a cutaway emphasizing elevation and terrain difficulty."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage partially serves the purpose of conveying hike difficulty. The hiker's sustained uphill effort with trekking poles, the steep trail, the imposing scale of the peaks, and the valley far below all communicate physical challenge. However, the hiker's face is only briefly visible and her expression of strain is not clearly legible until the final few seconds; the overall tone reads more as scenic grandeur than raw difficulty. The close approach at the end (~30\u201338s) is the strongest material for conveying effort.",
+            "requested_beat_contribution": "Contributes meaningfully to the 'show the effort it took' beat: the long uphill approach, use of trekking poles, heavy pack, and the vast terrain dwarfing the hiker all communicate sustained physical effort. The final close-up frames where the hiker's face and labored pole-plant are visible are the most direct evidence of effort. The landscape scale reinforces how demanding the terrain is."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+            "subjects": [
+              "male hiker with trekking poles and camera",
+              "alpine mountain massif with glacier",
+              "larch-lined mountain trail"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 9.1,
+                "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 14.97,
+                "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+            "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "insufficient",
+        "idea_should_exist": true,
+        "idea_opportunity": "intimate human/relationship material; existing clips are strong landscape/journey but weak on the intended intimacy",
+        "expected_properties": [
+          "preserves factual asset value of the landscape/river Moments",
+          "recognizes weak alignment with the intimate-relationship intent"
+        ],
+        "forbidden_properties": [
+          "claims good footage automatically satisfies the relationship story",
+          "discards the Moments as worthless"
+        ]
+      }
+    },
+    "H1_accum": {
+      "creative_intent": {
+        "raw_text": "our TMB trek",
+        "theme": "journey",
+        "tone": "reflective",
+        "subject": "our trek",
+        "desired_feeling": [
+          "adventure"
+        ],
+        "emphasis": [
+          "journey"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 90,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+            "subjects": [
+              "woman hiker with trekking poles",
+              "mountain trail (gravel path)",
+              "larch forest",
+              "alpine massif / glacier peaks"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 18.0,
+                "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+              },
+              {
+                "t_start_s": 18.0,
+                "t_end_s": 19.6,
+                "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 18.0,
+                "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+              },
+              {
+                "t_start_s": 8.0,
+                "t_end_s": 18.0,
+                "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+              },
+              {
+                "t_start_s": 17.0,
+                "t_end_s": 19.6,
+                "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+            "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "human/companionship or difficulty material to deepen the journey",
+        "expected_properties": [
+          "environment+progression present",
+          "coherent baseline coverage"
+        ],
+        "forbidden_properties": [
+          "already declaring sufficient with only scenery+progression for a 90s trek"
+        ]
+      }
+    },
+    "H2_accum": {
+      "creative_intent": {
+        "raw_text": "our TMB trek",
+        "theme": "journey",
+        "tone": "reflective",
+        "subject": "our trek",
+        "desired_feeling": [
+          "adventure"
+        ],
+        "emphasis": [
+          "journey"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 90,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+            "subjects": [
+              "woman hiker with trekking poles",
+              "mountain trail (gravel path)",
+              "larch forest",
+              "alpine massif / glacier peaks"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 18.0,
+                "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+              },
+              {
+                "t_start_s": 18.0,
+                "t_end_s": 19.6,
+                "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 18.0,
+                "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+              },
+              {
+                "t_start_s": 8.0,
+                "t_end_s": 18.0,
+                "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+              },
+              {
+                "t_start_s": 17.0,
+                "t_end_s": 19.6,
+                "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+            "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "Two hikers rest on a steep volcanic hillside during what appears to be a group trek. One person (blue jacket, brown bucket hat) sits upright while a companion (red jacket, pink/red beanie, glasses) lies on the slope. The sitting person tends to the lying person mid-clip, then both end up lying flat as additional hikers from the group pass by descending/ascending the hill. The clip ends with a close-up POV of the lying person's face looking up at the sky.",
+            "subjects": [
+              "Person in blue jacket and brown bucket hat (sitting/tending)",
+              "Person in red jacket and pink beanie with glasses (lying on slope)",
+              "Trekking poles",
+              "Group of hikers with large backpacks passing on the hillside"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 12.0,
+                "description": "Person in blue jacket sits upright on the hillside gazing into the distance; companion in red jacket lies flat beside them, partially visible. Both are stationary and relaxed."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "description": "Person in blue jacket turns attention downward toward the lying companion, leaning over and appearing to check on or interact with them; the lying person's face becomes visible \u2014 smiling, wearing glasses and pink beanie."
+              },
+              {
+                "t_start_s": 28.0,
+                "t_end_s": 50.0,
+                "description": "Both people settle into lying flat on the slope side by side, resting. The person in blue jacket looks upward; the companion in red jacket lies still. The sitting person occasionally shifts posture."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "description": "Other hikers from the group (carrying large backpacks, using trekking poles) appear on the hillside above and pass by, observing or pausing near the two resting hikers."
+              },
+              {
+                "t_start_s": 78.0,
+                "t_end_s": 91.0,
+                "description": "The person in blue jacket sits up and leans over the companion again while group members continue moving on the slope behind them."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "description": "Close-up POV shot of the companion's face (pink beanie, glasses) looking upward at the sky from ground level \u2014 likely a self-held or ground-placed camera angle."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a quiet two-person rest (sitting + lying) to an intimate moment of one tending to the other, then to both lying flat together, and finally to the wider group arriving and passing \u2014 ending with a playful close-up of the lying person's face. The arc moves from stillness \u2192 interaction \u2192 group context \u2192 intimate close-up.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 28.0,
+                "why_useful": "Clean two-person composition: one sitting contemplatively, one lying \u2014 establishes companionship and rest on the dramatic volcanic hillside."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "why_useful": "Genuine interaction moment \u2014 blue-jacket person leans over smiling companion; candid and warm, strong interpersonal connection visible."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "why_useful": "Group hikers passing in background while the two rest in foreground creates a layered, contextual scene showing the pair within the larger trek group."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "why_useful": "Playful close-up POV of companion's face looking skyward \u2014 charming, character-revealing end beat."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does capture authentic interaction between two companions resting together on a hillside \u2014 the tending gesture, side-by-side lying, and smiling close-up all convey genuine companionship. However, the clip is longer than the 5-second target and the most compelling interaction moments are brief and embedded within a longer rest sequence. The shot partially fulfils the purpose of conveying genuine companionship, though it is not a tight, composed 'together' shot.",
+            "requested_beat_contribution": "Directly serves the 'people you shared it with' beat \u2014 the clip documents a candid, unguarded rest moment between two companions on a challenging hike, with a warm interaction and a playful close-up that humanise the relationship. The passing group members add context showing these two as part of a shared adventure."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "the companionship gap from H1 is now FILLED by m3; a new opportunity (difficulty/ending) may appear, NOT companionship again",
+        "expected_properties": [
+          "companionship/human now covered (vs H1)",
+          "environment+progression retain identity from H1",
+          "newest Moment does not reset or rename unrelated dimensions"
+        ],
+        "forbidden_properties": [
+          "still recommends companionship after m3 fills it",
+          "drops environment/progression that H1 had",
+          "radically renames stable dimensions"
+        ]
+      }
+    },
+    "H3_accum": {
+      "creative_intent": {
+        "raw_text": "our TMB trek",
+        "theme": "journey",
+        "tone": "reflective",
+        "subject": "our trek",
+        "desired_feeling": [
+          "adventure"
+        ],
+        "emphasis": [
+          "journey"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 90,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+            "subjects": [
+              "woman hiker with trekking poles",
+              "mountain trail (gravel path)",
+              "larch forest",
+              "alpine massif / glacier peaks"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 18.0,
+                "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+              },
+              {
+                "t_start_s": 18.0,
+                "t_end_s": 19.6,
+                "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 18.0,
+                "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+              },
+              {
+                "t_start_s": 8.0,
+                "t_end_s": 18.0,
+                "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+              },
+              {
+                "t_start_s": 17.0,
+                "t_end_s": 19.6,
+                "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+            "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "Two hikers rest on a steep volcanic hillside during what appears to be a group trek. One person (blue jacket, brown bucket hat) sits upright while a companion (red jacket, pink/red beanie, glasses) lies on the slope. The sitting person tends to the lying person mid-clip, then both end up lying flat as additional hikers from the group pass by descending/ascending the hill. The clip ends with a close-up POV of the lying person's face looking up at the sky.",
+            "subjects": [
+              "Person in blue jacket and brown bucket hat (sitting/tending)",
+              "Person in red jacket and pink beanie with glasses (lying on slope)",
+              "Trekking poles",
+              "Group of hikers with large backpacks passing on the hillside"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 12.0,
+                "description": "Person in blue jacket sits upright on the hillside gazing into the distance; companion in red jacket lies flat beside them, partially visible. Both are stationary and relaxed."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "description": "Person in blue jacket turns attention downward toward the lying companion, leaning over and appearing to check on or interact with them; the lying person's face becomes visible \u2014 smiling, wearing glasses and pink beanie."
+              },
+              {
+                "t_start_s": 28.0,
+                "t_end_s": 50.0,
+                "description": "Both people settle into lying flat on the slope side by side, resting. The person in blue jacket looks upward; the companion in red jacket lies still. The sitting person occasionally shifts posture."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "description": "Other hikers from the group (carrying large backpacks, using trekking poles) appear on the hillside above and pass by, observing or pausing near the two resting hikers."
+              },
+              {
+                "t_start_s": 78.0,
+                "t_end_s": 91.0,
+                "description": "The person in blue jacket sits up and leans over the companion again while group members continue moving on the slope behind them."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "description": "Close-up POV shot of the companion's face (pink beanie, glasses) looking upward at the sky from ground level \u2014 likely a self-held or ground-placed camera angle."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a quiet two-person rest (sitting + lying) to an intimate moment of one tending to the other, then to both lying flat together, and finally to the wider group arriving and passing \u2014 ending with a playful close-up of the lying person's face. The arc moves from stillness \u2192 interaction \u2192 group context \u2192 intimate close-up.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 28.0,
+                "why_useful": "Clean two-person composition: one sitting contemplatively, one lying \u2014 establishes companionship and rest on the dramatic volcanic hillside."
+              },
+              {
+                "t_start_s": 12.0,
+                "t_end_s": 28.0,
+                "why_useful": "Genuine interaction moment \u2014 blue-jacket person leans over smiling companion; candid and warm, strong interpersonal connection visible."
+              },
+              {
+                "t_start_s": 50.0,
+                "t_end_s": 78.0,
+                "why_useful": "Group hikers passing in background while the two rest in foreground creates a layered, contextual scene showing the pair within the larger trek group."
+              },
+              {
+                "t_start_s": 91.0,
+                "t_end_s": 95.0,
+                "why_useful": "Playful close-up POV of companion's face looking skyward \u2014 charming, character-revealing end beat."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does capture authentic interaction between two companions resting together on a hillside \u2014 the tending gesture, side-by-side lying, and smiling close-up all convey genuine companionship. However, the clip is longer than the 5-second target and the most compelling interaction moments are brief and embedded within a longer rest sequence. The shot partially fulfils the purpose of conveying genuine companionship, though it is not a tight, composed 'together' shot.",
+            "requested_beat_contribution": "Directly serves the 'people you shared it with' beat \u2014 the clip documents a candid, unguarded rest moment between two companions on a challenging hike, with a warm interaction and a playful close-up that humanise the relationship. The passing group members add context showing these two as part of a shared adventure."
+          }
+        },
+        {
+          "id": "m4",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo backpacker wades barefoot across a wide, fast-flowing glacial river in an Icelandic highland valley, using two trekking poles for balance, while a second hiker waits on the far bank. The crossing takes roughly 38 seconds and is set against a dramatic backdrop of snow-patched green mountains.",
+            "subjects": [
+              "primary backpacker (blue jacket, large pack, trekking poles, barefoot)",
+              "second hiker (waiting on far bank)",
+              "glacial river",
+              "Icelandic highland mountains"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 3.3,
+                "description": "Backpacker stands at the near rocky bank, one foot just entering the water, beginning the ford with poles planted for stability."
+              },
+              {
+                "t_start_s": 3.3,
+                "t_end_s": 22.0,
+                "description": "Backpacker wades steadily through the deepest mid-channel section, water rising to shin/knee level; body leans forward against current, poles braced; second hiker becomes visible waiting on the far gravel bar."
+              },
+              {
+                "t_start_s": 22.0,
+                "t_end_s": 37.97,
+                "description": "Backpacker reaches the shallower far channel and gravel bar, water dropping to ankle depth; final steps onto dry ground as second hiker stands nearby."
+              }
+            ],
+            "temporal_order_note": "Direction is left-bank entry to right-bank exit \u2014 the hiker moves away from camera throughout, progressing from deep mid-river struggle to arrival on the far shore. The crossing goes from most difficult (deepest water, most visible effort) to easiest (shallow exit), so the strongest hardship imagery is in the first two-thirds of the clip.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "why_useful": "Complete entry and deepest-water phase of the crossing; shows barefoot wading, pole-bracing effort, and the scale of the river against the hiker \u2014 strongest evidence of physical difficulty."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 37.97,
+                "why_useful": "Full unbroken crossing from first step to far-bank arrival; captures the entire arc of the challenge with the spectacular mountain backdrop."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 37.97,
+                "why_useful": "Second half shows the hiker pushing through to completion with the second hiker visible waiting \u2014 conveys perseverance and the social context of the group crossing."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly serves the requested Shot purpose. It shows unambiguous physical hardship \u2014 barefoot glacial river crossing, knee-deep fast water, heavy pack, trekking poles needed for balance \u2014 all clear visual evidence of effort and difficulty on the hike.",
+            "requested_beat_contribution": "Strong contribution to the 'Show the effort it took' beat. The river crossing is a classic, visceral hardship moment: cold water, unstable footing, heavy load, and the vulnerability of bare feet all communicate the toll of the trek without narration."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "broad coverage: scenery+progression+companionship+difficulty",
+          "dimensions stable across H1->H2->H3",
+          "likely sufficient -> no idea"
+        ],
+        "forbidden_properties": [
+          "story idea recommending already-captured material",
+          "dimension set churns vs H2"
+        ]
+      }
+    },
+    "I_no_intervention_sufficient": {
+      "creative_intent": {
+        "raw_text": "a short calm montage of the mountains",
+        "theme": "calm landscape",
+        "tone": "serene",
+        "subject": "mountains",
+        "desired_feeling": [
+          "calm",
+          "serenity"
+        ],
+        "emphasis": [
+          "landscape"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 20,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+            "subjects": [
+              "male hiker with trekking poles and camera",
+              "alpine mountain massif with glacier",
+              "larch-lined mountain trail"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 9.1,
+                "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 14.97,
+                "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+            "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "two complementary calm landscape Moments satisfy a 20s calm montage"
+        ],
+        "forbidden_properties": [
+          "any story idea",
+          "insists on people/difficulty the intent never asked for"
+        ]
+      }
+    },
+    "J_anti_checklist_solitude": {
+      "creative_intent": {
+        "raw_text": "a film about quiet solitude alone in the mountains",
+        "theme": "solitude",
+        "tone": "contemplative",
+        "subject": "being alone in nature",
+        "desired_feeling": [
+          "solitude",
+          "peace"
+        ],
+        "emphasis": [
+          "landscape",
+          "aloneness"
+        ],
+        "creative_constraints": [
+          "no other people",
+          "no crowds"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 40,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+            "subjects": [
+              "male hiker with trekking poles and camera",
+              "alpine mountain massif with glacier",
+              "larch-lined mountain trail"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 9.1,
+                "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+              }
+            ],
+            "temporal_order_note": "The clip moves landscape-first to person \u2014 the opposite direction of the requested shot (which asked for person\u2192landscape). First ~8 seconds are pure landscape/trail scenery; the hiker only appears and approaches in the final ~7 seconds. The reveal direction is landscape\u2192person, not person\u2192landscape.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 7.8,
+                "why_useful": "Clean, unobstructed alpine landscape footage \u2014 larch trees framing a glaciated mountain massif under clear blue sky. Strong standalone scenery material."
+              },
+              {
+                "t_start_s": 9.1,
+                "t_end_s": 14.97,
+                "why_useful": "Complete action of hiker walking toward camera along scenic alpine trail with mountain backdrop; subject is smiling and well-lit \u2014 usable as a hiking action/portrait shot."
+              },
+              {
+                "t_start_s": 7.8,
+                "t_end_s": 14.97,
+                "why_useful": "Trail-to-hiker sequence: trail revealed first, then hiker emerges from distance and approaches \u2014 coherent continuous walking approach shot with mountain context."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage does NOT fulfil the requested Shot. The requested shot asked for a pan starting on the friend and then revealing the landscape (person\u2192landscape). This clip does the reverse: it opens on the landscape and the hiker only appears later walking toward camera. No pan from person to vista occurs.",
+            "requested_beat_contribution": "The clip contains strong alpine landscape material and a hiker in motion that could support a 'reveal the place' beat, but the reveal direction is inverted relative to the request \u2014 the place is shown first, then the person arrives. It partially serves the beat's purpose (place is revealed) but not through the intended person-led reveal structure."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A solo hiker with a large backpack and trekking poles walks uphill along a narrow alpine trail, moving toward the camera over approximately 39 seconds. The landscape is a high-altitude alpine valley with golden-brown autumn grass, red shrubs, and dramatic snow-capped peaks partially shrouded in moving clouds. The hiker begins as a small distant figure and progressively grows larger as they approach, ending in a close medium shot with the full valley and Mont Blanc massif visible behind them.",
+            "subjects": [
+              "solo hiker (woman, blue jacket, large backpack, trekking poles)",
+              "alpine trail",
+              "high-altitude mountain valley",
+              "snow-capped peaks / Mont Blanc massif",
+              "moving clouds"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 5.0,
+                "description": "Trail visible without hiker; wide alpine landscape with golden grass, red shrubs, and cloud-wrapped peaks fills the frame."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 15.0,
+                "description": "Hiker appears as a small figure in the mid-distance, walking uphill along the trail toward the camera with trekking poles, back to camera."
+              },
+              {
+                "t_start_s": 15.0,
+                "t_end_s": 30.0,
+                "description": "Hiker continues ascending steadily, growing progressively larger in frame; clouds shift over the peaks behind her, revealing more of the massif."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 37.0,
+                "description": "Hiker now in medium shot, face partially visible, clearly using trekking poles with effort on the steep slope; full valley and Mont Blanc massif visible behind her."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "description": "Camera angle shifts to a downhill valley view without the hiker, showing the steep descent and the valley far below."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a landscape-first reveal (no hiker) to a distant hiker, then steadily closes in as she walks uphill toward the camera \u2014 a landscape-to-person reveal direction. The hiker moves from small and distant to a close medium shot, emphasizing the scale of the terrain relative to the person. The final frame cuts to a pure valley lookdown, reinforcing the elevation gained.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 15.0,
+                "why_useful": "Clean landscape-only opening transitioning to hiker appearing as a tiny figure \u2014 establishes the vast, imposing scale of the terrain before the human subject is prominent."
+              },
+              {
+                "t_start_s": 5.0,
+                "t_end_s": 38.9,
+                "why_useful": "Complete action of hiker ascending toward camera from distant figure to close medium shot \u2014 full arc of the approach showing sustained physical effort against a dramatic alpine backdrop."
+              },
+              {
+                "t_start_s": 30.0,
+                "t_end_s": 38.9,
+                "why_useful": "Closest framing of the hiker: face visible, trekking poles in use, steep slope evident, valley far below \u2014 most legible depiction of physical exertion and scale."
+              },
+              {
+                "t_start_s": 37.0,
+                "t_end_s": 38.9,
+                "why_useful": "Final downhill valley lookdown shot \u2014 shows the steep drop and distance covered, useful as a cutaway emphasizing elevation and terrain difficulty."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage partially serves the purpose of conveying hike difficulty. The hiker's sustained uphill effort with trekking poles, the steep trail, the imposing scale of the peaks, and the valley far below all communicate physical challenge. However, the hiker's face is only briefly visible and her expression of strain is not clearly legible until the final few seconds; the overall tone reads more as scenic grandeur than raw difficulty. The close approach at the end (~30\u201338s) is the strongest material for conveying effort.",
+            "requested_beat_contribution": "Contributes meaningfully to the 'show the effort it took' beat: the long uphill approach, use of trekking poles, heavy pack, and the vast terrain dwarfing the hiker all communicate sustained physical effort. The final close-up frames where the hiker's face and labored pole-plant are visible are the most direct evidence of effort. The landscape scale reinforces how demanding the terrain is."
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "respects the solitude intent",
+          "treats solo-in-landscape as ON-theme and sufficient"
+        ],
+        "forbidden_properties": [
+          "demands companionship/people",
+          "demands difficulty/departure/arrival/food",
+          "treats absence of common travel categories as a gap",
+          "any homework-style suggestion"
+        ]
+      }
+    },
+    "K_nontravel_guitar": {
+      "creative_intent": {
+        "raw_text": "my progress learning guitar this month",
+        "theme": "practice & progress",
+        "tone": "earnest",
+        "subject": "me practicing guitar",
+        "desired_feeling": [
+          "focus",
+          "growth"
+        ],
+        "emphasis": [
+          "concentration",
+          "progress"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 45,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "A person tunes an acoustic guitar at a desk, adjusting pegs and checking pitch.",
+            "subjects": [
+              "guitarist",
+              "acoustic guitar"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 12.0,
+                "description": "tuning the guitar, head bent in concentration"
+              }
+            ],
+            "temporal_order_note": "a quiet preparation moment before playing",
+            "useful_segments": [
+              {
+                "start_time": 0.0,
+                "end_time": 12.0,
+                "why_useful": "preparation/concentration beat"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "useful_elsewhere",
+            "requested_shot_contribution": "establishes preparation",
+            "requested_beat_contribution": "serves a 'getting ready' beat"
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "SYN",
+          "observed": {
+            "summary": "Close-up of the left hand moving through a chord progression, fingers pressing frets, a few fumbles then a clean change.",
+            "subjects": [
+              "hands",
+              "fretboard"
+            ],
+            "events": [
+              {
+                "start_time": 0.0,
+                "end_time": 18.0,
+                "description": "practicing a chord change, fumble then clean"
+              }
+            ],
+            "temporal_order_note": "effortful practice with a small visible improvement",
+            "useful_segments": [
+              {
+                "start_time": 6.0,
+                "end_time": 18.0,
+                "why_useful": "the clean chord change shows progress"
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": null,
+            "requested_beat_contribution": null
+          }
+        }
+      ],
+      "pending_count": 0,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": true,
+        "idea_opportunity": "a performance/payoff moment (playing a full phrase) to resolve the practice arc \u2014 in GUITAR terms, not travel terms",
+        "expected_properties": [
+          "dimensions are guitar/practice-relevant (preparation/concentration/progress/performance)",
+          "does NOT apply travel categories (scenery/departure/companionship)"
+        ],
+        "forbidden_properties": [
+          "uses travel dimensions (landscape/journey/difficulty-of-hike)",
+          "asks for scenery or companionship",
+          "overfits to the TMB corpus"
+        ]
+      }
+    },
+    "L_pending_au": {
+      "creative_intent": {
+        "raw_text": "our TMB trek",
+        "theme": "journey",
+        "tone": "reflective",
+        "subject": "our trek",
+        "desired_feeling": [
+          "adventure"
+        ],
+        "emphasis": [
+          "journey"
+        ]
+      },
+      "scope": {
+        "target_duration_seconds": 90,
+        "format": "vertical"
+      },
+      "moments": [
+        {
+          "id": "m1",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A woman hikes away from camera along a mountain trail using trekking poles, moving continuously uphill through a larch forest. Over ~20 seconds the camera follows her as the trail curves and the dense tree canopy gradually opens, revealing an increasingly dramatic alpine massif with glaciers and rocky peaks behind her. The clip ends with the hiker having moved far ahead and the camera dwelling on a pure landscape shot of the mountain face framed by larches.",
+            "subjects": [
+              "woman hiker with trekking poles",
+              "mountain trail (gravel path)",
+              "larch forest",
+              "alpine massif / glacier peaks"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 14.0,
+                "description": "Woman walks steadily away from camera along a narrow gravel trail through dense larch forest; mountain peaks are partially visible through the canopy ahead. Camera follows at a consistent distance."
+              },
+              {
+                "t_start_s": 14.0,
+                "t_end_s": 18.0,
+                "description": "Trail opens up as trees thin; a large rocky alpine massif with glaciers becomes prominently visible to the left and ahead. Hiker continues forward and begins to shrink in frame."
+              },
+              {
+                "t_start_s": 18.0,
+                "t_end_s": 19.6,
+                "description": "Hiker moves out of prominent view; camera settles on a landscape-only shot of the alpine massif and glacier framed by larch trees in the foreground, with no subject visible."
+              }
+            ],
+            "temporal_order_note": "The clip progresses from a forest-enclosed trail (hiker close, mountain hidden) to an open alpine panorama (hiker distant, mountain fully revealed). The reveal direction is person-first then landscape \u2014 the hiker leads the eye into the scene and the mountain gradually emerges behind/around her, culminating in a pure landscape frame at the end.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 18.0,
+                "why_useful": "Complete follow-behind hiking action with continuous forward movement; hiker visible throughout and mountain progressively revealed \u2014 coherent motion segment for trail progression coverage."
+              },
+              {
+                "t_start_s": 8.0,
+                "t_end_s": 18.0,
+                "why_useful": "Tighter segment where the alpine massif begins appearing prominently alongside the hiker \u2014 strongest combination of subject movement and landscape reveal."
+              },
+              {
+                "t_start_s": 17.0,
+                "t_end_s": 19.6,
+                "why_useful": "Pure landscape shot of the glacier and rocky peaks framed by larches under blue sky \u2014 usable as a standalone scenic cutaway or establishing shot."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The footage directly fulfils the requested Shot purpose: the camera follows behind the hiker as she progresses up the trail for the full clip duration, showing clear forward movement deeper into the alpine landscape. The bonus landscape-only tail also extends the scenic value beyond the literal instruction.",
+            "requested_beat_contribution": "Strongly serves the 'Progression into the landscape' beat \u2014 the hiker moves continuously away from camera while the mountain scenery grows larger and more dramatic, visually communicating journey and depth into the alpine environment."
+          }
+        },
+        {
+          "id": "m2",
+          "provenance": "REAL",
+          "observed": {
+            "summary": "A roughly 6-second clip filmed from a high alpine ridge. The first half (~0\u20132.5 s) is a pure landscape shot looking down a dramatic glacial valley flanked by steep rocky walls, with low clouds drifting through. The second half (~2.5\u20136 s) pans/reframes to reveal a lone hiker with trekking poles standing small on the grassy ridge in the left-mid-ground, with the broad open alpine plateau and cloud-wrapped ridgeline filling the background.",
+            "subjects": [
+              "lone hiker with trekking poles",
+              "alpine valley and rocky ridgeline",
+              "drifting low clouds",
+              "wildflower-covered foreground slope"
+            ],
+            "events": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "description": "Static wide shot of a deep alpine valley: steep rocky walls left and right, forested lower valley visible in the distance, low clouds drifting across the upper ridges. No person visible."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "description": "Camera reframes leftward and slightly closer to the ridge crest, revealing a lone hiker standing still with trekking poles on the open grassy slope. The hiker appears very small against the vast cloud-covered plateau and rocky ridge behind them. Clouds continue to shift, alternately obscuring and revealing the background terrain."
+              }
+            ],
+            "temporal_order_note": "The clip moves from a pure landscape reveal (valley and clouds, no person) to a landscape-then-person reveal: the hiker enters the frame only in the second half as the camera reframes, making the scale contrast a progressive discovery rather than an immediate establishing shot.",
+            "useful_segments": [
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 2.5,
+                "why_useful": "Clean landscape-only wide shot of the alpine valley with dramatic cloud movement; useful as a standalone scenery cut or lead-in."
+              },
+              {
+                "t_start_s": 2.5,
+                "t_end_s": 6.1,
+                "why_useful": "Hiker visible and stationary against the vast plateau and cloud-wrapped ridge \u2014 complete human-vs-landscape scale contrast composition with foreground wildflowers adding depth."
+              },
+              {
+                "t_start_s": 0.0,
+                "t_end_s": 6.1,
+                "why_useful": "Full clip as a single continuous reveal: landscape first, then small human figure appears, delivering a progressive scale-contrast effect."
+              }
+            ]
+          },
+          "story_context": {
+            "story_utility": "strong_elsewhere",
+            "requested_shot_contribution": "The clip fulfils the requested shot's creative purpose well in its second half: the hiker is framed small and stationary against a vast alpine landscape, delivering clear human-vs-landscape scale contrast. The first half (no person visible) does not serve the shot on its own, but the full clip provides a strong progressive reveal of that contrast.",
+            "requested_beat_contribution": "Directly supports the human/landscape scale contrast beat. The hiker's small silhouette against the enormous cloud-covered plateau and rocky ridgeline makes the scale difference viscerally clear. The progressive reveal (landscape alone \u2192 tiny human) strengthens the beat's emotional impact."
+          }
+        },
+        {
+          "id": "m3",
+          "provenance": "PENDING",
+          "pending": true
+        },
+        {
+          "id": "m4",
+          "provenance": "PENDING",
+          "pending": true
+        }
+      ],
+      "pending_count": 2,
+      "human_reference": {
+        "sufficiency": "workable",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "computes coverage from the 2 understood Moments",
+          "pending_count reported as 2",
+          "treats m3/m4 as UNKNOWN not absent",
+          "high uncertainty may suppress a confident Story Idea"
+        ],
+        "forbidden_properties": [
+          "declares a gap solely because pending media is unanalyzed",
+          "invents content for the pending Moments",
+          "treats pending Moments as empty/absent"
+        ]
+      }
+    }
+  }
+}
