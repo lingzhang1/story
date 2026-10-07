@@ -346,6 +346,8 @@ final class StoryCoverageModel {
     // Provenance for staleness (NOT the AI's own fields).
     var sourceUnderstandingIdsFingerprint: String
     var creativeIntentFingerprint: String
+    // E2-c: Coverage/2 is Guide-relative — a Guide change (new version) also makes Coverage stale.
+    var storyGuideFingerprint: String = ""
     var pendingCount: Int
 
     var schemaVersion: String
@@ -361,9 +363,10 @@ final class StoryCoverageModel {
         sourceUnderstandingIdsFingerprint: String,
         creativeIntentFingerprint: String,
         pendingCount: Int,
-        schemaVersion: String = "story_coverage/1",
+        storyGuideFingerprint: String = "",
+        schemaVersion: String = "story_coverage/2",
         modelId: String? = nil,
-        promptVersion: String = "story_coverage/v1",
+        promptVersion: String = "story_coverage/v2",
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -371,7 +374,41 @@ final class StoryCoverageModel {
         self.coverageJSON = coverageJSON
         self.sourceUnderstandingIdsFingerprint = sourceUnderstandingIdsFingerprint
         self.creativeIntentFingerprint = creativeIntentFingerprint
+        self.storyGuideFingerprint = storyGuideFingerprint
         self.pendingCount = pendingCount
+        self.schemaVersion = schemaVersion
+        self.modelId = modelId
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+// E2-c: the persistent StoryGuide (one active version per Story for MVP). Generated ONCE from
+// CreativeIntent; stable while Coverage recomputes. Canonical server-minted dimension/possibility
+// ids live inside guideJSON (story_guide/1). No automatic Guide evolution; a future evolution
+// creates a NEW version rather than mutating this.
+@Model
+final class StoryGuideModel {
+    @Attribute(.unique) var storyId: UUID
+    var guideJSON: String                 // snake_case wire JSON (story_guide/1), canonical ids inside
+    var schemaVersion: String
+    var modelId: String?
+    var promptVersion: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        storyId: UUID,
+        guideJSON: String,
+        schemaVersion: String = "story_guide/1",
+        modelId: String? = nil,
+        promptVersion: String = "story_guide/v1",
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.storyId = storyId
+        self.guideJSON = guideJSON
         self.schemaVersion = schemaVersion
         self.modelId = modelId
         self.promptVersion = promptVersion

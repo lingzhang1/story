@@ -16,7 +16,7 @@ struct StoryApp: App {
                      AssetModel.self, GeneratedOutputModel.self,
                      LocalIdentityModel.self,
                      MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
-                     StoryCoverageModel.self
+                     StoryCoverageModel.self, StoryGuideModel.self
             )
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")

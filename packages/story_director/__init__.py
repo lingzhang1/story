@@ -114,6 +114,7 @@ class StoryDirectorEngine(Protocol):
         creative_intent: dict[str, Any],
         scene_understanding: dict[str, Any] | None = None,
         capture_constraints: dict[str, Any] | None = None,
+        selected_opportunity: dict[str, Any] | None = None,
     ) -> DirectorOutput: ...
 
     def next(
@@ -136,6 +137,7 @@ class RealStoryDirectorEngine:
         creative_intent: dict[str, Any],
         scene_understanding: dict[str, Any] | None,
         capture_constraints: dict[str, Any] | None,
+        selected_opportunity: dict[str, Any] | None = None,
     ) -> StructuredRequest:
         import json
         null_scene = not scene_understanding
@@ -145,6 +147,10 @@ class RealStoryDirectorEngine:
             "scene_understanding": scene_understanding,   # may be null (Skip Scan)
             "capture_constraints": capture_constraints or {},
         }
+        if selected_opportunity:
+            # The high-level narrative opportunity the user EXPLICITLY chose (Story Idea -> Show me,
+            # or Guide possibility -> Shoot). Semantic WHAT, not a literal shot/constraint.
+            content["selected_opportunity"] = selected_opportunity
         prefix = ""
         if null_scene:
             # Skip Scan: no surroundings known. Prompt's SKIP-SCAN clause governs; this
@@ -155,6 +161,13 @@ class RealStoryDirectorEngine:
                 "NO SCENE rule: one actionable capture_shot grounded ONLY in the intent and the "
                 "user, environment-agnostic, inventing nothing; exactly one beat and one shot; "
                 "do not rescan.\n\n"
+            )
+        if selected_opportunity:
+            prefix += (
+                "NOTE: selected_opportunity is PRESENT — the user explicitly chose this high-level "
+                "narrative goal. Decide HOW to realize it using only what the current scene genuinely "
+                "supports; it is semantic, not a literal required shot. If the scene cannot meaningfully "
+                "serve it, use rescan_scene rather than forcing a connection.\n\n"
             )
         return StructuredRequest(
             task=TASK_INIT,
@@ -195,8 +208,8 @@ class RealStoryDirectorEngine:
 
     # ---- ops ---------------------------------------------------------------
 
-    def initialize(self, creative_intent, scene_understanding=None, capture_constraints=None) -> DirectorOutput:
-        req = self.build_initialize_request(creative_intent, scene_understanding, capture_constraints)
+    def initialize(self, creative_intent, scene_understanding=None, capture_constraints=None, selected_opportunity=None) -> DirectorOutput:
+        req = self.build_initialize_request(creative_intent, scene_understanding, capture_constraints, selected_opportunity)
         return self._to_output(self._gateway.generate_structured(req))
 
     def next(self, prior) -> DirectorOutput:
@@ -328,7 +341,7 @@ class RealStoryDirectorEngine:
 class MockStoryDirectorEngine:
     """Deterministic mock (no model). Dev/tests only — never production direction."""
 
-    def initialize(self, creative_intent, scene_understanding, capture_constraints=None) -> DirectorOutput:
+    def initialize(self, creative_intent, scene_understanding, capture_constraints=None, selected_opportunity=None) -> DirectorOutput:
         cid, pid, sid, bid = uuid4(), uuid4(), uuid4(), "beat_open"
         from contracts.schemas.ai_contracts import ShotContract, StoryBeat
         concept = StoryConceptContract(id=cid, title="Mock concept", summary="A mock point of view.")

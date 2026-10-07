@@ -448,7 +448,115 @@ struct StoryCoverageDTO: Codable {
     }
 }
 
-// MARK: - Shared coder helpers
+// MARK: - StoryGuide (E2-a, FROZEN) — persistent creative map, generated ONCE from CreativeIntent
+
+struct CapturePossibilityDTO: Codable, Identifiable, Equatable {
+    /// Server-minted stable id (drives the Figma represented/Shoot/Reshoot affordance). NEVER a model id.
+    let id: String
+    let label: String
+    let semanticPurpose: String?
+    enum CodingKeys: String, CodingKey { case id, label; case semanticPurpose = "semantic_purpose" }
+}
+
+struct StoryGuideDimensionDTO: Codable, Identifiable, Equatable {
+    /// Server-minted STABLE Story-local identity — Coverage references this by id.
+    let id: String
+    let label: String
+    let purpose: String
+    let capturePossibilities: [CapturePossibilityDTO]
+    enum CodingKeys: String, CodingKey { case id, label, purpose; case capturePossibilities = "capture_possibilities" }
+}
+
+struct StoryGuideDTO: Codable, Equatable {
+    let schemaVersion: String
+    let storyId: UUID
+    let sourceCreativeIntentVersion: String?
+    let framingSummary: String
+    let dimensions: [StoryGuideDimensionDTO]
+    let generatedAt: Date?
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case storyId = "story_id"
+        case sourceCreativeIntentVersion = "source_creative_intent_version"
+        case framingSummary = "framing_summary"
+        case dimensions
+        case generatedAt = "generated_at"
+    }
+}
+
+// MARK: - StoryCoverage/2 (E2-b, FROZEN) — Guide-relative state + independent sufficiency/idea
+
+struct DimensionCoverageDTO: Codable, Identifiable, Equatable {
+    var id: String { storyGuideDimensionId }
+    let storyGuideDimensionId: String
+    let state: NarrativeCoverageDTO
+    let note: String?
+    let evidenceMomentIds: [UUID]
+    /// UI-ONLY (Figma [x]/Reshoot). NEVER drives state/sufficiency/idea. May be empty while state is strong.
+    let representedPossibilityIds: [String]
+    enum CodingKeys: String, CodingKey {
+        case storyGuideDimensionId = "story_guide_dimension_id"
+        case state, note
+        case evidenceMomentIds = "evidence_moment_ids"
+        case representedPossibilityIds = "represented_possibility_ids"
+    }
+}
+
+/// ONE optional opportunity. Independent of sufficiency. description = card copy (concise); rationale internal.
+struct CoverageStoryIdeaV2DTO: Codable, Equatable {
+    let title: String
+    let description: String
+    let rationale: String?
+    let targetStoryGuideDimensionId: String?
+    enum CodingKeys: String, CodingKey {
+        case title, description, rationale
+        case targetStoryGuideDimensionId = "target_story_guide_dimension_id"
+    }
+}
+
+struct StoryCoverageV2DTO: Codable, Equatable {
+    let schemaVersion: String
+    let storyId: UUID
+    let storyGuideId: String
+    let storyGuideVersion: String
+    let momentCount: Int
+    let pendingCount: Int
+    let sourceUnderstandingIds: [UUID]
+    let dimensionCoverage: [DimensionCoverageDTO]
+    let strengths: [String]
+    let redundancies: [String]
+    let sufficiency: CoverageSufficiencyDTO
+    /// null is a first-class "no interruption" result — DO NOT render a card when nil.
+    let storyIdea: CoverageStoryIdeaV2DTO?
+    let generatedAt: Date?
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case storyId = "story_id"
+        case storyGuideId = "story_guide_id"
+        case storyGuideVersion = "story_guide_version"
+        case momentCount = "moment_count"
+        case pendingCount = "pending_count"
+        case sourceUnderstandingIds = "source_understanding_ids"
+        case dimensionCoverage = "dimension_coverage"
+        case strengths, redundancies, sufficiency
+        case storyIdea = "story_idea"
+        case generatedAt = "generated_at"
+    }
+}
+
+/// The high-level narrative opportunity the user explicitly chose (Story Idea -> Show me, or Guide
+/// possibility -> Shoot). Carried into the Director initialize path. Semantic WHAT, never a shot.
+struct SelectedOpportunityDTO: Codable, Equatable {
+    let storyGuideDimensionId: String?
+    let label: String
+    let purpose: String
+    let capturePossibilityLabel: String?
+    enum CodingKeys: String, CodingKey {
+        case storyGuideDimensionId = "story_guide_dimension_id"
+        case label, purpose
+        case capturePossibilityLabel = "capture_possibility_label"
+    }
+}
 
 enum StoryContractCoding {
     /// JSONDecoder configured for the frozen wire conventions

@@ -37,7 +37,8 @@ struct StoryDirectorService {
     /// null and recommends environment-agnostically).
     func initialize(creativeIntent: CreativeIntentContractDTO,
                     sceneUnderstanding: SceneUnderstandingContractDTO?,
-                    targetDurationSeconds: Double?) async throws -> DirectorOutputDTO {
+                    targetDurationSeconds: Double?,
+                    selectedOpportunity: SelectedOpportunityDTO? = nil) async throws -> DirectorOutputDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/director/initialize"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -56,6 +57,10 @@ struct StoryDirectorService {
             if let su = sceneUnderstanding {       // Skip Scan omits this entirely
                 let suData = try encoder.encode(su)
                 body["scene_understanding"] = try JSONSerialization.jsonObject(with: suData)
+            }
+            if let opp = selectedOpportunity {     // E2-c: carry the user's chosen opportunity (optional)
+                let oppData = try encoder.encode(opp)
+                body["selected_opportunity"] = try JSONSerialization.jsonObject(with: oppData)
             }
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {

@@ -162,6 +162,12 @@ class DirectorInitializeRequest(BaseModel):
         description="A SceneUnderstanding contract object, or null when the user used "
                     "Skip Scan (Director then recommends environment-agnostically).")
     capture_constraints: dict | None = Field(default=None)
+    selected_opportunity: dict | None = Field(
+        default=None,
+        description="OPTIONAL (E2-c): the high-level narrative opportunity the user explicitly chose "
+                    "(Story Idea -> Show me, or Guide possibility -> Shoot). Shape: "
+                    "{story_guide_dimension_id?, label, purpose, capture_possibility_label?}. null = "
+                    "unchanged Director behavior. Semantic WHAT, never a literal shot/constraint.")
 
 
 class DirectorNextRequest(BaseModel):
@@ -564,7 +570,8 @@ def create_app() -> FastAPI:
         cid = str(uuid4())
         started = time.monotonic()
         try:
-            out = engine.initialize(body.creative_intent, body.scene_understanding, body.capture_constraints)
+            out = engine.initialize(body.creative_intent, body.scene_understanding,
+                                    body.capture_constraints, body.selected_opportunity)
         except StructuredOutputError as e:
             _director_fail("initialize", e, started, cid, "structured_output_failed")
         except ProviderError as e:
