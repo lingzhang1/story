@@ -55,6 +55,54 @@ protocol StoryCoverageComputing {
     func compute(_ request: StoryCoverageRequestDTO) async throws -> StoryCoverageDTO
 }
 
+// MARK: - Coverage/2 (E2-c) — Guide-relative. POST /v1/story-coverage/v2.
+
+struct StoryCoverageV2RequestDTO: Encodable {
+    let storyId: UUID
+    /// The frozen persisted StoryGuide (dimensions w/ stable ids), passed through verbatim.
+    let storyGuide: JSONValue
+    let storyGuideVersion: String
+    let creativeIntent: JSONValue
+    let scope: JSONValue
+    let momentUnderstandings: [JSONValue]
+    let pendingCount: Int
+    enum CodingKeys: String, CodingKey {
+        case storyId = "story_id"
+        case storyGuide = "story_guide"
+        case storyGuideVersion = "story_guide_version"
+        case creativeIntent = "creative_intent"
+        case scope
+        case momentUnderstandings = "moment_understandings"
+        case pendingCount = "pending_count"
+    }
+}
+
+protocol StoryCoverageV2Computing {
+    func compute(_ request: StoryCoverageV2RequestDTO) async throws -> StoryCoverageV2DTO
+}
+
+struct StoryCoverageV2Service: StoryCoverageV2Computing {
+    var baseURL: URL = StoryBackend.baseURL
+    var session: URLSession = .shared
+
+    func compute(_ request: StoryCoverageV2RequestDTO) async throws -> StoryCoverageV2DTO {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage/v2"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do { req.httpBody = try StoryContractCoding.encoder().encode(request) }
+        catch { throw StoryCoverageServiceError.decoding(error) }
+        let data: Data
+        let resp: URLResponse
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw StoryCoverageServiceError.transport(error) }
+        guard let http = resp as? HTTPURLResponse else { throw StoryCoverageServiceError.badStatus(-1) }
+        if http.statusCode == 503 { throw StoryCoverageServiceError.unavailableRetryable }
+        guard http.statusCode == 200 else { throw StoryCoverageServiceError.badStatus(http.statusCode) }
+        do { return try StoryContractCoding.decoder().decode(StoryCoverageV2DTO.self, from: data) }
+        catch { throw StoryCoverageServiceError.decoding(error) }
+    }
+}
+
 struct StoryCoverageService: StoryCoverageComputing {
     var baseURL: URL = StoryBackend.baseURL
     var session: URLSession = .shared

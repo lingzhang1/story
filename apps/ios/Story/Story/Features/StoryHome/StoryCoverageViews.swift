@@ -23,35 +23,32 @@ import SwiftData
 enum StoryCoveragePresentation {
 
     /// Ordinary-language "what your Story already contains" lines, derived from
-    /// strengths and strong/looking_good dimensions. No ids, no scores.
-    static func strengthLines(_ cov: StoryCoverageDTO) -> [String] {
-        if !cov.strengths.isEmpty { return Array(cov.strengths.prefix(3)) }
-        // Fallback: name strong dimensions in plain words (label only, never id).
-        return cov.dimensions
-            .filter { $0.coverage == .strong || $0.coverage == .lookingGood }
-            .prefix(3)
-            .map { $0.label }
+    /// strengths (Coverage/2 carries the positive evidence directly). No ids, no scores.
+    /// NOTE (Batch 1): minimal V2 adaptation — the full Figma Guide UX (dimensions +
+    /// purposes + possibilities, driven by the persisted StoryGuide) lands in Batch 3.
+    static func strengthLines(_ cov: StoryCoverageV2DTO) -> [String] {
+        Array(cov.strengths.prefix(3))
     }
 
     /// Gentle "what could make it stronger" lines — ONLY genuinely weak dimensions,
     /// phrased as optional opportunities, never as homework or required shots.
     /// Suppressed entirely for `sufficient` (ENOUGH state owns that case).
-    static func opportunityLines(_ cov: StoryCoverageDTO) -> [String] {
+    static func opportunityLines(_ cov: StoryCoverageV2DTO) -> [String] {
         guard cov.sufficiency.status != .sufficient else { return [] }
-        return cov.dimensions
-            .filter { $0.coverage == .couldUseMore }
-            .prefix(2)
-            .map { $0.purpose?.isEmpty == false ? $0.purpose! : $0.label }
+        // Batch 1: dimension labels/purposes live in the StoryGuide now; Batch 3 renders
+        // them from the Guide. Until then, surface the sufficiency reason if present.
+        if let r = cov.sufficiency.reason, !r.isEmpty { return [r] }
+        return []
     }
 
     /// The ENOUGH line for a sufficient Story (Figma-consistent). Non-prescriptive.
-    static func enoughLine(_ cov: StoryCoverageDTO) -> String {
+    static func enoughLine(_ cov: StoryCoverageV2DTO) -> String {
         "Your Story already tells its story. You can keep capturing, or create it now."
     }
 
     /// A single honest uncertainty line when some Moments are still being understood.
     /// Pending = UNKNOWN, never surfaced as a gap. nil when nothing is pending.
-    static func pendingLine(_ cov: StoryCoverageDTO) -> String? {
+    static func pendingLine(_ cov: StoryCoverageV2DTO) -> String? {
         guard cov.pendingCount > 0 else { return nil }
         let n = cov.pendingCount
         return "Still looking at \(n) more moment\(n == 1 ? "" : "s") — your guide will fill in as they're ready."
@@ -61,7 +58,7 @@ enum StoryCoveragePresentation {
 // MARK: - Story Guide section
 
 struct StoryGuideSection: View {
-    let coverage: StoryCoverageDTO?
+    let coverage: StoryCoverageV2DTO?
     let isLoading: Bool
 
     var body: some View {
@@ -87,7 +84,7 @@ struct StoryGuideSection: View {
     }
 
     @ViewBuilder
-    private func content(_ cov: StoryCoverageDTO) -> some View {
+    private func content(_ cov: StoryCoverageV2DTO) -> some View {
         let strengths = StoryCoveragePresentation.strengthLines(cov)
         let opportunities = StoryCoveragePresentation.opportunityLines(cov)
         let pending = StoryCoveragePresentation.pendingLine(cov)
@@ -146,7 +143,7 @@ struct StoryGuideSection: View {
 // parent via `if coverage?.storyIdea != nil`). This view assumes a non-nil idea.
 
 struct StoryIdeaSection: View {
-    let idea: CoverageStoryIdeaDTO
+    let idea: CoverageStoryIdeaV2DTO
     /// Tapping routes into the existing Show Me / Director flow (high-level -> executable).
     var onShowMe: () -> Void
 

@@ -21,7 +21,7 @@ struct StoryHomeView: View {
     @State private var confirmLifecycle = false
 
     // Milestone E — Story Coverage (real Story Guide + Story Idea).
-    @State private var coverage: StoryCoverageDTO?
+    @State private var coverage: StoryCoverageV2DTO?
     @State private var coverageLoading = false
 
     private var coverageEngine: StoryCoverageEngine {
@@ -156,19 +156,30 @@ struct StoryHomeView: View {
         let engine = coverageEngine
         coverage = engine.cachedCoverage(for: story.id)   // immediate (may be nil)
 
-        let inputs = engine.currentInputs(for: story)
-        let hasUnderstood = !inputs.completedMUValues.isEmpty
-        guard hasUnderstood else {
-            // Nothing understood yet -> neutral state; do not call the model.
+        // Guide lifecycle is SEPARATE from Coverage: ensure the persisted Guide exists
+        // (generates once from CreativeIntent; covers existing-Story migration). Coverage
+        // READS the Guide — it never generates it.
+        let coordinator = StoryGuideCoordinator(context: context)
+        guard let guide = await coordinator.ensureGuide(for: story) else {
+            // Guide unavailable (retryable) — Story stays valid; no Coverage without a Guide.
             coverageLoading = false
             return
         }
-        guard engine.isStale(for: story) else { return }   // cache current: done
+        let guideFingerprint = coordinator.guideFingerprint(for: story.id)
 
-        coverageLoading = (coverage == nil)                // loading text only if nothing to show
-        let fresh = await engine.recomputeIfNeeded(for: story)
+        let inputs = engine.currentInputs(for: story)
+        let hasUnderstood = !inputs.completedMUValues.isEmpty
+        guard hasUnderstood else {
+            // Nothing understood yet -> Guide supplies content; do NOT call Mapper/Judge.
+            coverageLoading = false
+            return
+        }
+        guard engine.isStale(for: story, guideFingerprint: guideFingerprint) else { return }
+
+        coverageLoading = (coverage == nil)
+        let fresh = await engine.recomputeIfNeeded(for: story, guide: guide, guideFingerprint: guideFingerprint)
         coverageLoading = false
-        if let fresh { coverage = fresh }                  // keep previous on failure (fresh==cached)
+        if let fresh { coverage = fresh }                  // keep previous on failure
     }
 
     private var stateLine: String {

@@ -2,14 +2,14 @@ import XCTest
 import SwiftData
 @testable import Story
 
-// Story Coverage tests (Milestone E, FROZEN). Three groups:
-//   1. Contract decode: hybrid dims, nullable story_idea, categorical coverage,
-//      dimension ids are snapshot-local handles (decoded as plain strings, never
-//      used as persistent identity).
-//   2. Engine lifecycle: cached-current -> no model call; stale -> recompute;
-//      failed recompute preserves previous valid coverage; pending = unknown.
-//   3. Presentation mapping: Guide shows ordinary language (no ids/scores/jargon);
-//      sufficient -> ENOUGH + no opportunities; Idea hidden when null.
+// StoryCoverage/2 + StoryGuide lifecycle tests (Milestone E2-c). Groups:
+//   1. Contract decode: StoryGuide/1, StoryCoverage/2 (dimension_coverage keyed by Guide id,
+//      represented_possibility_ids, nullable idea + target dimension).
+//   2. Guide lifecycle: generate-once, migration (CreativeIntent present, Guide absent), failure
+//      preserves Story (no fabrication).
+//   3. Coverage/2 lifecycle: zero completed AU -> no call; pending-only -> no call; cached-current
+//      -> no call; guide-fingerprint staleness; AU completion stales; failed recompute preserves.
+//   4. Presentation mapping (V2 minimal, Batch 1): sufficient -> ENOUGH; pending line; null idea.
 @MainActor
 final class StoryCoverageTests: XCTestCase {
     private var container: ModelContainer!
@@ -21,251 +21,248 @@ final class StoryCoverageTests: XCTestCase {
             for: StoryModel.self, MomentModel.self, AssetModel.self,
                  GeneratedOutputModel.self, LocalIdentityModel.self,
                  MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
-                 StoryCoverageModel.self,
+                 StoryCoverageModel.self, StoryGuideModel.self,
             configurations: config)
     }
 
-    // MARK: - Fakes & fixtures
+    // MARK: - Fakes
 
-    /// A scripted coverage service: returns a canned DTO (optionally per-call) or throws.
-    private final class FakeCoverage: StoryCoverageComputing {
-        var result: StoryCoverageDTO?
+    private final class FakeGuide: StoryGuideGenerating {
+        var calls = 0
+        var error: Error?
+        init(error: Error? = nil) { self.error = error }
+        func generate(_ request: StoryGuideRequestDTO) async throws -> StoryGuideDTO {
+            calls += 1
+            if let error { throw error }
+            return StoryGuideDTO(
+                schemaVersion: "story_guide/1", storyId: request.storyId,
+                sourceCreativeIntentVersion: nil, framingSummary: "For this Story: scale.",
+                dimensions: [StoryGuideDimensionDTO(id: "dim_01", label: "Scale", purpose: "enormous",
+                    capturePossibilities: [CapturePossibilityDTO(id: "dim_01_cp_01", label: "wide", semanticPurpose: nil)])],
+                generatedAt: nil)
+        }
+    }
+
+    private final class FakeCoverageV2: StoryCoverageV2Computing {
+        var result: StoryCoverageV2DTO?
         var error: Error?
         var calls = 0
-        var lastRequest: StoryCoverageRequestDTO?
-        init(result: StoryCoverageDTO? = nil, error: Error? = nil) {
-            self.result = result; self.error = error
-        }
-        func compute(_ request: StoryCoverageRequestDTO) async throws -> StoryCoverageDTO {
+        var lastRequest: StoryCoverageV2RequestDTO?
+        init(result: StoryCoverageV2DTO? = nil, error: Error? = nil) { self.result = result; self.error = error }
+        func compute(_ request: StoryCoverageV2RequestDTO) async throws -> StoryCoverageV2DTO {
             calls += 1; lastRequest = request
             if let error { throw error }
-            // Default: echo a minimal valid coverage keyed to the request's story.
             return result ?? Self.minimal(storyId: request.storyId,
-                                           moments: request.momentUnderstandings.count,
-                                           pending: request.pendingCount)
+                moments: request.momentUnderstandings.count, pending: request.pendingCount)
         }
         static func minimal(storyId: UUID, moments: Int, pending: Int,
                             sufficiency: SufficiencyStatusDTO = .workable,
-                            idea: CoverageStoryIdeaDTO? = nil) -> StoryCoverageDTO {
-            StoryCoverageDTO(
-                schemaVersion: "story_coverage/1", storyId: storyId,
-                momentCount: moments, pendingCount: pending, sourceUnderstandingIds: [],
-                dimensions: [CoverageDimensionDTO(id: "d1", label: "Place", purpose: "sense of where",
-                                                  coverage: .strong, note: nil, evidenceMomentIds: [])],
+                            idea: CoverageStoryIdeaV2DTO? = nil) -> StoryCoverageV2DTO {
+            StoryCoverageV2DTO(
+                schemaVersion: "story_coverage/2", storyId: storyId, storyGuideId: "guide-1",
+                storyGuideVersion: "story_guide/1", momentCount: moments, pendingCount: pending,
+                sourceUnderstandingIds: [],
+                dimensionCoverage: [DimensionCoverageDTO(storyGuideDimensionId: "dim_01", state: .strong,
+                    note: nil, evidenceMomentIds: [], representedPossibilityIds: [])],
                 strengths: ["Strong sense of place"], redundancies: [],
                 sufficiency: CoverageSufficiencyDTO(status: sufficiency, reason: "r"),
                 storyIdea: idea, generatedAt: nil)
         }
     }
 
+    // MARK: - Fixtures
+
     @discardableResult
     private func makeStory(intent: String = "the beauty of the mountains") -> StoryModel {
-        let s = StoryModel(title: "T", intentRawText: intent, intentTheme: "", intentTone: "",
-                           intentSummary: intent)
-        ctx.insert(s)
-        try? ctx.save()
-        return s
+        let s = StoryModel(title: "T", intentRawText: intent, intentTheme: "", intentTone: "", intentSummary: intent)
+        ctx.insert(s); try? ctx.save(); return s
     }
 
-    /// Add a Moment + a completed MomentUnderstanding (JSON) to a Story.
     @discardableResult
-    private func addUnderstoodMoment(to story: StoryModel, summary: String = "a mountain") -> UUID {
-        let m = MomentModel(source: .directed)
-        m.story = story
-        ctx.insert(m)
+    private func addUnderstoodMoment(to story: StoryModel, summary: String = "a mountain",
+                                     usefulStart: Double = 0, usefulEnd: Double = 10) -> UUID {
+        let m = MomentModel(source: .directed); m.story = story; ctx.insert(m)
         let json = """
         {"moment_id":"\(m.id.uuidString)","schema_version":"moment_understanding/1",
          "observed":{"summary":"\(summary)","subjects":[],"events":[],"temporal_order_note":"",
-         "useful_segments":[]},"story_context":{"story_utility":"useful"}}
+         "useful_segments":[{"t_start_s":\(usefulStart),"t_end_s":\(usefulEnd),"why_useful":"x"}]},
+         "story_context":{"story_utility":"useful"}}
         """
         ctx.insert(MomentUnderstandingModel(
             momentId: m.id, schemaVersion: "moment_understanding/1", framePolicy: "au_frames/1",
             promptVersion: "au_prompt/1", modelId: "x", nFrames: 24, understandingJSON: json))
-        try? ctx.save()
-        return m.id
+        try? ctx.save(); return m.id
     }
 
-    /// Add a Moment with NO understanding yet (pending).
     @discardableResult
     private func addPendingMoment(to story: StoryModel) -> UUID {
-        let m = MomentModel(source: .directed)
-        m.story = story
-        ctx.insert(m)
-        try? ctx.save()
-        return m.id
+        let m = MomentModel(source: .directed); m.story = story; ctx.insert(m); try? ctx.save(); return m.id
+    }
+
+    private func guideReady(_ story: StoryModel, _ fake: FakeGuide = FakeGuide()) async -> (StoryGuideDTO, String) {
+        let coord = StoryGuideCoordinator(context: ctx, service: fake)
+        let g = await coord.ensureGuide(for: story)!
+        return (g, coord.guideFingerprint(for: story.id))
     }
 
     // MARK: - 1. Contract decode
 
-    func testDecodeHybridDimsNullableIdeaCategorical() throws {
+    func testDecodeStoryGuide() throws {
         let json = """
-        {"schema_version":"story_coverage/1","story_id":"\(UUID().uuidString)",
-         "moment_count":2,"pending_count":0,"source_understanding_ids":[],
-         "dimensions":[{"id":"human_scale_contrast","label":"Human vs Landscape Scale",
-           "purpose":"how small the figure feels","coverage":"could_use_more","note":null,
-           "evidence_moment_ids":[]}],
-         "strengths":["Strong landscape"],"redundancies":["8 near-identical panoramas"],
-         "sufficiency":{"status":"workable","reason":"ok"},"story_idea":null}
+        {"schema_version":"story_guide/1","story_id":"\(UUID().uuidString)",
+         "framing_summary":"For this Story: scale and stillness.",
+         "dimensions":[{"id":"dim_01","label":"Scale","purpose":"enormous",
+           "capture_possibilities":[{"id":"dim_01_cp_01","label":"person beneath mountains"}]}]}
         """
-        let dto = try StoryContractCoding.decoder()
-            .decode(StoryCoverageDTO.self, from: Data(json.utf8))
-        XCTAssertEqual(dto.dimensions.count, 1)
-        XCTAssertEqual(dto.dimensions[0].coverage, .couldUseMore)   // categorical, not numeric
-        XCTAssertEqual(dto.dimensions[0].label, "Human vs Landscape Scale")  // intent-derived label
-        XCTAssertNil(dto.storyIdea)                                  // nullable, first-class
-        XCTAssertEqual(dto.sufficiency.status, .workable)
+        let g = try StoryContractCoding.decoder().decode(StoryGuideDTO.self, from: Data(json.utf8))
+        XCTAssertEqual(g.dimensions[0].id, "dim_01")
+        XCTAssertEqual(g.dimensions[0].capturePossibilities[0].id, "dim_01_cp_01")
     }
 
-    func testDecodeWithStoryIdea() throws {
+    func testDecodeCoverageV2() throws {
         let json = """
-        {"schema_version":"story_coverage/1","story_id":"\(UUID().uuidString)",
-         "moment_count":1,"pending_count":0,"source_understanding_ids":[],
-         "dimensions":[],"strengths":[],"redundancies":[],
-         "sufficiency":{"status":"workable","reason":"r"},
-         "story_idea":{"title":"A quiet human moment","description":"someone in the frame","rationale":"r"}}
+        {"schema_version":"story_coverage/2","story_id":"\(UUID().uuidString)","story_guide_id":"g1",
+         "story_guide_version":"story_guide/1","moment_count":2,"pending_count":0,"source_understanding_ids":[],
+         "dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"strong","note":null,
+           "evidence_moment_ids":[],"represented_possibility_ids":[]}],
+         "strengths":["Strong scale"],"redundancies":[],
+         "sufficiency":{"status":"workable","reason":"ok"},
+         "story_idea":{"title":"A moment together","description":"warmth","rationale":"r","target_story_guide_dimension_id":"dim_01"}}
         """
-        let dto = try StoryContractCoding.decoder()
-            .decode(StoryCoverageDTO.self, from: Data(json.utf8))
-        XCTAssertEqual(dto.storyIdea?.title, "A quiet human moment")
+        let d = try StoryContractCoding.decoder().decode(StoryCoverageV2DTO.self, from: Data(json.utf8))
+        XCTAssertEqual(d.dimensionCoverage[0].storyGuideDimensionId, "dim_01")
+        XCTAssertEqual(d.dimensionCoverage[0].state, .strong)
+        XCTAssertTrue(d.dimensionCoverage[0].representedPossibilityIds.isEmpty)   // strong w/ zero represented
+        XCTAssertEqual(d.storyIdea?.targetStoryGuideDimensionId, "dim_01")
     }
 
-    func testDimensionIdIsSnapshotLocalNotPersistedAsIdentity() {
-        // The engine must NOT persist/key anything on dimension id — only the JSON
-        // blob + provenance fingerprints are stored. Assert no API surfaces dim id
-        // as a stored key: StoryCoverageModel has no dimensionId field.
-        let mirror = Mirror(reflecting: StoryCoverageModel(
-            storyId: UUID(), coverageJSON: "{}",
-            sourceUnderstandingIdsFingerprint: "a", creativeIntentFingerprint: "b", pendingCount: 0))
-        let names = mirror.children.compactMap { $0.label }
-        XCTAssertFalse(names.contains(where: { $0.lowercased().contains("dimensionid") }))
+    // MARK: - 2. Guide lifecycle
+
+    func testGuideGeneratedOnceAndPersisted() async {
+        let s = makeStory()
+        let fake = FakeGuide()
+        let coord = StoryGuideCoordinator(context: ctx, service: fake)
+        XCTAssertFalse(coord.hasGuide(for: s.id))
+        _ = await coord.ensureGuide(for: s)
+        XCTAssertTrue(coord.hasGuide(for: s.id))
+        XCTAssertEqual(fake.calls, 1)
+        _ = await coord.ensureGuide(for: s)                 // second call -> NO regeneration
+        XCTAssertEqual(fake.calls, 1)
     }
 
-    // MARK: - 2. Engine lifecycle
+    func testExistingStoryMigrationGeneratesGuideFromIntent() async {
+        // A Story created before Guides existed: CreativeIntent present, no Guide.
+        let s = makeStory(intent: "our TMB trek")
+        _ = addUnderstoodMoment(to: s)                      // has old-world material, no guide
+        let coord = StoryGuideCoordinator(context: ctx, service: FakeGuide())
+        XCTAssertFalse(coord.hasGuide(for: s.id))
+        let g = await coord.ensureGuide(for: s)             // migration path = same ensureGuide
+        XCTAssertNotNil(g)
+        XCTAssertTrue(coord.hasGuide(for: s.id))
+    }
 
-    func testRecomputeCachesAndSendsCompactInput() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        let fake = FakeCoverage()
+    func testGuideFailurePreservesStoryNoFabrication() async {
+        let s = makeStory()
+        let coord = StoryGuideCoordinator(context: ctx, service: FakeGuide(error: StoryGuideServiceError.unavailable))
+        let g = await coord.ensureGuide(for: s)
+        XCTAssertNil(g)                                     // no Guide
+        XCTAssertFalse(coord.hasGuide(for: s.id))           // nothing fabricated/persisted
+    }
+
+    // MARK: - 3. Coverage/2 lifecycle
+
+    func testZeroCompletedAUMeansNoCoverageCall() async {
+        let s = makeStory()                                 // no moments at all
+        let (g, fp) = await guideReady(s)
+        let fake = FakeCoverageV2()
         let eng = StoryCoverageEngine(context: ctx, service: fake)
-        let cov = await eng.recomputeIfNeeded(for: story, force: true)
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        XCTAssertEqual(fake.calls, 0)                       // Guide supplies content; NO Mapper/Judge
+    }
+
+    func testPendingOnlyMeansNoCoverageCall() async {
+        let s = makeStory()
+        _ = addPendingMoment(to: s); _ = addPendingMoment(to: s)   // only pending
+        let (g, fp) = await guideReady(s)
+        let fake = FakeCoverageV2()
+        let eng = StoryCoverageEngine(context: ctx, service: fake)
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        XCTAssertEqual(fake.calls, 0)                       // pending = unknown, not a gap
+    }
+
+    func testRecomputeCachesAndSendsGuideAndMoments() async {
+        let s = makeStory(); _ = addUnderstoodMoment(to: s)
+        let (g, fp) = await guideReady(s)
+        let fake = FakeCoverageV2()
+        let eng = StoryCoverageEngine(context: ctx, service: fake)
+        let cov = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
         XCTAssertNotNil(cov)
         XCTAssertEqual(fake.calls, 1)
-        XCTAssertEqual(fake.lastRequest?.momentUnderstandings.count, 1)   // one understood moment sent
-        XCTAssertNotNil(eng.cachedCoverage(for: story.id))               // cached
+        XCTAssertEqual(fake.lastRequest?.momentUnderstandings.count, 1)
+        XCTAssertEqual(fake.lastRequest?.storyGuideVersion, "story_guide/1")
+        XCTAssertNotNil(eng.cachedCoverage(for: s.id))
     }
 
-    func testCachedCurrentMeansNoModelCall() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        let fake = FakeCoverage()
+    func testCachedCurrentMeansNoCall() async {
+        let s = makeStory(); _ = addUnderstoodMoment(to: s)
+        let (g, fp) = await guideReady(s)
+        let fake = FakeCoverageV2()
         let eng = StoryCoverageEngine(context: ctx, service: fake)
-        _ = await eng.recomputeIfNeeded(for: story, force: true)   // call 1
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
         XCTAssertEqual(fake.calls, 1)
-        XCTAssertFalse(eng.isStale(for: story))                    // now current
-        _ = await eng.recomputeIfNeeded(for: story)                // should NOT call again
-        XCTAssertEqual(fake.calls, 1)
+        XCTAssertFalse(eng.isStale(for: s, guideFingerprint: fp))
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp)
+        XCTAssertEqual(fake.calls, 1)                       // current -> no second call
     }
 
-    func testAddingMomentMakesCoverageStale() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        let eng = StoryCoverageEngine(context: ctx, service: FakeCoverage())
-        _ = await eng.recomputeIfNeeded(for: story, force: true)
-        XCTAssertFalse(eng.isStale(for: story))
-        _ = addUnderstoodMoment(to: story, summary: "a river")     // new understood moment
-        XCTAssertTrue(eng.isStale(for: story))                     // provenance changed -> stale
+    func testAUCompletionStalesCoverage() async {
+        let s = makeStory(); _ = addUnderstoodMoment(to: s)
+        let (g, fp) = await guideReady(s)
+        let eng = StoryCoverageEngine(context: ctx, service: FakeCoverageV2())
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        XCTAssertFalse(eng.isStale(for: s, guideFingerprint: fp))
+        _ = addUnderstoodMoment(to: s, summary: "a river")  // new understood moment
+        XCTAssertTrue(eng.isStale(for: s, guideFingerprint: fp))
     }
 
-    func testIntentChangeMakesCoverageStale() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        let eng = StoryCoverageEngine(context: ctx, service: FakeCoverage())
-        _ = await eng.recomputeIfNeeded(for: story, force: true)
-        XCTAssertFalse(eng.isStale(for: story))
-        story.intentEmphasis = ["people"]; try? ctx.save()         // intent changed
-        XCTAssertTrue(eng.isStale(for: story))
+    func testGuideFingerprintChangeStalesCoverage() async {
+        let s = makeStory(); _ = addUnderstoodMoment(to: s)
+        let (g, fp) = await guideReady(s)
+        let eng = StoryCoverageEngine(context: ctx, service: FakeCoverageV2())
+        _ = await eng.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        XCTAssertFalse(eng.isStale(for: s, guideFingerprint: fp))
+        XCTAssertTrue(eng.isStale(for: s, guideFingerprint: "a-different-guide-fingerprint"))
     }
 
     func testFailedRecomputePreservesPreviousValidCoverage() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        // First: a successful compute caches a snapshot.
-        let good = FakeCoverage(result: FakeCoverage.minimal(
-            storyId: story.id, moments: 1, pending: 0, sufficiency: .sufficient))
-        let eng1 = StoryCoverageEngine(context: ctx, service: good)
-        _ = await eng1.recomputeIfNeeded(for: story, force: true)
-        XCTAssertEqual(eng1.cachedCoverage(for: story.id)?.sufficiency.status, .sufficient)
-
-        // Now a FAILING service + a stale input: cache must be preserved.
-        _ = addUnderstoodMoment(to: story)                         // make stale
-        let bad = FakeCoverage(error: StoryCoverageServiceError.unavailableRetryable)
-        let eng2 = StoryCoverageEngine(context: ctx, service: bad)
-        let result = await eng2.recomputeIfNeeded(for: story, force: true)
-        XCTAssertEqual(bad.calls, 1)
-        XCTAssertEqual(result?.sufficiency.status, .sufficient)    // previous valid, not nil
-        XCTAssertEqual(eng2.cachedCoverage(for: story.id)?.sufficiency.status, .sufficient)
+        let s = makeStory(); _ = addUnderstoodMoment(to: s)
+        let (g, fp) = await guideReady(s)
+        let good = FakeCoverageV2(result: FakeCoverageV2.minimal(storyId: s.id, moments: 1, pending: 0, sufficiency: .sufficient))
+        _ = await StoryCoverageEngine(context: ctx, service: good).recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        let eng2 = StoryCoverageEngine(context: ctx, service: FakeCoverageV2(error: StoryCoverageServiceError.unavailableRetryable))
+        _ = addUnderstoodMoment(to: s, summary: "x")        // make stale
+        let result = await eng2.recomputeIfNeeded(for: s, guide: g, guideFingerprint: fp, force: true)
+        XCTAssertEqual(result?.sufficiency.status, .sufficient)   // previous valid preserved
     }
 
-    func testPendingCountIsSentAndUnderstoodSubsetReasoned() async {
-        let story = makeStory()
-        _ = addUnderstoodMoment(to: story)
-        _ = addPendingMoment(to: story)                            // pending (no understanding)
-        _ = addPendingMoment(to: story)
-        let fake = FakeCoverage()
-        let eng = StoryCoverageEngine(context: ctx, service: fake)
-        _ = await eng.recomputeIfNeeded(for: story, force: true)
-        XCTAssertEqual(fake.lastRequest?.pendingCount, 2)          // pending COUNTED, not absent
-        XCTAssertEqual(fake.lastRequest?.momentUnderstandings.count, 1)  // only understood reasoned from
-    }
-
-    func testEmptyStoryIsNeverStaleAndCachesNothing() async {
-        let story = makeStory()                                    // no moments
-        let fake = FakeCoverage()
-        let eng = StoryCoverageEngine(context: ctx, service: fake)
-        let inputs = eng.currentInputs(for: story)
-        XCTAssertTrue(inputs.completedMUValues.isEmpty)
-        XCTAssertNil(eng.cachedCoverage(for: story.id))
-    }
-
-    // MARK: - 3. Presentation mapping
-
-    func testGuideStrengthsUseOrdinaryLanguageNoIds() {
-        let cov = FakeCoverage.minimal(storyId: UUID(), moments: 2, pending: 0)
-        let lines = StoryCoveragePresentation.strengthLines(cov)
-        XCTAssertEqual(lines.first, "Strong sense of place")       // the strength string, not "d1"
-        XCTAssertFalse(lines.contains("d1"))                       // never a raw dimension id
-    }
+    // MARK: - 4. Presentation (V2 minimal, Batch 1)
 
     func testSufficientShowsEnoughAndNoOpportunities() {
-        let cov = StoryCoverageDTO(
-            schemaVersion: "story_coverage/1", storyId: UUID(), momentCount: 3, pendingCount: 0,
-            sourceUnderstandingIds: [],
-            dimensions: [CoverageDimensionDTO(id: "d1", label: "Place", purpose: "p",
-                         coverage: .couldUseMore, note: nil, evidenceMomentIds: [])],
-            strengths: ["Rich material"], redundancies: [],
-            sufficiency: CoverageSufficiencyDTO(status: .sufficient, reason: "enough"),
-            storyIdea: nil, generatedAt: nil)
-        XCTAssertTrue(StoryCoveragePresentation.opportunityLines(cov).isEmpty)  // ENOUGH owns this case
+        let cov = FakeCoverageV2.minimal(storyId: UUID(), moments: 3, pending: 0, sufficiency: .sufficient)
+        XCTAssertTrue(StoryCoveragePresentation.opportunityLines(cov).isEmpty)
         XCTAssertFalse(StoryCoveragePresentation.enoughLine(cov).isEmpty)
     }
 
-    func testWorkableSurfacesWeakDimensionAsOptionalOpportunity() {
-        let cov = StoryCoverageDTO(
-            schemaVersion: "story_coverage/1", storyId: UUID(), momentCount: 2, pendingCount: 0,
-            sourceUnderstandingIds: [],
-            dimensions: [CoverageDimensionDTO(id: "d1", label: "People", purpose: "a human presence",
-                         coverage: .couldUseMore, note: nil, evidenceMomentIds: [])],
-            strengths: [], redundancies: [],
-            sufficiency: CoverageSufficiencyDTO(status: .workable, reason: "r"),
-            storyIdea: nil, generatedAt: nil)
-        XCTAssertEqual(StoryCoveragePresentation.opportunityLines(cov), ["a human presence"])
+    func testPendingLineOnlyWhenPending() {
+        XCTAssertNil(StoryCoveragePresentation.pendingLine(FakeCoverageV2.minimal(storyId: UUID(), moments: 2, pending: 0)))
+        let some = StoryCoveragePresentation.pendingLine(FakeCoverageV2.minimal(storyId: UUID(), moments: 2, pending: 3))
+        XCTAssertNotNil(some)
+        XCTAssertFalse(some!.contains("missing"))
     }
 
-    func testPendingLineOnlyWhenPending() {
-        let none = FakeCoverage.minimal(storyId: UUID(), moments: 2, pending: 0)
-        XCTAssertNil(StoryCoveragePresentation.pendingLine(none))
-        let some = FakeCoverage.minimal(storyId: UUID(), moments: 2, pending: 3)
-        XCTAssertNotNil(StoryCoveragePresentation.pendingLine(some))
-        XCTAssertFalse(StoryCoveragePresentation.pendingLine(some)!.contains("missing"))  // never "missing"
+    func testStrengthLinesUseStrengthsNoIds() {
+        let lines = StoryCoveragePresentation.strengthLines(FakeCoverageV2.minimal(storyId: UUID(), moments: 2, pending: 0))
+        XCTAssertEqual(lines.first, "Strong sense of place")
+        XCTAssertFalse(lines.contains("dim_01"))
     }
 }
