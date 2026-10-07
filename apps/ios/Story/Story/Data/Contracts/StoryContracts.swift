@@ -375,7 +375,7 @@ struct CaptureSessionContractDTO: Codable, Equatable {
 
 /// Advisory per-dimension coverage (02 §8) — never a progress bar. Matches
 /// ai_contracts.NarrativeCoverage.
-enum NarrativeCoverageDTO: String, Codable {
+enum NarrativeCoverageDTO: String, Codable, Equatable {
     case unknown
     case couldUseMore = "could_use_more"
     case lookingGood = "looking_good"
@@ -385,7 +385,7 @@ enum NarrativeCoverageDTO: String, Codable {
 /// Can a Story meeting the user's intent be made from the understood material?
 /// Relative to intent + scope + complementarity + redundancy + pending
 /// uncertainty — NEVER derived from Moment count. Matches ai_contracts.SufficiencyStatus.
-enum SufficiencyStatusDTO: String, Codable {
+enum SufficiencyStatusDTO: String, Codable, Equatable {
     case insufficient
     case workable
     case sufficient
@@ -406,7 +406,7 @@ struct CoverageDimensionDTO: Codable, Identifiable {
     }
 }
 
-struct CoverageSufficiencyDTO: Codable {
+struct CoverageSufficiencyDTO: Codable, Equatable {
     let status: SufficiencyStatusDTO
     let reason: String?
 }
