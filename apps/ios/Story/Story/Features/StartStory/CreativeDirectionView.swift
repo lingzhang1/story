@@ -22,6 +22,10 @@ struct CreativeDirectionView: View {
     @State private var guide: StoryGuideDTO?            // real StoryGuide for "Here's what I'll look for"
     @State private var guideLoading = false
     @State private var guideFailed = false
+    // M-c: real inferred/edited MusicDirection shown on "Here's what I understood".
+    @State private var musicDirection: MusicDirectionContractDTO?
+    @State private var musicLoading = false
+    @State private var musicSheetOpen = false
 
     private let presets: [(title: String, desc: String)] = [
         ("Cinematic journey", "Cinematic · Scenic · Journey"),
@@ -161,13 +165,39 @@ struct CreativeDirectionView: View {
                 Text(s.title.displayTitle).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
                 Text(s.intentSummary).font(StoryTheme.body(16))
                     .foregroundStyle(StoryTheme.textSecondary).fixedSize(horizontal: false, vertical: true)
-                // Music direction — disabled future.
-                StoryUnavailableSection(header: { StoryEyebrow(text: "Music") },
-                    message: "Story will choose music that fits. Not available yet.")
+                // Music direction (M-c) — the REAL inferred/edited feel, with Change →.
+                MusicDirectionRow(summary: musicSummaryLine, loading: musicLoading) { musicSheetOpen = true }
                 StoryPrimaryButton(title: "Looks good") { Task { await enterBlueprint() } }
                 StorySecondaryButton(title: "Edit") { step = .describe; resolvedStory = nil }
             }
         }
+        .task(id: resolvedStory?.id) { await loadMusicDirection() }
+        .sheet(isPresented: $musicSheetOpen) {
+            MusicDirectionSheet(
+                current: musicDirection,
+                onSave: { feel, desc in Task { await saveMusicEdit(feel: feel, description: desc) } },
+                onAuto: { Task { await resetMusicToInferred() } }
+            )
+        }
+    }
+
+    // The one-line feel shown in the row: user/inferred summary, or a calm pending line.
+    private var musicSummaryLine: String {
+        if let md = musicDirection {
+            if !md.moodTags.isEmpty { return md.moodTags.joined(separator: " · ") }
+            return md.summary
+        }
+        return musicLoading ? "Finding the right feel…" : "Story will choose a fitting feel"
+    }
+
+    @MainActor
+    private func loadMusicDirection() async {
+        guard let s = resolvedStory else { return }
+        let coord = MusicDirectionCoordinator(context: context)
+        if let existing = coord.direction(for: s.id) { musicDirection = existing; return }
+        musicLoading = true
+        defer { musicLoading = false }
+        musicDirection = await coord.ensure(for: s, guideFramingSummary: guide?.framingSummary)
     }
 
     // Step 4 — "Here's what I'll look for" (E2-c): the REAL persistent StoryGuide, generated once from
@@ -263,6 +293,127 @@ struct CreativeDirectionView: View {
             errorMessage = (error as? LocalizedError)?.errorDescription
                 ?? "Something went wrong. Please try again."
             step = .feel
+        }
+    }
+
+    // M-c: persist a user-authored MusicDirection. Overrides inference permanently; regenerates nothing.
+    @MainActor
+    private func saveMusicEdit(feel: [String], description: String) async {
+        guard let s = resolvedStory else { return }
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let moods = feel.map { $0.lowercased() }
+        let summary = !trimmed.isEmpty ? trimmed
+            : (moods.isEmpty ? "A fitting soundtrack" : "A \(moods.joined(separator: " · ")) soundtrack")
+        let dto = MusicDirectionContractDTO(
+            summary: summary, moodTags: moods, energy: nil, progression: nil,
+            rawUserDescription: trimmed.isEmpty ? nil : trimmed)
+        let coord = MusicDirectionCoordinator(context: context)
+        coord.save(userEdit: dto, for: s.id)
+        musicDirection = dto
+        musicSheetOpen = false
+    }
+
+    // "Let Story choose" — clear the user override and re-infer the default.
+    @MainActor
+    private func resetMusicToInferred() async {
+        guard let s = resolvedStory else { return }
+        let coord = MusicDirectionCoordinator(context: context)
+        // Clear any existing row so ensure() re-infers a fresh default.
+        coord.clear(for: s.id)
+        musicDirection = nil
+        musicSheetOpen = false
+        musicLoading = true
+        defer { musicLoading = false }
+        musicDirection = await coord.ensure(for: s, guideFramingSummary: guide?.framingSummary)
+    }
+}
+
+// M-c Music row on "Here's what I understood" — mirrors the frozen Figma MusicDirectionRow:
+// eyebrow "♫ Music", the one feel line, a quiet "Change →". No track, no playback.
+private struct MusicDirectionRow: View {
+    let summary: String
+    let loading: Bool
+    let onChange: () -> Void
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 5) {
+                StoryEyebrow(text: "♫ Music")
+                Text(summary).font(StoryTheme.display(16))
+                    .foregroundStyle(StoryTheme.cream.opacity(loading ? 0.4 : 0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button("Change", action: onChange)
+                .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold)
+                .disabled(loading)
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .top) { Rectangle().fill(StoryTheme.cream.opacity(0.06)).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(StoryTheme.cream.opacity(0.06)).frame(height: 1) }
+    }
+}
+
+// M-c Change sheet — mirrors the frozen Figma MusicDirectionSheet: feel chips + optional free-text,
+// "Done" (user-authored) or "Let Story choose" (auto). The feeling only — the actual track is a
+// later (M-d) concern and stays absent here.
+private struct MusicDirectionSheet: View {
+    let current: MusicDirectionContractDTO?
+    let onSave: ([String], String) -> Void
+    let onAuto: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private static let feels = ["Cinematic", "Emotional", "Epic", "Dreamy", "Energetic", "Chill"]
+    @State private var selected: Set<String> = []
+    @State private var desc: String = ""
+
+    private var hasInput: Bool { !selected.isEmpty || !desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("How should the music feel?")
+                .font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+            Text("Just the feeling — Story finds the track later.")
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+            FlowChips(options: Self.feels, selected: $selected)
+            TextField("Describe it… (optional)", text: $desc, axis: .vertical)
+                .lineLimit(2...4).font(StoryTheme.body(14))
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(StoryTheme.cream.opacity(0.04)))
+            StoryPrimaryButton(title: "Done") { onSave(Array(selected), desc) }
+                .disabled(!hasInput).opacity(hasInput ? 1 : 0.4)
+            Button("✦ Let Story choose") { onAuto() }
+                .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                .frame(maxWidth: .infinity)
+            // Track selection / preview is a later milestone — visibly unavailable, in place.
+            StoryUnavailableSection(header: { StoryEyebrow(text: "Choose a track") },
+                message: "Track selection and preview aren't available yet.")
+        }
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            if let md = current, md.rawUserDescription != nil || !md.moodTags.isEmpty {
+                desc = md.rawUserDescription ?? ""
+                selected = Set(md.moodTags.map { $0.capitalized }.filter { Self.feels.contains($0) })
+            }
+        }
+    }
+}
+
+// Minimal wrapping chip row for the feel presets.
+private struct FlowChips: View {
+    let options: [String]
+    @Binding var selected: Set<String>
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], alignment: .leading, spacing: 8) {
+            ForEach(options, id: \.self) { f in
+                let on = selected.contains(f)
+                Button(f) { if on { selected.remove(f) } else { selected.insert(f) } }
+                    .font(StoryTheme.body(13))
+                    .foregroundStyle(on ? StoryTheme.ink : StoryTheme.cream.opacity(0.6))
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(on ? StoryTheme.gold : .clear))
+                    .overlay(Capsule().stroke(on ? StoryTheme.gold : StoryTheme.cream.opacity(0.14), lineWidth: 1))
+            }
         }
     }
 }

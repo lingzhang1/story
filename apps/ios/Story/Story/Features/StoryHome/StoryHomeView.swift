@@ -197,6 +197,14 @@ struct StoryHomeView: View {
         coverageLoading = false          // ALWAYS clear (success, failure, or cancellation)
         guard let g else { return }      // Guide unavailable (retryable) — neutral state + Retry button
         guide = g
+        // M-c legacy migration: ensure a default MusicDirection exists for Stories created before
+        // MusicDirection shipped. Fire-and-forget, non-blocking; infers ONCE if absent, leaves any
+        // user-authored direction untouched. No UI on Story Home (the MUSIC surface is on Creative
+        // Direction) — this only backfills so a future MusicPlan has a direction to read.
+        let musicCoord = MusicDirectionCoordinator(context: context)
+        if musicCoord.direction(for: story.id) == nil {
+            Task { await musicCoord.ensure(for: story, guideFramingSummary: g.framingSummary) }
+        }
         let guideFingerprint = coordinator.guideFingerprint(for: story.id)
 
         let inputs = engine.currentInputs(for: story)

@@ -416,3 +416,35 @@ final class StoryGuideModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// M-c: the persistent MusicDirection (intended soundtrack FEEL, one per Story). Inferred ONCE from
+// CreativeIntent (+ Guide framing) when absent; a user edit sets userAuthored=true and is NEVER
+// overwritten by inference (relaunch/migration/Coverage recompute). directionJSON holds the wire
+// MusicDirectionContract (music_direction/1). `fingerprint` lets a FUTURE MusicPlan cache detect that
+// the direction changed and invalidate itself — MusicDirection changes regenerate NOTHING else.
+@Model
+final class StoryMusicDirectionModel {
+    @Attribute(.unique) var storyId: UUID
+    var directionJSON: String             // snake_case wire JSON (MusicDirectionContract)
+    var userAuthored: Bool                // true = user edited; inference must NOT overwrite
+    var fingerprint: String               // stable hash of the direction (future MusicPlan staleness)
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        storyId: UUID,
+        directionJSON: String,
+        userAuthored: Bool = false,
+        fingerprint: String = "",
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.storyId = storyId
+        self.directionJSON = directionJSON
+        self.userAuthored = userAuthored
+        self.fingerprint = fingerprint
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
