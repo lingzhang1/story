@@ -1,0 +1,283 @@
+{
+  "$defs": {
+    "AudioStrategy": {
+      "additionalProperties": false,
+      "description": "First-class native-audio strategy. Story-level ONLY \u2014 NO per-Moment volume\nautomation, NO clip ids (those are Edit Planner / audio-mix). Exact ducking,\nfades and mixing belong downstream.",
+      "properties": {
+        "guidance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "optional one concise semantic line, e.g. 'step back so the real guitar lands'",
+          "title": "Guidance"
+        },
+        "native_audio_priority": {
+          "$ref": "#/$defs/NativeAudioPriority"
+        },
+        "soundtrack_role": {
+          "$ref": "#/$defs/SoundtrackRole"
+        }
+      },
+      "required": [
+        "soundtrack_role",
+        "native_audio_priority"
+      ],
+      "title": "AudioStrategy",
+      "type": "object"
+    },
+    "EnergyArcRegion": {
+      "additionalProperties": false,
+      "description": "One APPROXIMATE Story-level energy region. Fractions are 0..1 of\ntarget_duration_seconds \u2014 approximate regions, NEVER cut points.",
+      "properties": {
+        "end_fraction": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "End Fraction",
+          "type": "number"
+        },
+        "intensity": {
+          "$ref": "#/$defs/EnergyIntensity"
+        },
+        "label": {
+          "description": "short human-readable region name, e.g. 'warm gradual build'",
+          "title": "Label",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "optional one-line creative intent for the region",
+          "title": "Note"
+        },
+        "start_fraction": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Start Fraction",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "start_fraction",
+        "end_fraction",
+        "intensity"
+      ],
+      "title": "EnergyArcRegion",
+      "type": "object"
+    },
+    "EnergyIntensity": {
+      "description": "Categorical direction of an energy_arc region \u2014 NO numeric energy scores.",
+      "enum": [
+        "low",
+        "rising",
+        "high",
+        "falling"
+      ],
+      "title": "EnergyIntensity",
+      "type": "string"
+    },
+    "MusicCharacter": {
+      "additionalProperties": false,
+      "description": "RESOLVED snapshot of the intended musical feel. Authority is\nMusicDirection; this is carried for provenance / to seed track selection.\nDo NOT treat as a second source of truth for mood/energy.",
+      "properties": {
+        "energy": {
+          "$ref": "#/$defs/MusicEnergy"
+        },
+        "mood_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mood Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "energy"
+      ],
+      "title": "MusicCharacter",
+      "type": "object"
+    },
+    "MusicEnergy": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "dynamic"
+      ],
+      "title": "MusicEnergy",
+      "type": "string"
+    },
+    "MusicPlanProvenance": {
+      "additionalProperties": false,
+      "description": "How this plan was produced \u2014 recorded by the server/engine, not the model.",
+      "properties": {
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "which inputs were actually fed (e.g. creative_intent, music_direction, story_guide, story_coverage)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "model_id": {
+          "description": "e.g. us.anthropic.claude-opus-4-6-v1",
+          "title": "Model Id",
+          "type": "string"
+        },
+        "prompt_version": {
+          "default": "music_plan/1",
+          "title": "Prompt Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "title": "MusicPlanProvenance",
+      "type": "object"
+    },
+    "NativeAudioPriority": {
+      "description": "How much room the Story's OWN captured audio needs (a guitar performance,\nsinging, laughter, dialogue, wind, waves, crowd).",
+      "enum": [
+        "low",
+        "selective",
+        "important"
+      ],
+      "title": "NativeAudioPriority",
+      "type": "string"
+    },
+    "SoundtrackRole": {
+      "description": "How much the composed soundtrack carries the Story vs native audio.",
+      "enum": [
+        "continuous",
+        "supportive",
+        "sparse"
+      ],
+      "title": "SoundtrackRole",
+      "type": "string"
+    },
+    "TrackSelectionCriteria": {
+      "additionalProperties": false,
+      "description": "OPTIONAL brief handle for a FUTURE track selector (M-d). The seam between\nmusic intelligence and track sourcing \u2014 carries no catalog/provider assumption.",
+      "properties": {
+        "energy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MusicEnergy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mood_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mood Tags",
+          "type": "array"
+        },
+        "structure_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Structure Hint"
+        }
+      },
+      "title": "TrackSelectionCriteria",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "FROZEN Story-level soundtrack shape (Milestone M-b). The intelligence\nbridge from Story understanding to the future Edit Planner. Scope-sensitive:\nan 8s Story = ONE energy region, a rich 60-120s Story may justify 3-4. NO\nmechanical quiet->build->climax. Server/engine mints provenance/version.",
+  "properties": {
+    "audio_strategy": {
+      "$ref": "#/$defs/AudioStrategy"
+    },
+    "character": {
+      "$ref": "#/$defs/MusicCharacter"
+    },
+    "energy_arc": {
+      "description": "SMALL, scope-sensitive sequence of approximate energy regions",
+      "items": {
+        "$ref": "#/$defs/EnergyArcRegion"
+      },
+      "title": "Energy Arc",
+      "type": "array"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MusicPlanProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "server-minted: model/prompt/inputs/generated_at"
+    },
+    "schema_version": {
+      "default": "music_plan/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    },
+    "target_duration_seconds": {
+      "description": "the arc fractions are of THIS duration",
+      "exclusiveMinimum": 0.0,
+      "title": "Target Duration Seconds",
+      "type": "number"
+    },
+    "track_selection_criteria": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrackSelectionCriteria"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "optional handoff to a FUTURE track selector (M-d)"
+    }
+  },
+  "required": [
+    "story_id",
+    "target_duration_seconds",
+    "character",
+    "audio_strategy"
+  ],
+  "title": "MusicPlan",
+  "type": "object"
+}

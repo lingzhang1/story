@@ -857,6 +857,121 @@ class MusicAssetContract(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# MusicPlan (Milestone M-b — FROZEN music_plan/1, Opus 4.6, prompt music_plan/1)
+#
+# Story-level SOUNDTRACK SHAPE a future Edit Planner consumes for pacing. NOT a
+# song, NOT cut points, NOT Moment selection, NOT an audio mix. Generated at /
+# immediately before Create My Story from CreativeIntent + MusicDirection +
+# StoryGuide + StoryCoverage/2 + target duration. MusicDirection stays
+# AUTHORITATIVE for mood/energy; `character` here is a RESOLVED snapshot carried
+# for provenance / to seed track selection. key_moments[] was ABLATED OUT in M-b
+# (redundant with energy_arc + audio_strategy). Validated: us.anthropic.claude-
+# opus-4-6-v1. See milestone-mb-musicplan-experiment.md.
+# ---------------------------------------------------------------------------
+
+
+class EnergyIntensity(str, Enum):
+    """Categorical direction of an energy_arc region — NO numeric energy scores."""
+
+    LOW = "low"
+    RISING = "rising"
+    HIGH = "high"
+    FALLING = "falling"
+
+
+class SoundtrackRole(str, Enum):
+    """How much the composed soundtrack carries the Story vs native audio."""
+
+    CONTINUOUS = "continuous"
+    SUPPORTIVE = "supportive"
+    SPARSE = "sparse"
+
+
+class NativeAudioPriority(str, Enum):
+    """How much room the Story's OWN captured audio needs (a guitar performance,
+    singing, laughter, dialogue, wind, waves, crowd)."""
+
+    LOW = "low"
+    SELECTIVE = "selective"
+    IMPORTANT = "important"
+
+
+class MusicPlanProvenance(_Strict):
+    """How this plan was produced — recorded by the server/engine, not the model."""
+
+    model_id: str = Field(description="e.g. us.anthropic.claude-opus-4-6-v1")
+    prompt_version: str = Field(default="music_plan/1")
+    inputs: list[str] = Field(
+        default_factory=list,
+        description="which inputs were actually fed (e.g. creative_intent, music_direction, story_guide, story_coverage)",
+    )
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+
+class MusicCharacter(_Strict):
+    """RESOLVED snapshot of the intended musical feel. Authority is
+    MusicDirection; this is carried for provenance / to seed track selection.
+    Do NOT treat as a second source of truth for mood/energy."""
+
+    mood_tags: list[str] = Field(default_factory=list)
+    energy: MusicEnergy
+
+
+class EnergyArcRegion(_Strict):
+    """One APPROXIMATE Story-level energy region. Fractions are 0..1 of
+    target_duration_seconds — approximate regions, NEVER cut points."""
+
+    label: str = Field(description="short human-readable region name, e.g. 'warm gradual build'")
+    start_fraction: float = Field(ge=0.0, le=1.0)
+    end_fraction: float = Field(ge=0.0, le=1.0)
+    intensity: EnergyIntensity
+    note: str | None = Field(default=None, description="optional one-line creative intent for the region")
+
+
+class AudioStrategy(_Strict):
+    """First-class native-audio strategy. Story-level ONLY — NO per-Moment volume
+    automation, NO clip ids (those are Edit Planner / audio-mix). Exact ducking,
+    fades and mixing belong downstream."""
+
+    soundtrack_role: SoundtrackRole
+    native_audio_priority: NativeAudioPriority
+    guidance: str | None = Field(
+        default=None, description="optional one concise semantic line, e.g. 'step back so the real guitar lands'"
+    )
+
+
+class TrackSelectionCriteria(_Strict):
+    """OPTIONAL brief handle for a FUTURE track selector (M-d). The seam between
+    music intelligence and track sourcing — carries no catalog/provider assumption."""
+
+    mood_tags: list[str] = Field(default_factory=list)
+    energy: MusicEnergy | None = None
+    structure_hint: str | None = None
+
+
+class MusicPlanContract(_Strict):
+    """FROZEN Story-level soundtrack shape (Milestone M-b). The intelligence
+    bridge from Story understanding to the future Edit Planner. Scope-sensitive:
+    an 8s Story = ONE energy region, a rich 60-120s Story may justify 3-4. NO
+    mechanical quiet->build->climax. Server/engine mints provenance/version."""
+
+    schema_version: str = Field(default="music_plan/1")
+    story_id: UUID
+    target_duration_seconds: float = Field(gt=0.0, description="the arc fractions are of THIS duration")
+    character: MusicCharacter
+    energy_arc: list[EnergyArcRegion] = Field(
+        default_factory=list, description="SMALL, scope-sensitive sequence of approximate energy regions"
+    )
+    audio_strategy: AudioStrategy
+    track_selection_criteria: TrackSelectionCriteria | None = Field(
+        default=None, description="optional handoff to a FUTURE track selector (M-d)"
+    )
+    provenance: MusicPlanProvenance | None = Field(
+        default=None, description="server-minted: model/prompt/inputs/generated_at"
+    )
+
+
+# ---------------------------------------------------------------------------
 # EditPlan (02 §24) — preserved for Milestone J. AI decides; Media Engine executes.
 # ---------------------------------------------------------------------------
 
@@ -939,6 +1054,16 @@ __all__ = [
     "MusicSection",
     "MusicAnalysisContract",
     "MusicAssetContract",
+    # music plan (M-b, frozen music_plan/1)
+    "EnergyIntensity",
+    "SoundtrackRole",
+    "NativeAudioPriority",
+    "MusicPlanProvenance",
+    "MusicCharacter",
+    "EnergyArcRegion",
+    "AudioStrategy",
+    "TrackSelectionCriteria",
+    "MusicPlanContract",
     # edit plan
     "CropInstruction",
     "TransitionInstruction",

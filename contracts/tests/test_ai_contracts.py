@@ -571,3 +571,123 @@ def test_story_coverage_nullable_idea_and_categorical_only():
             "story_id": str(uuid4()), "moment_count": 1,
             "dimensions": [{"id": "d", "label": "L", "coverage": 0.8}],  # numeric not allowed
             "strengths": [], "redundancies": [], "sufficiency": {"status": "workable"}, "story_idea": None})
+
+
+# --------------------------------------------------------------------------
+# MusicPlan (Milestone M-b, FROZEN music_plan/1 — Opus 4.6)
+# --------------------------------------------------------------------------
+
+
+def _music_plan_payload(**overrides):
+    data = {
+        "schema_version": "music_plan/1",
+        "story_id": str(uuid4()),
+        "target_duration_seconds": 60.0,
+        "character": {"mood_tags": ["warm", "intimate"], "energy": "medium"},
+        "energy_arc": [
+            {"label": "quiet, tentative", "start_fraction": 0.0, "end_fraction": 0.4,
+             "intensity": "low", "note": "fumbling first chords"},
+            {"label": "the song arrives", "start_fraction": 0.4, "end_fraction": 1.0,
+             "intensity": "falling", "note": "step back so the real guitar lands"},
+        ],
+        "audio_strategy": {
+            "soundtrack_role": "sparse",
+            "native_audio_priority": "important",
+            "guidance": "the real guitar performance should become the focus",
+        },
+        "track_selection_criteria": {
+            "mood_tags": ["acoustic", "hopeful"], "energy": "medium",
+            "structure_hint": "gentle build then recede",
+        },
+        "provenance": {
+            "model_id": "us.anthropic.claude-opus-4-6-v1",
+            "prompt_version": "music_plan/1",
+            "inputs": ["creative_intent", "music_direction", "story_guide", "story_coverage"],
+        },
+    }
+    data.update(overrides)
+    return data
+
+
+def test_music_plan_round_trips():
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    obj = MusicPlanContract.model_validate(_music_plan_payload())
+    payload = _roundtrip(MusicPlanContract, obj)
+    assert payload["schema_version"] == "music_plan/1"
+    # MusicDirection stays authoritative: character is a resolved snapshot only.
+    assert payload["character"]["energy"] == "medium"
+
+
+def test_music_plan_minimal_requires_character_and_audio_strategy():
+    """Scope-sensitive: an 8s Story is ONE region; only character + arc +
+    audio_strategy are required. track_selection_criteria + provenance optional."""
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    obj = MusicPlanContract.model_validate({
+        "story_id": str(uuid4()),
+        "target_duration_seconds": 8.0,
+        "character": {"mood_tags": ["punchy"], "energy": "high"},
+        "energy_arc": [{"label": "one hit", "start_fraction": 0.0, "end_fraction": 1.0, "intensity": "high"}],
+        "audio_strategy": {"soundtrack_role": "continuous", "native_audio_priority": "low"},
+    })
+    assert obj.track_selection_criteria is None
+    assert obj.provenance is None
+    assert len(obj.energy_arc) == 1  # scope-sensitive, no mechanical 4 sections
+
+
+def test_music_plan_intensity_is_categorical_not_numeric():
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    with pytest.raises(ValidationError):
+        MusicPlanContract.model_validate(_music_plan_payload(
+            energy_arc=[{"label": "x", "start_fraction": 0.0, "end_fraction": 1.0, "intensity": 0.8}]))
+
+
+def test_music_plan_fractions_are_normalized_0_1():
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    with pytest.raises(ValidationError):
+        MusicPlanContract.model_validate(_music_plan_payload(
+            energy_arc=[{"label": "x", "start_fraction": 0.0, "end_fraction": 12.0, "intensity": "high"}]))
+
+
+def test_music_plan_rejects_unknown_field_no_key_moments():
+    """key_moments[] was ABLATED OUT in M-b — the frozen contract forbids it,
+    and extra='forbid' rejects any Moment/clip/cut leakage."""
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    with pytest.raises(ValidationError):
+        MusicPlanContract.model_validate(_music_plan_payload(
+            key_moments=[{"kind": "payoff", "at_fraction": 0.75}]))
+    # no Moment ids / cut points can be smuggled in either
+    with pytest.raises(ValidationError):
+        MusicPlanContract.model_validate(_music_plan_payload(moment_ids=[str(uuid4())]))
+
+
+def test_music_plan_native_audio_strategy_vocabularies():
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    for role in ("continuous", "supportive", "sparse"):
+        for prio in ("low", "selective", "important"):
+            MusicPlanContract.model_validate(_music_plan_payload(
+                audio_strategy={"soundtrack_role": role, "native_audio_priority": prio}))
+    with pytest.raises(ValidationError):
+        MusicPlanContract.model_validate(_music_plan_payload(
+            audio_strategy={"soundtrack_role": "loud", "native_audio_priority": "important"}))
+
+
+def test_music_plan_schema_dropped_key_moments_and_in_sync():
+    """The GENERATED canonical schema has no key_moments and matches the Pydantic model."""
+    import json
+    from pathlib import Path
+    from contracts.generate_schema import build_ai_schema
+    from contracts.schemas.ai_contracts import MusicPlanContract
+
+    generated = build_ai_schema("MusicPlan", MusicPlanContract)
+    assert "key_moments" not in generated["properties"]
+    on_disk = json.loads(
+        (Path(__file__).resolve().parents[1] / "schemas" / "music-plan.schema.json").read_text())
+    # the committed schema must equal what the generator emits (no drift)
+    assert on_disk["properties"].keys() == generated["properties"].keys()
+    assert "key_moments" not in on_disk["properties"]
