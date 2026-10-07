@@ -603,7 +603,40 @@
           "suggests more of an already-strong dimension"
         ]
       },
-      "eval_mode": "strict"
+      "eval_mode": "semantic_envelope",
+      "original_human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "recognizes complementary coverage across departure/progression/difficulty/companionship/scenery",
+          "concludes sufficient or near-sufficient for a 90s story"
+        ],
+        "forbidden_properties": [
+          "invents an arbitrary missing requirement",
+          "suggests more of an already-strong dimension"
+        ]
+      },
+      "semantic_envelope": {
+        "owner_decision_date": "2026-10-06",
+        "owner_decision": "Formalize the tolerance ALREADY stated in B's own human_reference ('concludes sufficient or near-sufficient'). No new tolerance invented beyond the existing reference.",
+        "required": {},
+        "acceptable": {
+          "sufficiency": [
+            "sufficient",
+            "workable"
+          ],
+          "story_idea": [
+            "null",
+            "one_optional_complementary_idea"
+          ]
+        },
+        "forbidden": [
+          "sufficiency==insufficient",
+          "invents an arbitrary missing requirement",
+          "suggests more of an already-strong dimension"
+        ],
+        "note": "workable = the 'near-sufficient' branch of the existing reference; not a hard false-insufficient."
+      }
     },
     "C_redundant_scenery": {
       "creative_intent": {
@@ -2445,7 +2478,55 @@
           "any homework-style suggestion"
         ]
       },
-      "eval_mode": "strict"
+      "eval_mode": "semantic_envelope",
+      "original_human_reference": {
+        "sufficiency": "sufficient",
+        "idea_should_exist": false,
+        "expected_properties": [
+          "respects the solitude intent",
+          "treats solo-in-landscape as ON-theme and sufficient"
+        ],
+        "forbidden_properties": [
+          "demands companionship/people",
+          "demands difficulty/departure/arrival/food",
+          "treats absence of common travel categories as a gap",
+          "any homework-style suggestion"
+        ]
+      },
+      "semantic_envelope": {
+        "owner_decision_date": "2026-10-06",
+        "owner_decision": "J reference reclassified: the old strict 'sufficient + null ONLY' encoded an overly strong product rule ('once a deliberately narrow Story is sufficient, Story must say nothing'). Owner no longer adopts that rule. Sufficiency and Story Idea are INDEPENDENT.",
+        "required": {
+          "sufficiency": "sufficient"
+        },
+        "acceptable": {
+          "sufficiency": [
+            "sufficient"
+          ],
+          "story_idea": [
+            "null",
+            "one_solitude_aligned_optional_idea"
+          ]
+        },
+        "idea_if_present_must": [
+          "aligned with quiet solitude",
+          "genuinely distinct/complementary quality",
+          "high-level and scene-independent",
+          "concise",
+          "reads as optional inspiration"
+        ],
+        "forbidden": [
+          "sufficiency==insufficient",
+          "sufficiency==workable",
+          "companionship/human-connection requirement",
+          "generic travel template",
+          "'complete your Story' framing",
+          "redundant variation with no new contribution",
+          "camera/framing direction",
+          "mandatory/task language"
+        ],
+        "note": "If J returns workable that remains a MISS \u2014 owner accepts the optional Idea, NOT a weaker sufficiency reference."
+      }
     },
     "K_nontravel_guitar": {
       "creative_intent": {

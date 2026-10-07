@@ -1,0 +1,107 @@
+{
+  "A_scenery_only": {
+    "target": 60,
+    "completed_moments": 4,
+    "useful_moments": 4,
+    "total_useful_dur": 98.7,
+    "ratio": 1.65
+  },
+  "B_broad_coverage": {
+    "target": 90,
+    "completed_moments": 5,
+    "useful_moments": 5,
+    "total_useful_dur": 217.6,
+    "ratio": 2.42
+  },
+  "C_redundant_scenery": {
+    "target": 45,
+    "completed_moments": 9,
+    "useful_moments": 9,
+    "total_useful_dur": 60.2,
+    "ratio": 1.34
+  },
+  "D_strong_elsewhere": {
+    "target": 30,
+    "completed_moments": 1,
+    "useful_moments": 1,
+    "total_useful_dur": 17.7,
+    "ratio": 0.59
+  },
+  "E_contextless": {
+    "target": 30,
+    "completed_moments": 1,
+    "useful_moments": 1,
+    "total_useful_dur": 16.5,
+    "ratio": 0.55
+  },
+  "F1_one_exceptional_short": {
+    "target": 8,
+    "completed_moments": 1,
+    "useful_moments": 1,
+    "total_useful_dur": 12.2,
+    "ratio": 1.52
+  },
+  "F2_one_exceptional_rich": {
+    "target": 120,
+    "completed_moments": 1,
+    "useful_moments": 1,
+    "total_useful_dur": 12.2,
+    "ratio": 0.1
+  },
+  "G_conflicting": {
+    "target": 60,
+    "completed_moments": 3,
+    "useful_moments": 3,
+    "total_useful_dur": 156.5,
+    "ratio": 2.61
+  },
+  "H1_accum": {
+    "target": 90,
+    "completed_moments": 2,
+    "useful_moments": 2,
+    "total_useful_dur": 42.8,
+    "ratio": 0.48
+  },
+  "H2_accum": {
+    "target": 90,
+    "completed_moments": 3,
+    "useful_moments": 3,
+    "total_useful_dur": 118.8,
+    "ratio": 1.32
+  },
+  "H3_accum": {
+    "target": 90,
+    "completed_moments": 4,
+    "useful_moments": 4,
+    "total_useful_dur": 194.7,
+    "ratio": 2.16
+  },
+  "I_no_intervention_sufficient": {
+    "target": 20,
+    "completed_moments": 2,
+    "useful_moments": 2,
+    "total_useful_dur": 33.0,
+    "ratio": 1.65
+  },
+  "J_anti_checklist_solitude": {
+    "target": 40,
+    "completed_moments": 3,
+    "useful_moments": 3,
+    "total_useful_dur": 92.7,
+    "ratio": 2.32
+  },
+  "K_nontravel_guitar": {
+    "target": 45,
+    "completed_moments": 2,
+    "useful_moments": 2,
+    "total_useful_dur": 24.0,
+    "ratio": 0.53
+  },
+  "L_pending_au": {
+    "target": 90,
+    "completed_moments": 2,
+    "useful_moments": 2,
+    "total_useful_dur": 42.8,
+    "ratio": 0.48
+  }
+}

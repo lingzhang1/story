@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "CoverageStoryIdeaV2": {
+      "additionalProperties": false,
+      "description": "ONE optional, high-level, scene-independent opportunity offering a MATERIALLY\nNEW contribution (not a redundant variation of an already well-represented\nquality). Independent of sufficiency \u2014 a `sufficient` Story may still carry one.\nShape: title ~3-7 words; description ONE concise sentence (~20-30w, card copy);\nrationale rich/internal (not default Home copy). target set when it serves one\nGuide dimension, else null.",
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        },
+        "target_story_guide_dimension_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Story Guide Dimension Id"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description"
+      ],
+      "title": "CoverageStoryIdeaV2",
+      "type": "object"
+    },
+    "CoverageSufficiency": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/SufficiencyStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "CoverageSufficiency",
+      "type": "object"
+    },
+    "DimensionCoverage": {
+      "additionalProperties": false,
+      "description": "STATE of ONE StoryGuide dimension (not its definition \u2014 that lives in the\nGuide). Produced by the Mapper. `state` is PURPOSE fulfillment, never literal\npossibility matching. `represented_possibility_ids` is UI-affordance evidence\nONLY ([x]/Reshoot) \u2014 it MUST NOT drive state, sufficiency, idea, or completion;\na dimension may be strong with an EMPTY list.",
+      "properties": {
+        "evidence_moment_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": "Evidence Moment Ids",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "represented_possibility_ids": {
+          "description": "UI-only: capture_possibility ids the real material realizes; NON-driving",
+          "items": {
+            "type": "string"
+          },
+          "title": "Represented Possibility Ids",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/NarrativeCoverage",
+          "description": "unknown | could_use_more | looking_good | strong (purpose-driven)"
+        },
+        "story_guide_dimension_id": {
+          "description": "FK -> frozen StoryGuide dimension (stable id)",
+          "title": "Story Guide Dimension Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "story_guide_dimension_id",
+        "state"
+      ],
+      "title": "DimensionCoverage",
+      "type": "object"
+    },
+    "NarrativeCoverage": {
+      "description": "Advisory, internal only \u2014 never rendered as a progress bar (02 \u00a78).",
+      "enum": [
+        "unknown",
+        "could_use_more",
+        "looking_good",
+        "strong"
+      ],
+      "title": "NarrativeCoverage",
+      "type": "string"
+    },
+    "SufficiencyStatus": {
+      "description": "Can a Story meeting the user's intent be made from the understood material?\nRelative to CreativeIntent + scope + complementarity + redundancy + pending\nuncertainty \u2014 NEVER derived from Moment count.",
+      "enum": [
+        "insufficient",
+        "workable",
+        "sufficient"
+      ],
+      "title": "SufficiencyStatus",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "FROZEN public StoryCoverage/2 (Milestone E2-b). Composed from the internal\nMapper (dimension_coverage/strengths/redundancies) + Judge (sufficiency/\nstory_idea) + server provenance. iOS consumes THIS; the two-call pipeline is\nhidden. Narrative definition lives in StoryGuide; this owns Guide-relative STATE\nplus the independent sufficiency + optional single idea.",
+  "properties": {
+    "dimension_coverage": {
+      "items": {
+        "$ref": "#/$defs/DimensionCoverage"
+      },
+      "title": "Dimension Coverage",
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "moment_count": {
+      "minimum": 0,
+      "title": "Moment Count",
+      "type": "integer"
+    },
+    "pending_count": {
+      "default": 0,
+      "description": "Moments with AU not yet complete (UNKNOWN, not absent)",
+      "minimum": 0,
+      "title": "Pending Count",
+      "type": "integer"
+    },
+    "redundancies": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Redundancies",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "story_coverage/2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_understanding_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Source Understanding Ids",
+      "type": "array"
+    },
+    "story_guide_id": {
+      "description": "which frozen StoryGuide this maps onto",
+      "title": "Story Guide Id",
+      "type": "string"
+    },
+    "story_guide_version": {
+      "default": "story_guide/1",
+      "description": "Guide schema/version (staleness vs Guide)",
+      "title": "Story Guide Version",
+      "type": "string"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    },
+    "story_idea": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CoverageStoryIdeaV2"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ONE optional opportunity, or null \u2014 INDEPENDENT of sufficiency"
+    },
+    "strengths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Strengths",
+      "type": "array"
+    },
+    "sufficiency": {
+      "$ref": "#/$defs/CoverageSufficiency"
+    }
+  },
+  "required": [
+    "story_id",
+    "story_guide_id",
+    "moment_count",
+    "sufficiency"
+  ],
+  "title": "StoryCoverageV2",
+  "type": "object"
+}

@@ -1,0 +1,1003 @@
+{
+  "B_broad_coverage": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "b01c0812-ed08-4454-9ca3-f9385b088d4e"
+    }
+  },
+  "G_conflicting": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "4cec2c92-dfe7-4ca1-ba05-2bf6288694b2"
+    }
+  },
+  "H1_accum": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "19788f92-cabb-4e9e-a0eb-5ae3ec605a7f"
+    }
+  },
+  "H2_accum": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "5bb00b74-352c-41f5-8007-c37c03f798be"
+    }
+  },
+  "H3_accum": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "b39d0806-0379-44e3-ad8b-972fc9b196f8"
+    }
+  },
+  "L_pending_au": {
+    "group": "tmb_trek_90",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the rhythm of days on the trail together, the immensity of the mountains around you, and the quiet moments that made the trek yours.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Trail & terrain",
+          "purpose": "The physical reality of the trek \u2014 paths, passes, weather, elevation \u2014 that gives the journey its shape and weight across eight days.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The trail ahead or behind",
+              "semantic_purpose": "Conveys distance, progress, and the scale of what you're walking through."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A col or high point",
+              "semantic_purpose": "Marks a turning point or hard-won arrival in the day's effort."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Changing conditions",
+              "semantic_purpose": "Rain, mist, golden light \u2014 the weather that colored a particular day."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "The shared experience of trekking as a group \u2014 walking together, encouraging each other, the companionship that defines 'our' trek.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Walking together",
+              "semantic_purpose": "The simple image of your group in motion on the trail."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A shared reaction",
+              "semantic_purpose": "A laugh, a look, a moment of awe experienced side by side."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Rest & refuge",
+          "purpose": "The counterpoint to the trail \u2014 huts, meals, end-of-day relief \u2014 where the reflective tone lives and the group reconnects.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Arriving at a refuge",
+              "semantic_purpose": "The satisfaction of reaching shelter after a day's walk."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A quiet evening moment",
+              "semantic_purpose": "Tired contentment \u2014 food, rest, conversation winding down."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Scale of Mont Blanc",
+          "purpose": "The massif itself \u2014 glaciers, rock faces, vast valleys \u2014 the grandeur that makes this trek singular and not just any hike.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The massif revealed",
+              "semantic_purpose": "A moment where the sheer size of the mountains fills the frame."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "People dwarfed by landscape",
+              "semantic_purpose": "Puts the human journey in proportion to the alpine world."
+            }
+          ]
+        }
+      ],
+      "story_id": "6cf962b7-0748-4b1b-b7cd-bfd31da46f02"
+    }
+  },
+  "A_scenery_only": {
+    "group": "tmb_scenery_60",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the immensity of the Alps revealed through shifting light, vast terrain, and the feeling of being small among giants.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Scale & Vastness",
+          "purpose": "Convey the sheer size of the Mont Blanc massif \u2014 the thing that makes you stop and stare.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A ridge or valley that reveals how far the landscape stretches"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A tiny figure or structure dwarfed by the mountains"
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Layers of peaks receding into distance"
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Alpine Light & Atmosphere",
+          "purpose": "Capture the shifting moods of high-mountain weather \u2014 the drama that makes the landscape feel alive.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Cloud shadows moving across a glacier or valley"
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Golden or blue-hour light on snow and rock"
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Terrain & Texture",
+          "purpose": "Show the variety of the TMB landscape \u2014 rock, ice, meadow, water \u2014 so the Story feels like a journey through different worlds.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Close detail of glacial ice, wildflowers, or weathered stone"
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A transition between terrain types \u2014 treeline to snowfield, meadow to moraine"
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "The Awe Moment",
+          "purpose": "One unmistakable peak moment \u2014 a view, a reveal, a pause \u2014 that carries the emotional weight of the whole Story.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "A summit panorama or col reveal that takes your breath away"
+            }
+          ]
+        }
+      ],
+      "story_id": "373ee74d-b4cb-404d-b029-e04b99ef7bbb"
+    }
+  },
+  "C_redundant_scenery": {
+    "group": "tmb_scenery_45",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the sheer scale of the TMB mountains, the feeling of being dwarfed by them, and the light and weather that make each massif unforgettable.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Scale & Vastness",
+          "purpose": "Convey the overwhelming size of the peaks and valleys along the Tour du Mont Blanc \u2014 the feeling of standing small against enormous geology.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A ridge or summit that reveals a new wall of mountains beyond",
+              "semantic_purpose": "Depth and layered scale"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A wide valley floor dwarfed by surrounding massifs",
+              "semantic_purpose": "Vertical dominance of the landscape"
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "Glaciers or snowfields that give a sense of distance",
+              "semantic_purpose": "Scale through texture and remoteness"
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Light & Atmosphere",
+          "purpose": "Capture the shifting moods of high-alpine light \u2014 the way clouds, golden hour, or mist transform the same peaks into something different.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Alpenglow or dramatic shadow across a face of rock",
+              "semantic_purpose": "Emotional weight through light"
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Cloud movement around summits or through cols",
+              "semantic_purpose": "The mountains as living, breathing forms"
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Iconic Presence",
+          "purpose": "Give the Story at least one moment where a single peak or formation commands full attention \u2014 the signature awe of the TMB.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Mont Blanc or the Grandes Jorasses filling the frame",
+              "semantic_purpose": "A hero moment for the range's most striking feature"
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "A jagged aiguille or dramatic silhouette",
+              "semantic_purpose": "The raw character of alpine rock"
+            }
+          ]
+        }
+      ],
+      "story_id": "bd390076-c52f-40ad-9dd7-79c2e149ee39"
+    }
+  },
+  "D_strong_elsewhere": {
+    "group": "tmb_depart_30",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the feeling of leaving, the first forward motion, and that rising sense that something is about to begin.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "The Departure",
+          "purpose": "The decisive moment of leaving \u2014 crossing a threshold, closing a door, pulling away. The point where 'here' becomes 'behind you.'",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A last look back",
+              "semantic_purpose": "The bittersweet beat of what's being left behind"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "The step out or pull away",
+              "semantic_purpose": "The physical act of leaving \u2014 the moment it becomes real"
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Forward Motion",
+          "purpose": "The road opening up, the world starting to move past \u2014 the shift from standing still to being underway.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "The path or road ahead",
+              "semantic_purpose": "The visual promise of distance and possibility"
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Movement through the world",
+              "semantic_purpose": "The kinetic feeling of the journey now in progress"
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Anticipation",
+          "purpose": "The hopeful, charged energy of setting out \u2014 small details that carry the excitement of what's ahead.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "A shared glance or quiet smile",
+              "semantic_purpose": "The unspoken excitement between travelers"
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "Light or sky hinting at what's coming",
+              "semantic_purpose": "The world itself reflecting the mood of beginning"
+            }
+          ]
+        }
+      ],
+      "story_id": "a2ac8ac5-9812-432e-8278-9da77dd988ce"
+    }
+  },
+  "E_contextless": {
+    "group": "tmb_trip_30",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the stillness between moments \u2014 gentle movement, unhurried details, and the quiet feeling of being somewhere else.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Stillness & pace",
+          "purpose": "The unhurried quality that makes the trip feel quiet \u2014 pauses, slow motion, calm rhythm.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A lingering view from a window or doorway",
+              "semantic_purpose": "Conveys the feeling of watching rather than rushing."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "Small, unforced details \u2014 steam, light, water",
+              "semantic_purpose": "Grounds the calm in something tangible and sensory."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Sense of place",
+          "purpose": "Just enough of where you are to feel transported, without narrating the destination.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "A quiet street, path, or landscape",
+              "semantic_purpose": "Sets the world of the trip without over-explaining it."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Ambient texture \u2014 sounds, weather, time of day",
+              "semantic_purpose": "Lets the place speak for itself."
+            }
+          ]
+        }
+      ],
+      "story_id": "32c9ec31-900b-406e-a2a2-85335bcb2898"
+    }
+  },
+  "F1_one_exceptional_short": {
+    "group": "tmb_valley_8",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: one breathtaking glimpse of the valley that holds all the awe in a single moment.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Scale & grandeur",
+          "purpose": "Convey the immensity of the valley in one perfect shot \u2014 the feeling of standing before something vast.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "The full sweep of the valley",
+              "semantic_purpose": "The widest, most awe-filled view you can find"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A detail that reveals depth",
+              "semantic_purpose": "Something \u2014 light, haze, a distant ridge \u2014 that makes the scale hit"
+            }
+          ]
+        }
+      ],
+      "story_id": "7a043874-edfe-40dd-83b0-3c2c1bebac01"
+    }
+  },
+  "F2_one_exceptional_rich": {
+    "group": "tmb_trek_120",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the arc of the whole trek \u2014 the trail ahead, the people beside you, the hard parts that tested you, and the feeling of having done it together.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "The trail itself",
+          "purpose": "Convey the scope and changing character of the trek \u2014 terrain, weather, light shifting across days or stages.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "Early trail anticipation",
+              "semantic_purpose": "The path stretching out ahead at the start, full of possibility."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "Changing landscapes",
+              "semantic_purpose": "How the terrain or conditions evolved \u2014 forest to ridge, sun to mist, dawn to dusk."
+            },
+            {
+              "id": "dim_01_cp_03",
+              "label": "The trail behind you",
+              "semantic_purpose": "A moment where you can see how far you've come."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Togetherness on the move",
+          "purpose": "Show the group \u2014 walking together, helping each other, sharing quiet or loud moments on the trail.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "Moving as a group",
+              "semantic_purpose": "The crew in motion together, strung along the trail or side by side."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Small shared moments",
+              "semantic_purpose": "A rest stop laugh, passing water, pointing something out to each other."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "The hard parts",
+          "purpose": "Honor the difficulty \u2014 steep climbs, fatigue, rough weather, the stretches that made the trek an accomplishment.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Effort and strain",
+              "semantic_purpose": "Heavy breathing, steep scrambles, tired faces \u2014 the cost of the trek."
+            },
+            {
+              "id": "dim_03_cp_02",
+              "label": "Pushing through",
+              "semantic_purpose": "A moment where the group kept going despite the difficulty."
+            }
+          ]
+        },
+        {
+          "id": "dim_04",
+          "label": "Arrival and accomplishment",
+          "purpose": "The payoff \u2014 reaching the destination, summit, or end point, and the feeling of having completed something big together.",
+          "capture_possibilities": [
+            {
+              "id": "dim_04_cp_01",
+              "label": "The moment of arrival",
+              "semantic_purpose": "Reaching the goal \u2014 relief, elation, taking it in."
+            },
+            {
+              "id": "dim_04_cp_02",
+              "label": "Reflecting back",
+              "semantic_purpose": "A quieter beat after the finish \u2014 exhaustion mixed with pride."
+            }
+          ]
+        }
+      ],
+      "story_id": "8b9a9fa1-12e1-4261-b5d4-e5695e36257f"
+    }
+  },
+  "I_no_intervention_sufficient": {
+    "group": "tmb_sufficient_20",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the stillness and scale of the mountains, held in a few calm, unhurried moments.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Stillness & Scale",
+          "purpose": "Convey the quiet immensity of the mountain landscape \u2014 the feeling of being small before something vast and calm.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A wide, steady view of peaks or ridgelines"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "Slow natural movement \u2014 drifting clouds, shifting light on rock"
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Texture & Detail",
+          "purpose": "Ground the serenity in something tangible \u2014 a closer look that gives the montage variety and breath.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "A surface or element up close \u2014 stone, mist, tree line, snow"
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "Soft atmospheric detail \u2014 fog settling, light filtering through a valley"
+            }
+          ]
+        }
+      ],
+      "story_id": "6819ccce-ddb6-4ddf-8553-7ef95b8147c2"
+    }
+  },
+  "J_anti_checklist_solitude": {
+    "group": "solitude_40",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the weight of stillness in the mountains, the vast space around a single figure, and the quiet that settles when no one else is there.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Immensity & stillness",
+          "purpose": "Convey the sheer scale and silence of the mountain landscape \u2014 the kind of quiet that makes solitude feel physical.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "A ridge or valley that dwarfs everything",
+              "semantic_purpose": "Expressing the overwhelming scale that makes aloneness tangible"
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A moment of near-total stillness \u2014 wind, mist, or light the only movement",
+              "semantic_purpose": "Letting silence and slow natural motion carry the contemplative tone"
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Solitary presence",
+          "purpose": "Ground the film in one person's quiet existence within the landscape \u2014 not narrating, just being there.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "A small, unhurried gesture \u2014 hands around a cup, a pause mid-step",
+              "semantic_purpose": "Showing the intimate, personal texture of being alone"
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "A lone figure seen against open space",
+              "semantic_purpose": "Placing the self within the immensity, reinforcing aloneness without loneliness"
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "Passing light or weather",
+          "purpose": "Give the film a gentle sense of time moving \u2014 not a narrative arc, but the mountain's own rhythm marking the solitude.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "A shift in light across a slope or cloud shadow drifting through a valley",
+              "semantic_purpose": "Letting natural change stand in for the passage of contemplative time"
+            }
+          ]
+        }
+      ],
+      "story_id": "5525057c-a865-404c-b06f-0a1df6c66925"
+    }
+  },
+  "K_nontravel_guitar": {
+    "group": "guitar_45",
+    "guide": {
+      "schema_version": "story_guide/1",
+      "framing_summary": "For this Story: the feel of focused practice, the small breakthroughs along the way, and the sense of getting better over a month.",
+      "dimensions": [
+        {
+          "id": "dim_01",
+          "label": "Focus & Effort",
+          "purpose": "The texture of real practice \u2014 concentration, repetition, the quiet work of learning.",
+          "capture_possibilities": [
+            {
+              "id": "dim_01_cp_01",
+              "label": "Hands on the fretboard",
+              "semantic_purpose": "The physical reality of fingers learning where to go."
+            },
+            {
+              "id": "dim_01_cp_02",
+              "label": "A difficult passage on repeat",
+              "semantic_purpose": "The feeling of grinding through something that isn't easy yet."
+            }
+          ]
+        },
+        {
+          "id": "dim_02",
+          "label": "Progress & Breakthroughs",
+          "purpose": "Moments where growth becomes audible or visible \u2014 a chord that finally rings clean, a riff that flows.",
+          "capture_possibilities": [
+            {
+              "id": "dim_02_cp_01",
+              "label": "A before-and-after of the same piece",
+              "semantic_purpose": "Hearing the difference a few weeks of practice makes."
+            },
+            {
+              "id": "dim_02_cp_02",
+              "label": "The moment something clicks",
+              "semantic_purpose": "A small victory \u2014 a grin, a nod, the satisfaction of nailing it."
+            }
+          ]
+        },
+        {
+          "id": "dim_03",
+          "label": "The Practice Routine",
+          "purpose": "A sense of the month's rhythm \u2014 where you practice, the guitar waiting, the daily return to it.",
+          "capture_possibilities": [
+            {
+              "id": "dim_03_cp_01",
+              "label": "Your practice spot",
+              "semantic_purpose": "The familiar setting that frames the whole month of work."
+            }
+          ]
+        }
+      ],
+      "story_id": "79bfd94d-be25-495e-9db5-35a315cdf913"
+    }
+  }
+}

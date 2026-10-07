@@ -1,0 +1,86 @@
+{
+  "_meta": {
+    "experiment": "E2-b Coverage/2 — new architecture-specific fixtures",
+    "purpose": "Test PURPOSE>possibility, represented_possibility_ids semantics, unexpected material, and Story-Idea concision under the Guide architecture. Each fixture ships its OWN frozen StoryGuide inline (not generated) so the possibility ids are known and assertable."
+  },
+  "fixtures": {
+    "P1_purpose_without_literal": {
+      "note": "Purpose fulfilled by a NON-listed composition. Scale must be strong/looking_good with EMPTY represented_possibility_ids.",
+      "creative_intent": {"raw_text": "the overwhelming scale of the Alps", "subject": "the mountains", "desired_feeling": ["awe"], "emphasis": ["scale"]},
+      "scope": {"target_duration_seconds": 30, "format": "vertical"},
+      "guide": {
+        "schema_version": "story_guide/1", "story_id": "p1-guide",
+        "framing_summary": "For this Story: make the mountains feel enormous.",
+        "dimensions": [
+          {"id": "dim_scale", "label": "Scale", "purpose": "Make the mountains feel enormous.",
+           "capture_possibilities": [
+             {"id": "dim_scale_cp_01", "label": "person beneath huge mountains"},
+             {"id": "dim_scale_cp_02", "label": "wide landscape, person entering frame"}]}
+        ]
+      },
+      "moments": [
+        {"id": "m1", "observed": {"summary": "A lone tent dwarfed to a speck at the base of a vast granite wall that fills the entire frame; the wall's top is out of shot, emphasizing immensity. No people visible.", "subjects": ["tent", "granite massif"], "events": [{"description": "static wide shot, massif towering"}], "useful_segments": [{"why_useful": "conveys overwhelming scale through the tiny tent against the wall"}]}, "story_context": {"story_utility": "strong"}}
+      ],
+      "pending_count": 0,
+      "expected": {"dim_scale_state_in": ["strong", "looking_good"], "represented_possibility_ids_must_be_empty": true, "reason": "no listed possibility (no person) but purpose (enormous scale) strongly served"}
+    },
+    "P2_literal_without_purpose": {
+      "note": "A person+mountain Moment where composition makes the PERSON dominant and fails to convey scale. Must NOT make Scale strong merely from noun overlap.",
+      "creative_intent": {"raw_text": "the overwhelming scale of the Alps", "subject": "the mountains", "desired_feeling": ["awe"], "emphasis": ["scale"]},
+      "scope": {"target_duration_seconds": 30, "format": "vertical"},
+      "guide": {
+        "schema_version": "story_guide/1", "story_id": "p2-guide",
+        "framing_summary": "For this Story: make the mountains feel enormous.",
+        "dimensions": [
+          {"id": "dim_scale", "label": "Scale", "purpose": "Make the mountains feel enormous.",
+           "capture_possibilities": [
+             {"id": "dim_scale_cp_01", "label": "person beneath huge mountains"}]}
+        ]
+      },
+      "moments": [
+        {"id": "m1", "observed": {"summary": "A tight waist-up selfie of a hiker smiling at the camera; a mountain is visible but small and blurred in the far background. The person fills most of the frame.", "subjects": ["hiker (dominant)", "distant blurred peak"], "events": [{"description": "close selfie, shallow depth of field"}], "useful_segments": [{"why_useful": "a nice portrait of the hiker"}]}, "story_context": {"story_utility": "workable"}}
+      ],
+      "pending_count": 0,
+      "expected": {"dim_scale_state_not": ["strong"], "note": "nouns (person+mountain) overlap the possibility but purpose (enormous scale) is NOT served — must not be strong on noun overlap alone"}
+    },
+    "P3_alternative_expression": {
+      "note": "Journey purpose served by rear/side movement that is not the literal 'walking away from camera' possibility.",
+      "creative_intent": {"raw_text": "the feeling of our journey through the Alps", "subject": "our trek", "desired_feeling": ["journey"], "emphasis": ["progression"]},
+      "scope": {"target_duration_seconds": 45, "format": "vertical"},
+      "guide": {
+        "schema_version": "story_guide/1", "story_id": "p3-guide",
+        "framing_summary": "For this Story: the feeling of moving through the Alps day after day.",
+        "dimensions": [
+          {"id": "dim_journey", "label": "Forward Motion", "purpose": "Convey sustained movement through the landscape.",
+           "capture_possibilities": [
+             {"id": "dim_journey_cp_01", "label": "walking away from camera"},
+             {"id": "dim_journey_cp_02", "label": "boots on trail"}]}
+        ]
+      },
+      "moments": [
+        {"id": "m1", "observed": {"summary": "A long side-tracking shot of two hikers crossing a high ridge left-to-right, packs on, the trail visibly continuing into the distance behind and ahead — strong sense of ongoing passage.", "subjects": ["two hikers", "ridge trail"], "events": [{"description": "lateral tracking, sustained walking"}], "useful_segments": [{"why_useful": "clearly communicates the journey continuing"}]}, "story_context": {"story_utility": "strong"}}
+      ],
+      "pending_count": 0,
+      "expected": {"dim_journey_state_in": ["strong", "looking_good"], "note": "alternative expression (lateral, not 'away from camera') still serves the journey purpose; possibility match optional"}
+    },
+    "U_unexpected_material": {
+      "note": "A strong unexpected Moment (a dramatic storm) that maps to NO Guide dimension. Must be preserved in strengths[], not discarded; no new dimension invented.",
+      "creative_intent": {"raw_text": "the beauty and scale of the Alps", "subject": "the mountains", "desired_feeling": ["awe"], "emphasis": ["scale", "landscape"]},
+      "scope": {"target_duration_seconds": 60, "format": "vertical"},
+      "guide": {
+        "schema_version": "story_guide/1", "story_id": "u-guide",
+        "framing_summary": "For this Story: the scale and beauty of the Alpine landscape.",
+        "dimensions": [
+          {"id": "dim_scale", "label": "Scale & Vastness", "purpose": "Make the mountains feel enormous.", "capture_possibilities": [{"id": "dim_scale_cp_01", "label": "massif filling the frame"}]},
+          {"id": "dim_light", "label": "Alpine Light", "purpose": "Capture the quality of light on the peaks.", "capture_possibilities": [{"id": "dim_light_cp_01", "label": "golden light on a ridgeline"}]}
+        ]
+      },
+      "moments": [
+        {"id": "m1", "observed": {"summary": "A massive granite massif fills the frame under flat midday light.", "subjects": ["massif"], "events": [{"description": "static wide"}], "useful_segments": [{"why_useful": "strong scale"}]}, "story_context": {"story_utility": "strong"}},
+        {"id": "m2", "observed": {"summary": "A sudden violent thunderstorm rolls over the valley — black clouds, a lightning strike, sheets of rain sweeping across the slopes. Dramatic, unplanned, cinematic.", "subjects": ["storm", "valley", "lightning"], "events": [{"description": "storm sweeping in, lightning"}], "useful_segments": [{"why_useful": "dramatic unexpected weather, highly cinematic"}]}, "story_context": {"story_utility": "strong_elsewhere"}}
+      ],
+      "pending_count": 0,
+      "expected": {"storm_in_strengths": true, "no_new_dimension_for_storm": true, "note": "storm is not Scale and not Light; must surface in strengths[], must NOT spawn a Guide dimension"}
+    }
+  }
+}

@@ -722,6 +722,115 @@ class StoryCoverageContract(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# StoryCoverage/2 (Milestone E2-b, FROZEN 2026-10-06) — the Guide-relative Story
+# Coverage snapshot. PUBLIC composed result of an INTERNAL two-call pipeline:
+#   CALL 1 StoryCoverageMapper (prompt story_coverage/mapper-v1, Opus 4.6):
+#     StoryGuide + completed MomentUnderstanding[] -> DimensionCoverage[] + strengths
+#     + redundancies. NEVER emits sufficiency or story_idea.
+#   CALL 2 StoryJudgmentEngine (prompt story_judgment/v2, Opus 4.6):
+#     deterministic evidence (CreativeIntent/scope + positive semantic evidence +
+#     FACTUAL MaterialScopeEvidence + redundancy + pending_count; NO Guide, NO
+#     dimension states, NO candidates, NO completion signals — the J-A/J-B ablation
+#     proved candidates reintroduce completion bias) -> {sufficiency, story_idea}.
+# The two-call split is an IMPLEMENTATION detail; iOS sees only this composed
+# StoryCoverageContractV2. Narrative dimension DEFINITION lives in StoryGuide;
+# Coverage/2 owns only STATE keyed by stable Guide dimension id (fixes id drift).
+# Material scope is EVIDENCE the Judge reasons over jointly with semantic adequacy —
+# NOT a ratio/quota/clip-count formula (G: 2.61x duration but conflicting -> still
+# insufficient, proves duration alone cannot decide). sufficiency/story_idea are
+# INDEPENDENT: all six {insufficient|workable|sufficient} x {idea|null} states valid;
+# never force sufficient -> null.
+# ---------------------------------------------------------------------------
+
+
+class DimensionCoverage(_Strict):
+    """STATE of ONE StoryGuide dimension (not its definition — that lives in the
+    Guide). Produced by the Mapper. `state` is PURPOSE fulfillment, never literal
+    possibility matching. `represented_possibility_ids` is UI-affordance evidence
+    ONLY ([x]/Reshoot) — it MUST NOT drive state, sufficiency, idea, or completion;
+    a dimension may be strong with an EMPTY list."""
+
+    story_guide_dimension_id: str = Field(description="FK -> frozen StoryGuide dimension (stable id)")
+    state: NarrativeCoverage = Field(description="unknown | could_use_more | looking_good | strong (purpose-driven)")
+    note: str | None = Field(default=None)
+    evidence_moment_ids: list[UUID] = Field(default_factory=list)
+    represented_possibility_ids: list[str] = Field(
+        default_factory=list, description="UI-only: capture_possibility ids the real material realizes; NON-driving"
+    )
+
+
+class MaterialScopeEvidence(_Strict):
+    """FACTUAL material-scope signals derived DETERMINISTICALLY from completed
+    MomentUnderstanding useful_segments — the Judge's neutral anchor for 'enough
+    material for THIS requested scope?'. NOT a quota, NOT a ratio threshold, NOT a
+    clip-count rule: the Judge reasons over it jointly with semantic adequacy and
+    redundancy (abundant-but-redundant or abundant-but-conflicting material does not
+    create adequacy)."""
+
+    understood_moment_count: int = Field(ge=0)
+    useful_moment_count: int = Field(ge=0, description="understood Moments with at least one useful segment")
+    total_useful_segment_duration_seconds: float = Field(ge=0.0)
+    target_output_duration_seconds: float | None = Field(default=None, gt=0)
+
+
+class StoryJudgment(_Strict):
+    """INTERNAL Call-2 output: the independent Story-level judgment. Composed into
+    StoryCoverageContractV2; not a separate public product concept."""
+
+    sufficiency: CoverageSufficiency
+    story_idea: "CoverageStoryIdeaV2 | None" = Field(default=None)
+
+
+class CoverageStoryIdeaV2(_Strict):
+    """ONE optional, high-level, scene-independent opportunity offering a MATERIALLY
+    NEW contribution (not a redundant variation of an already well-represented
+    quality). Independent of sufficiency — a `sufficient` Story may still carry one.
+    Shape: title ~3-7 words; description ONE concise sentence (~20-30w, card copy);
+    rationale rich/internal (not default Home copy). target set when it serves one
+    Guide dimension, else null."""
+
+    title: str
+    description: str
+    rationale: str | None = None
+    target_story_guide_dimension_id: str | None = None
+
+
+class CoverageMapping(_Strict):
+    """INTERNAL Call-1 output: how understood material serves the frozen Guide.
+    Composed into StoryCoverageContractV2; never emits sufficiency/story_idea."""
+
+    dimension_coverage: list[DimensionCoverage] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list, description="positive actual Story evidence (incl. unexpected material)")
+    redundancies: list[str] = Field(default_factory=list)
+
+
+class StoryCoverageContractV2(_Strict):
+    """FROZEN public StoryCoverage/2 (Milestone E2-b). Composed from the internal
+    Mapper (dimension_coverage/strengths/redundancies) + Judge (sufficiency/
+    story_idea) + server provenance. iOS consumes THIS; the two-call pipeline is
+    hidden. Narrative definition lives in StoryGuide; this owns Guide-relative STATE
+    plus the independent sufficiency + optional single idea."""
+
+    schema_version: str = Field(default="story_coverage/2")
+    story_id: UUID
+    story_guide_id: str = Field(description="which frozen StoryGuide this maps onto")
+    story_guide_version: str = Field(default="story_guide/1", description="Guide schema/version (staleness vs Guide)")
+    moment_count: int = Field(ge=0)
+    pending_count: int = Field(default=0, ge=0, description="Moments with AU not yet complete (UNKNOWN, not absent)")
+    source_understanding_ids: list[UUID] = Field(default_factory=list)
+
+    dimension_coverage: list[DimensionCoverage] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    redundancies: list[str] = Field(default_factory=list)
+    sufficiency: CoverageSufficiency
+    story_idea: CoverageStoryIdeaV2 | None = Field(
+        default=None, description="ONE optional opportunity, or null — INDEPENDENT of sufficiency"
+    )
+
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Music assets (02 §22-23) — preserved for Milestone I
 # ---------------------------------------------------------------------------
 
