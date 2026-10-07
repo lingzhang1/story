@@ -160,33 +160,35 @@ struct SceneScanFlowView: View {
     // MARK: - intro
 
     private var introView: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
             Spacer()
-            // E2-c: when the user came from a Story Idea / Guide possibility, show WHAT they chose to
-            // capture, so the scan modal isn't a context-free "Show me what's around you".
             if let opp = selectedOpportunity {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("CAPTURING").font(.system(size: 11, weight: .semibold))
-                        .tracking(1.5).foregroundStyle(gold)
-                    Text(opp.label)
-                        .font(.system(size: 26, weight: .light, design: .serif))
-                        .foregroundStyle(ink).fixedSize(horizontal: false, vertical: true)
-                    if !opp.purpose.isEmpty {
-                        Text(opp.purpose)
-                            .font(.system(size: 15, weight: .light))
-                            .foregroundStyle(ink.opacity(0.65)).fixedSize(horizontal: false, vertical: true)
-                    }
+                // ONE headline = the opportunity. Scan instruction is a quiet subtitle, not a
+                // competing title. StoryTheme fonts for consistency with the rest of the app.
+                StoryEyebrow(text: "Capturing")
+                Text(opp.label)
+                    .font(StoryTheme.display(30))
+                    .foregroundStyle(ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !opp.purpose.isEmpty {
+                    Text(opp.purpose)
+                        .font(StoryTheme.body(16, .light))
+                        .foregroundStyle(ink.opacity(0.65))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.bottom, 4)
+                Text("Scan your scene — I'll find the best way to capture this here.")
+                    .font(StoryTheme.body(15))
+                    .foregroundStyle(ink.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            } else {
+                Text("Show me what's around you")
+                    .font(StoryTheme.display(30))
+                    .foregroundStyle(ink)
+                Text("Slowly move your phone around the scene")
+                    .font(StoryTheme.body(16, .light))
+                    .foregroundStyle(ink.opacity(0.65))
             }
-            Text(selectedOpportunity == nil ? "Show me what's around you" : "Scan your scene")
-                .font(.system(size: 32, weight: .light, design: .serif))
-                .foregroundStyle(ink)
-            Text(selectedOpportunity == nil
-                 ? "Slowly move your phone around the scene"
-                 : "Slowly move your phone around — I'll find the best way to capture this here.")
-                .font(.system(size: 18, weight: .light))
-                .foregroundStyle(ink.opacity(0.7))
             Spacer()
             primaryButton("Start Scan") { state = .scanning }
             secondaryButton("Skip Scan") { pendingCaptureContext = nil; showCamera = true }   // shoot immediately — no scan, no Director, no wait, no context
