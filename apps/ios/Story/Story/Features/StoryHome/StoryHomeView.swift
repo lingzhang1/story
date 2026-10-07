@@ -120,14 +120,16 @@ struct StoryHomeView: View {
                 // Story Guide — the persistent StoryGuide creative map (renders as soon as the
                 // Guide exists, independent of Coverage) + optional Coverage/2 overlay (state tags +
                 // represented-possibility affordances). Advisory, never a checklist.
-                StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading) { dim, poss in
+                StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading, onShoot: { dim, poss in
                     // Guide possibility -> Shoot (Director entry point B): purpose = possibility
                     // semantic_purpose ?? owning dimension purpose; carry the possibility label.
                     pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
                         storyGuideDimensionId: dim.id, label: poss.label,
                         purpose: poss.semanticPurpose ?? dim.purpose,
                         capturePossibilityLabel: poss.label))
-                }
+                }, onRetry: {
+                    Task { await refreshGuideAndCoverage() }   // #1: recover a failed/interrupted Guide
+                })
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -143,12 +145,12 @@ struct StoryHomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task(id: story.id) { await loadCoverage() }
         .fullScreenCover(isPresented: $showCapture, onDismiss: {
-            // Returning from capture: a new Moment may have been added and its AU may
-            // have completed -> coverage is likely stale. Recompute opportunistically.
-            Task { await loadCoverage() }
+            // Returning from capture: the new Moment's AU runs async — poll until it lands so
+            // Coverage + the Story Idea recompute (fixes 'Idea won't update after a Moment').
+            Task { await refreshAfterCapture() }
         }) { ShootMomentView(story: story) }
         .fullScreenCover(item: $pendingOpportunity, onDismiss: {
-            Task { await loadCoverage() }
+            Task { await refreshAfterCapture() }
         }) { launch in
             // Opportunity-driven capture: Story Idea Show-me / Guide possibility Shoot.
             // The scan flow carries selected_opportunity into Director (survives rescan).
@@ -179,34 +181,49 @@ struct StoryHomeView: View {
     //   - Only recompute when there is at least one understood Moment to reason from;
     //     an empty / all-pending Story shows the neutral state (pending = unknown).
     private func loadCoverage() async {
+        await refreshGuideAndCoverage()
+    }
+
+    /// Ensure the Guide (renders immediately), then recompute Coverage/2 when there is understood
+    /// material. Robust against task cancellation: coverageLoading is always cleared.
+    private func refreshGuideAndCoverage() async {
         let engine = coverageEngine
         coverage = engine.cachedCoverage(for: story.id)   // immediate (may be nil)
 
-        // Guide lifecycle is SEPARATE from Coverage: ensure the persisted Guide exists
-        // (generates once from CreativeIntent; covers existing-Story migration). The Guide
-        // renders IMMEDIATELY (independent of Coverage). Coverage READS the Guide.
         let coordinator = StoryGuideCoordinator(context: context)
         if let existing = coordinator.guide(for: story.id) { guide = existing }  // show at once if present
         coverageLoading = (guide == nil)
-        guard let g = await coordinator.ensureGuide(for: story) else {
-            // Guide unavailable (retryable) — Story stays valid; no Coverage without a Guide.
-            coverageLoading = false
-            return
-        }
+        let g = await coordinator.ensureGuide(for: story)
+        coverageLoading = false          // ALWAYS clear (success, failure, or cancellation)
+        guard let g else { return }      // Guide unavailable (retryable) — neutral state + Retry button
         guide = g
-        coverageLoading = false
         let guideFingerprint = coordinator.guideFingerprint(for: story.id)
 
         let inputs = engine.currentInputs(for: story)
-        let hasUnderstood = !inputs.completedMUValues.isEmpty
-        guard hasUnderstood else {
-            // Nothing understood yet -> Guide supplies content; do NOT call Mapper/Judge.
-            return
-        }
+        guard !inputs.completedMUValues.isEmpty else { return }   // Guide supplies content; no Mapper/Judge
         guard engine.isStale(for: story, guideFingerprint: guideFingerprint) else { return }
-
         let fresh = await engine.recomputeIfNeeded(for: story, guide: g, guideFingerprint: guideFingerprint)
-        if let fresh { coverage = fresh }                  // keep previous on failure
+        if let fresh { coverage = fresh }                         // keep previous on failure
+    }
+
+    /// After returning from capture, the new Moment's Asset Understanding runs ASYNCHRONOUSLY and is
+    /// usually NOT complete yet. Poll a few times so Coverage (and the Story Idea) recompute once AU
+    /// lands — otherwise the Idea/Guide-state would stay stale until the next manual revisit.
+    private func refreshAfterCapture() async {
+        let engine = coverageEngine
+        var lastCompleted = engine.currentInputs(for: story).completedMUValues.count
+        await refreshGuideAndCoverage()
+        // Up to ~60s of opportunistic polling for the just-captured Moment's AU to finish.
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
+            if Task.isCancelled { return }
+            let now = engine.currentInputs(for: story).completedMUValues.count
+            if now != lastCompleted {
+                lastCompleted = now
+                await refreshGuideAndCoverage()                 // AU landed -> recompute coverage + idea
+                return
+            }
+        }
     }
 
     private var stateLine: String {

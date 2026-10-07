@@ -69,6 +69,8 @@ struct StoryGuideSection: View {
     let isLoading: Bool
     /// Guide possibility -> Shoot (Director entry point B). Wired in Batch 4.
     var onShoot: (_ dimension: StoryGuideDimensionDTO, _ possibility: CapturePossibilityDTO) -> Void = { _, _ in }
+    /// Retry Guide generation when it failed/was interrupted (empty state).
+    var onRetry: () -> Void = {}
 
     private func stateFor(_ dimId: String) -> NarrativeCoverageDTO? {
         coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == dimId })?.state
@@ -123,6 +125,11 @@ struct StoryGuideSection: View {
                     .font(StoryTheme.body(13).italic())
                     .foregroundStyle(StoryTheme.cream.opacity(0.3))
                     .fixedSize(horizontal: false, vertical: true)
+                Button(action: onRetry) {
+                    Text("Build my guide")
+                        .font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                }
+                .buttonStyle(.plain).padding(.top, 2)
             }
         }
         .padding(.top, 20)
