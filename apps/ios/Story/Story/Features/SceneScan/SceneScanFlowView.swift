@@ -30,6 +30,11 @@ struct SceneScanFlowView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
 
+    /// E2-c: the high-level narrative opportunity the user chose (Story Idea -> Show me, or Guide
+    /// possibility -> Shoot). nil = the existing direct "Shoot a moment" flow (unchanged). Stored on
+    /// the view, so it SURVIVES rescan (rescan only resets `state`, not this value).
+    var selectedOpportunity: SelectedOpportunityDTO? = nil
+
     let captureSessionId: UUID = UUID()
     let mode: String = "shoot_moment"
 
@@ -420,7 +425,8 @@ struct SceneScanFlowView: View {
                 let out = try await directorService.initialize(
                     creativeIntent: CreativeIntentContractDTO(from: story),
                     sceneUnderstanding: su,
-                    targetDurationSeconds: story.intentTargetDurationSeconds)
+                    targetDurationSeconds: story.intentTargetDurationSeconds,
+                    selectedOpportunity: selectedOpportunity)   // nil for the direct flow; survives rescan
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                 await MainActor.run {
                     stopPlanningStages()

@@ -19,6 +19,9 @@ struct StoryHomeView: View {
     @State private var pickerItems = false
     @State private var showMoments = false
     @State private var confirmLifecycle = false
+    // E2-c: an opportunity-driven capture (Story Idea Show-me / Guide possibility Shoot). When set,
+    // the scan flow carries this selected_opportunity into Director. Identifiable wrapper for cover(item:).
+    @State private var pendingOpportunity: OpportunityLaunch?
 
     // Milestone E2 — persistent StoryGuide + Coverage/2 (real Story Guide + Story Idea).
     @State private var guide: StoryGuideDTO?
@@ -103,14 +106,28 @@ struct StoryHomeView: View {
                 // shown ONLY when non-null; omitted entirely otherwise (no "no ideas"
                 // placeholder — do-nothing intelligence is no interruption).
                 if let idea = coverage?.storyIdea {
-                    StoryIdeaSection(idea: idea) { showCapture = true }
+                    // Story Idea -> Show me (Director entry point A): carry the Idea's semantic
+                    // opportunity (title + description; target dimension if present) into Director.
+                    StoryIdeaSection(idea: idea) {
+                        pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                            storyGuideDimensionId: idea.targetStoryGuideDimensionId,
+                            label: idea.title, purpose: idea.description,
+                            capturePossibilityLabel: nil))
+                    }
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
 
                 // Story Guide — the persistent StoryGuide creative map (renders as soon as the
                 // Guide exists, independent of Coverage) + optional Coverage/2 overlay (state tags +
                 // represented-possibility affordances). Advisory, never a checklist.
-                StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading)
+                StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading) { dim, poss in
+                    // Guide possibility -> Shoot (Director entry point B): purpose = possibility
+                    // semantic_purpose ?? owning dimension purpose; carry the possibility label.
+                    pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                        storyGuideDimensionId: dim.id, label: poss.label,
+                        purpose: poss.semanticPurpose ?? dim.purpose,
+                        capturePossibilityLabel: poss.label))
+                }
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -130,6 +147,13 @@ struct StoryHomeView: View {
             // have completed -> coverage is likely stale. Recompute opportunistically.
             Task { await loadCoverage() }
         }) { ShootMomentView(story: story) }
+        .fullScreenCover(item: $pendingOpportunity, onDismiss: {
+            Task { await loadCoverage() }
+        }) { launch in
+            // Opportunity-driven capture: Story Idea Show-me / Guide possibility Shoot.
+            // The scan flow carries selected_opportunity into Director (survives rescan).
+            SceneScanFlowView(story: story, selectedOpportunity: launch.opportunity)
+        }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems) { picked in
@@ -348,3 +372,9 @@ private struct IntentChipsDebug: View {
     }
 }
 #endif
+
+// E2-c: Identifiable wrapper so an opportunity-driven capture can drive fullScreenCover(item:).
+struct OpportunityLaunch: Identifiable {
+    let id = UUID()
+    let opportunity: SelectedOpportunityDTO
+}
