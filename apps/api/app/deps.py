@@ -43,6 +43,17 @@ from story_coverage import (
     MockStoryCoverageEngine,
     RealStoryCoverageEngine,
 )
+from story_guide import (
+    StoryGuideEngine,
+    DEFAULT_GUIDE_MODEL,
+    MockStoryGuideEngine,
+    RealStoryGuideEngine,
+)
+from story_coverage_v2 import (
+    DEFAULT_COVERAGE_MODEL as DEFAULT_COVERAGE_V2_MODEL,
+    RealStoryCoverageV2Engine,
+    StoryCoverageV2Engine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -134,3 +145,29 @@ def get_story_coverage_engine() -> StoryCoverageEngine:
         return MockStoryCoverageEngine()
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_MODEL)
     return RealStoryCoverageEngine(BedrockModelGateway(model_id=model), model_id=model)
+
+
+def get_story_guide_engine() -> StoryGuideEngine:
+    """Provide the Story Guide engine (Milestone E2-a, FROZEN).
+
+    CreativeIntent -> persistent StoryGuide, ONCE per Story. ONE model, config-driven via
+    STORY_GUIDE_MODEL (default us.anthropic.claude-opus-4-6-v1 — the E2-a selection: restraint +
+    scope discipline + framing voice; task-specific, NOT a general Opus rule). Set STORY_GUIDE_MOCK=1
+    for the dev/offline mock (never a silent production fallback — Guide failure preserves CreativeIntent).
+    """
+    if os.environ.get("STORY_GUIDE_MOCK") == "1":
+        return MockStoryGuideEngine()
+    model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
+    return RealStoryGuideEngine(BedrockModelGateway(model_id=model), model_id=model)
+
+
+def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
+    """Provide the StoryCoverage/2 engine (Milestone E2-b, FROZEN).
+
+    Composes the internal two-call pipeline (Mapper story_coverage/mapper-v1 + Judge
+    story_judgment/v2) into the public StoryCoverageContractV2. ONE model, config-driven via
+    STORY_COVERAGE_MODEL (default us.anthropic.claude-opus-4-6-v1) for BOTH internal calls. The
+    deterministic evidence builder firewalls Guide/completion signals away from the Judge.
+    """
+    model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_V2_MODEL)
+    return RealStoryCoverageV2Engine(BedrockModelGateway(model_id=model), model_id=model)

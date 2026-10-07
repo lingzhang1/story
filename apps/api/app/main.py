@@ -61,6 +61,13 @@ from story_coverage import (
     PROMPT_VERSION as COV_PROMPT_VERSION,
     SCHEMA_VERSION as COV_SCHEMA_VERSION,
 )
+from story_guide import GuideInput, GuideUnavailableError, StoryGuideEngine
+from story_coverage_v2 import (
+    CoverageV2Input,
+    CoverageUnavailableError as CoverageV2UnavailableError,
+    StoryCoverageV2Engine,
+)
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -74,6 +81,8 @@ from app.deps import (
     get_story_engine,
     get_asset_understanding_engine,
     get_story_coverage_engine,
+    get_story_guide_engine,
+    get_story_coverage_v2_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -105,6 +114,32 @@ class StoryCoverageRequest(BaseModel):
     scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
     moment_understandings: list[dict] = Field(default_factory=list,
         description="completed MomentUnderstanding records (observed + story_context)")
+    pending_count: int = Field(default=0, ge=0)
+
+
+class StoryGuideRequest(BaseModel):
+    """POST /v1/story-guide body. CreativeIntent + scope -> StoryGuide/1 (text-only). Generated ONCE
+    at Story creation; no MomentUnderstanding required (a zero-Moment Story has a complete Guide)."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
+    scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
+    source_creative_intent_version: str | None = Field(default=None)
+
+
+class StoryCoverageV2Request(BaseModel):
+    """POST /v1/story-coverage/v2 body — the FROZEN Guide-relative Coverage. CreativeIntent + the
+    persisted frozen StoryGuide + completed MomentUnderstanding[] + pending_count -> StoryCoverage/2
+    (internal Mapper + Judge composed). Text-only, no media."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    story_guide: dict = Field(..., description="the frozen StoryGuide/1 (dimensions w/ stable ids)")
+    story_guide_version: str = Field(default="story_guide/1")
+    creative_intent: dict = Field(...)
+    scope: dict = Field(default_factory=dict)
+    moment_understandings: list[dict] = Field(default_factory=list)
     pending_count: int = Field(default=0, ge=0)
 
 
@@ -431,6 +466,70 @@ def create_app() -> FastAPI:
             extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "sufficiency": cov.sufficiency.status.value,
                    "dimension_count": len(cov.dimensions), "has_story_idea": cov.story_idea is not None})
+        return cov
+
+    @app.post("/v1/story-guide", response_model=StoryGuideContract, status_code=200)
+    def story_guide(
+        body: StoryGuideRequest,
+        engine: StoryGuideEngine = Depends(get_story_guide_engine),
+    ) -> StoryGuideContract:
+        """Generate the persistent StoryGuide from CreativeIntent (Milestone E2-a, FROZEN). ONCE per
+        Story, text-only, Opus 4.6. Server mints canonical stable dimension/possibility ids. On failure
+        return 503 so Story creation is NOT lost and NO generic Guide is fabricated — the client keeps
+        CreativeIntent and retries."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "story_guide", "correlation_id": correlation_id,
+                "task": "story_guide.generate", "prompt_version": "story_guide/v1",
+                "schema_version": "story_guide/1"}
+        try:
+            guide = engine.generate(GuideInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                source_creative_intent_version=body.source_creative_intent_version))
+        except GuideUnavailableError as e:
+            log.warning("story_guide_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_guide_unavailable: could not generate; preserve CreativeIntent and retry")
+        log.info("story_guide_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "dimension_count": len(guide.dimensions)})
+        return guide
+
+    @app.post("/v1/story-coverage/v2", response_model=StoryCoverageContractV2, status_code=200)
+    def story_coverage_v2(
+        body: StoryCoverageV2Request,
+        engine: StoryCoverageV2Engine = Depends(get_story_coverage_v2_engine),
+    ) -> StoryCoverageContractV2:
+        """Compute StoryCoverage/2 (Milestone E2-b, FROZEN): StoryGuide + completed
+        MomentUnderstanding[] + pending_count -> composed Mapper + Judge. Full recomputation,
+        text-only. On model/provider failure return 503 so the client keeps its previous valid cached
+        coverage — never a fabricated snapshot."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        if len(body.moment_understandings) > _COV_MAX_MOMENTS:
+            raise HTTPException(status_code=413, detail=f"too many moments (max {_COV_MAX_MOMENTS})")
+        base = {"operation": "story_coverage_v2", "correlation_id": correlation_id,
+                "task": "story_coverage.v2", "schema_version": "story_coverage/2",
+                "moment_count": len(body.moment_understandings), "pending_count": body.pending_count}
+        try:
+            cov = engine.compute(CoverageV2Input(
+                story_id=body.story_id, story_guide=body.story_guide,
+                story_guide_version=body.story_guide_version, creative_intent=body.creative_intent,
+                scope=body.scope, moment_understandings=body.moment_understandings,
+                pending_count=body.pending_count))
+        except CoverageV2UnavailableError as e:
+            log.warning("story_coverage_v2_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_coverage_v2_unavailable: could not compute; keep previous cached coverage")
+        log.info("story_coverage_v2_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "sufficiency": cov.sufficiency.status.value,
+                   "dimension_coverage_count": len(cov.dimension_coverage),
+                   "has_story_idea": cov.story_idea is not None})
         return cov
 
     def _director_log(op: str, out, started, correlation_id):

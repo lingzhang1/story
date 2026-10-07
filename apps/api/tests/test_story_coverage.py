@@ -171,13 +171,33 @@ def test_regression_corpus_present_and_complete():
 
 
 def test_every_fixture_is_classified_strict_or_envelope():
-    """Each fixture carries an explicit eval_mode; only owner-reviewed ones are envelope."""
+    """Each fixture carries an explicit eval_mode; only owner-reviewed ones are envelope.
+    Owner-approved envelope set: A (Milestone E), B + J (Milestone E2-b freeze — see
+    milestone-e2b-story-coverage-migration-experiment.md). Any NEW envelope requires explicit
+    owner review, so this set is pinned."""
     fx = _load_fixtures()
     for fid, f in fx.items():
         assert f.get("eval_mode") in ("strict", "semantic_envelope"), f"{fid} unclassified"
-    # Only A is currently owner-classified ambiguous; new ones require explicit review.
-    envelope = [fid for fid, f in fx.items() if f.get("eval_mode") == "semantic_envelope"]
-    assert envelope == ["A_scenery_only"], f"unexpected envelope set: {envelope}"
+    envelope = sorted(fid for fid, f in fx.items() if f.get("eval_mode") == "semantic_envelope")
+    assert envelope == ["A_scenery_only", "B_broad_coverage", "J_anti_checklist_solitude"], \
+        f"unexpected envelope set: {envelope}"
+
+
+def test_e2b_reclassified_fixtures_preserve_history_and_rules():
+    """B and J were reclassified at the E2-b freeze; the owner rule + ORIGINAL reference must be
+    preserved (history not rewritten), and the envelopes must encode the owner-approved semantics."""
+    fx = _load_fixtures()
+    j = fx["J_anti_checklist_solitude"]
+    assert "original_human_reference" in j, "J original reference not preserved"
+    jenv = j["semantic_envelope"]
+    assert jenv["required"]["sufficiency"] == "sufficient", "J must REQUIRE sufficient"
+    assert "null" in jenv["acceptable"]["story_idea"]
+    assert any("workable" in x for x in jenv["forbidden"]), "J workable must be forbidden (a miss)"
+    assert any("companionship" in x or "human-connection" in x for x in jenv["forbidden"])
+    b = fx["B_broad_coverage"]
+    assert "original_human_reference" in b, "B original reference not preserved"
+    assert set(b["semantic_envelope"]["acceptable"]["sufficiency"]) == {"sufficient", "workable"}, \
+        "B tolerance = sufficient OR near-sufficient (workable), from its existing reference"
 
 
 def test_fixture_A_envelope_and_decision_note_preserved():
