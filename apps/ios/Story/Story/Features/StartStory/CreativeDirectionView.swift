@@ -19,6 +19,9 @@ struct CreativeDirectionView: View {
     @State private var errorMessage: String?
     @State private var resolvedStory: StoryModel?       // reflected at Context step
     @State private var navigate = false                 // Start Story -> Story Home
+    @State private var guide: StoryGuideDTO?            // real StoryGuide for "Here's what I'll look for"
+    @State private var guideLoading = false
+    @State private var guideFailed = false
 
     private let presets: [(title: String, desc: String)] = [
         ("Cinematic journey", "Cinematic · Scenic · Journey"),
@@ -161,24 +164,83 @@ struct CreativeDirectionView: View {
                 // Music direction — disabled future.
                 StoryUnavailableSection(header: { StoryEyebrow(text: "Music") },
                     message: "Story will choose music that fits. Not available yet.")
-                StoryPrimaryButton(title: "Looks good") { step = .blueprint }
+                StoryPrimaryButton(title: "Looks good") { Task { await enterBlueprint() } }
                 StorySecondaryButton(title: "Edit") { step = .describe; resolvedStory = nil }
             }
         }
     }
 
-    // Step 4 — blueprint (frozen arc surface, DISABLED — no StoryBlueprint capability)
+    // Step 4 — "Here's what I'll look for" (E2-c): the REAL persistent StoryGuide, generated once from
+    // CreativeIntent, shown BEFORE Moment #1. Advisory creative map — NOT a required-shot list. No TMB
+    // demo content; every line derives from this Story's own Guide.
     private var blueprintStep: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if let s = resolvedStory {
+                Text(s.title.displayTitle).font(StoryTheme.body(13)).tracking(0.3)
+                    .foregroundStyle(StoryTheme.cream.opacity(0.5))
+            }
             Text("Here's what I'll look for.")
                 .font(StoryTheme.display(28)).foregroundStyle(StoryTheme.cream)
-            StoryUnavailableSection(header: { StoryEyebrow(text: "Story Guide") },
-                message: "As your Story grows, I'll suggest what would make it stronger. This guidance is coming in a later update.")
-            Text("You're all set.").font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
-            Text("Capture naturally as you go.")
-                .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
-            StoryPrimaryButton(title: "Start Story") { navigate = true }
+
+            if guideLoading {
+                StoryThinkingState(line: "Thinking about your Story…")
+                    .frame(maxWidth: .infinity).padding(.vertical, 40)
+            } else if let g = guide {
+                // framing_summary — the Figma companion line.
+                if !g.framingSummary.isEmpty {
+                    Text(g.framingSummary)
+                        .font(StoryTheme.body(15).italic())
+                        .foregroundStyle(StoryTheme.cream.opacity(0.68))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                // Dimensions: label + purpose, as the creative map (no possibilities/requirements here).
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(g.dimensions) { dim in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(dim.label).font(StoryTheme.display(18).italic())
+                                .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                            Text(dim.purpose).font(StoryTheme.body(13))
+                                .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                Text("This can change as your Story unfolds.")
+                    .font(StoryTheme.body(12).italic()).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .padding(.top, 2)
+                Text("You're all set.").font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                    .padding(.top, 6)
+                Text("Capture naturally as you go. A guide, not a checklist — capture what feels right.")
+                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                StoryPrimaryButton(title: "Start Story") { navigate = true }
+            } else {
+                // Guide generation failed (retryable) — the Story is still valid; let the user proceed.
+                Text("You're all set.").font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                Text("Capture naturally as you go — your guide will appear shortly.")
+                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if guideFailed {
+                    StorySecondaryButton(title: "Try again") { Task { await generateGuide() } }
+                }
+                StoryPrimaryButton(title: "Start Story") { navigate = true }
+            }
         }
+    }
+
+    private func enterBlueprint() async {
+        step = .blueprint
+        await generateGuide()
+    }
+
+    private func generateGuide() async {
+        guard let s = resolvedStory, guide == nil else { return }
+        guideFailed = false
+        guideLoading = true
+        let coordinator = StoryGuideCoordinator(context: context)
+        let g = await coordinator.ensureGuide(for: s)
+        guideLoading = false
+        if let g { guide = g } else { guideFailed = true }
     }
 
     private func back() {
