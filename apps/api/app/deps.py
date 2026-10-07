@@ -54,6 +54,10 @@ from story_coverage_v2 import (
     RealStoryCoverageV2Engine,
     StoryCoverageV2Engine,
 )
+from music_direction import (
+    DeterministicMusicDirectionEngine,
+    MusicDirectionEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -171,3 +175,14 @@ def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
     """
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_V2_MODEL)
     return RealStoryCoverageV2Engine(BedrockModelGateway(model_id=model), model_id=model)
+
+
+def get_music_direction_engine() -> MusicDirectionEngine:
+    """Provide the MusicDirection inference engine (Milestone M-c).
+
+    DETERMINISTIC — no model call. Projects the already-resolved CreativeIntent
+    (+ optional StoryGuide.framing_summary) into the intended soundtrack character.
+    No STORY_*_MODEL env var and no gateway: inference is a cheap categorical
+    projection, not a second model surface (M-c owner decision).
+    """
+    return DeterministicMusicDirectionEngine()

@@ -62,12 +62,13 @@ from story_coverage import (
     SCHEMA_VERSION as COV_SCHEMA_VERSION,
 )
 from story_guide import GuideInput, GuideUnavailableError, StoryGuideEngine
+from music_direction import MusicDirectionEngine
 from story_coverage_v2 import (
     CoverageV2Input,
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -83,6 +84,7 @@ from app.deps import (
     get_story_coverage_engine,
     get_story_guide_engine,
     get_story_coverage_v2_engine,
+    get_music_direction_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -126,6 +128,19 @@ class StoryGuideRequest(BaseModel):
     creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
     scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
     source_creative_intent_version: str | None = Field(default=None)
+
+
+class MusicDirectionRequest(BaseModel):
+    """POST /v1/music-direction body (Milestone M-c). CreativeIntent + optional
+    StoryGuide.framing_summary -> inferred MusicDirection (intended soundtrack feel).
+    DETERMINISTIC, no model call. Does NOT consume StoryCoverage. A user-authored
+    direction overrides this on the client; the server never regenerates over an edit."""
+
+    model_config = ConfigDict(extra="forbid")
+    creative_intent: dict = Field(..., description="the resolved CreativeIntent")
+    guide_framing_summary: str | None = Field(
+        default=None, description="StoryGuide.framing_summary as lightweight creative context (optional)"
+    )
 
 
 class StoryCoverageV2Request(BaseModel):
@@ -502,6 +517,32 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "dimension_count": len(guide.dimensions)})
         return guide
+
+    @app.post("/v1/music-direction", response_model=MusicDirectionContract, status_code=200)
+    def music_direction(
+        body: MusicDirectionRequest,
+        engine: MusicDirectionEngine = Depends(get_music_direction_engine),
+    ) -> MusicDirectionContract:
+        """Infer the intended soundtrack CHARACTER from CreativeIntent (+ optional Guide framing),
+        Milestone M-c. DETERMINISTIC — no model call, no StoryCoverage, not regenerated per Moment.
+        A user-authored MusicDirection overrides this (client-persisted); this endpoint only supplies
+        the inferred default. Invalid CreativeIntent -> 422 (never fabricate a generic feel)."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "music_direction", "correlation_id": correlation_id,
+                "task": "music_direction.infer", "schema_version": "music_direction/1"}
+        try:
+            intent = CreativeIntentContract.model_validate(body.creative_intent)
+        except Exception as e:
+            log.warning("music_direction_bad_intent",
+                extra={**base, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=422,
+                detail="invalid creative_intent for music-direction inference")
+        direction = engine.infer(intent, guide_framing_summary=body.guide_framing_summary)
+        log.info("music_direction_inferred",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "mood_tag_count": len(direction.mood_tags)})
+        return direction
 
     @app.post("/v1/story-coverage/v2", response_model=StoryCoverageContractV2, status_code=200)
     def story_coverage_v2(
