@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "experiment": "M-b MusicPlan intelligence experiment",
+    "inputs": "CreativeIntent + MusicDirection + StoryGuide (+ StoryCoverage/2 in Arm B) + target_duration -> MusicPlan",
+    "models": {"sonnet": "us.anthropic.claude-sonnet-4-6", "opus": "us.anthropic.claude-opus-4-6-v1"},
+    "rules": "fractions not cut-times; categorical intensity; NO numeric scores; NO Moment/clip ids; NO transitions; scope-sensitive; smallest-useful wins. native audio awareness required."
+  },
+  "fixtures": {
+    "A_tmb_journey": {
+      "domain": "cinematic journey",
+      "note": "Intent = scenic cinematic journey, but Coverage shows the Story ACTUALLY became storm/difficulty/human-struggle. Arm B should shift the plan toward grit/resolve, not generic scenic swell.",
+      "creative_intent": {"summary": "A cinematic film of our 8-day Tour du Mont Blanc hike — mostly landscapes and the feeling of the journey, the two of us in it naturally.", "subject": "an 8-day TMB trek", "desired_feeling": ["cinematic", "scenic"], "emphasis": ["environment", "scale", "journey"]},
+      "music_direction": {"summary": "Emotional cinematic score with a gradual build.", "mood_tags": ["cinematic", "emotional", "atmospheric"], "energy": "dynamic", "progression": "quiet opening -> gradual build -> emotional climax"},
+      "story_guide": {"framing_summary": "For this Story: the immensity of the Alps, movement day after day, and the two of you small against it all.", "dimensions": [{"id":"dim_01","label":"Scale","purpose":"make the mountains feel enormous"},{"id":"dim_02","label":"Forward motion","purpose":"the rhythm of walking through"},{"id":"dim_03","label":"The two of you","purpose":"human thread inside the landscape"},{"id":"dim_04","label":"Arrival","purpose":"the felt sense of completing it"}]},
+      "story_coverage": {"sufficiency":"workable","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"strong"},{"story_guide_dimension_id":"dim_02","state":"looking_good"},{"story_guide_dimension_id":"dim_03","state":"could_use_more"},{"story_guide_dimension_id":"dim_04","state":"unknown"}],"strengths":["A violent thunderstorm sweeping the valley — dramatic, unplanned","Exhausted faces at a high pass; real physical difficulty","Vast scale established repeatedly"],"redundancies":["several similar wide panoramas"]},
+      "target_duration_seconds": 60
+    },
+    "B_guitar_native_audio": {
+      "domain": "skill progression — NATIVE AUDIO DOMINANT (#7)",
+      "note": "Reference REQUIRES the real final guitar performance to remain audible + become the emotional focus. Soundtrack must recede/leave room; NOT continuous music over the playing.",
+      "creative_intent": {"summary": "A 60s video showing progress learning guitar — from knowing nothing to playing a real song. Happy, warm; the eventual song played is inspiring.", "subject": "learning guitar", "desired_feeling": ["warm", "happy", "inspiring"], "emphasis": ["person", "progression"], "creative_constraints": ["the real song being played matters"]},
+      "music_direction": {"summary": "Warm, understated score that lifts toward an inspiring payoff.", "mood_tags": ["warm", "intimate", "uplifting"], "energy": "dynamic", "progression": "tentative -> warm build -> the real song takes over"},
+      "story_guide": {"framing_summary": "For this Story: fumbling beginnings, small breakthroughs, and the warm moment a real song finally comes through.", "dimensions": [{"id":"dim_01","label":"First touch","purpose":"the awkward unfamiliar start"},{"id":"dim_02","label":"Practice & small wins","purpose":"repetition and moments that click"},{"id":"dim_03","label":"The song arrives","purpose":"the inspiring payoff — a real song start to finish"}]},
+      "story_coverage": {"sufficiency":"workable","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"looking_good"},{"story_guide_dimension_id":"dim_02","state":"strong"},{"story_guide_dimension_id":"dim_03","state":"could_use_more"}],"strengths":["Clear focused practice with real finger work","A clean take of a recognizable song played most of the way through — strong native guitar audio"],"redundancies":[]},
+      "target_duration_seconds": 60
+    },
+    "C_sf_exploration": {
+      "domain": "city exploration",
+      "creative_intent": {"summary": "The character of San Francisco — buildings, street life, the people and pulse of the city.", "subject": "exploring San Francisco", "desired_feeling": ["observational", "lived-in"], "emphasis": ["environment", "people", "detail"]},
+      "music_direction": {"summary": "Rhythmic, lived-in groove with city energy.", "mood_tags": ["urban", "rhythmic", "warm"], "energy": "medium", "progression": "steady pulse with lifts"},
+      "story_guide": {"framing_summary": "For this Story: the architecture, the street life, and the people who make SF feel lived-in.", "dimensions": [{"id":"dim_01","label":"Architectural character","purpose":"the built identity"},{"id":"dim_02","label":"Street pulse","purpose":"the rhythm of daily life"},{"id":"dim_03","label":"The human side","purpose":"faces and small moments"}]},
+      "story_coverage": {"sufficiency":"workable","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"strong"},{"story_guide_dimension_id":"dim_02","state":"looking_good"},{"story_guide_dimension_id":"dim_03","state":"could_use_more"}],"strengths":["Strong architectural texture","Busy crosswalk + cable car street energy — meaningful city ambience"],"redundancies":[]},
+      "target_duration_seconds": 45
+    },
+    "D_birthday_social": {
+      "domain": "social event — NATIVE AUDIO MATTERS (laughter/singing)",
+      "note": "Happy Birthday singing + candid laughter are emotionally central; soundtrack should duck/leave room at the cake moment.",
+      "creative_intent": {"summary": "A warm film of my daughter's 7th birthday — anticipation, arrivals, the cake and her reaction, kids playing.", "subject": "a child's birthday party", "desired_feeling": ["warm", "joyful"], "emphasis": ["people", "reaction"], "creative_constraints": ["candid, not posed"]},
+      "music_direction": {"summary": "Bright, playful warmth.", "mood_tags": ["warm", "playful", "joyful"], "energy": "medium", "progression": "lively with a tender peak"},
+      "story_guide": {"framing_summary": "For this Story: the buzz before, everyone arriving, the cake moment and her reaction, kids being kids.", "dimensions": [{"id":"dim_01","label":"Anticipation","purpose":"the giddy buildup"},{"id":"dim_02","label":"The cake moment","purpose":"the emotional peak — candles, song, her face"},{"id":"dim_03","label":"Kids in full play","purpose":"joyful chaos"}]},
+      "story_coverage": {"sufficiency":"workable","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"looking_good"},{"story_guide_dimension_id":"dim_02","state":"strong"},{"story_guide_dimension_id":"dim_03","state":"looking_good"}],"strengths":["The whole room singing Happy Birthday — strong native audio and emotional peak","Candid laughter during play"],"redundancies":[]},
+      "target_duration_seconds": 60
+    },
+    "E_minimal_solitude": {
+      "domain": "intentionally minimal / solitude",
+      "note": "Deliberately narrow, still. Should get a SMALL, restrained plan — stable low energy, NOT a quiet->build->climax arc. Native ambience (wind) may carry.",
+      "creative_intent": {"summary": "A quiet, minimal film about being alone in the mountains — stillness, space, solitude. No arc, just the feeling of being small out there.", "subject": "solitude in a vast landscape", "desired_feeling": ["still", "contemplative"], "emphasis": ["environment", "scale"], "creative_constraints": ["no narrative arc", "just stillness"]},
+      "music_direction": {"summary": "Sparse, still, almost-ambient.", "mood_tags": ["sparse", "still", "ambient"], "energy": "low", "progression": "held stillness"},
+      "story_guide": {"framing_summary": "For this Story: immensity, stillness, and the quiet weight of being small out there.", "dimensions": [{"id":"dim_01","label":"Scale & emptiness","purpose":"vastness that makes solitude felt"},{"id":"dim_02","label":"Stillness","purpose":"hold the quiet until it becomes the subject"}]},
+      "story_coverage": {"sufficiency":"sufficient","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"strong"},{"story_guide_dimension_id":"dim_02","state":"looking_good"}],"strengths":["Vast empty ridgelines","Wind and near-silence — meaningful ambient audio"],"redundancies":[]},
+      "target_duration_seconds": 30
+    },
+    "F_energetic_short": {
+      "domain": "energetic SHORT Story (scope floor)",
+      "note": "8-second kinetic clip. Must get a TINY plan (1 region, stable high energy) — NOT a four-part arc. Over-planning here is a hard fail.",
+      "creative_intent": {"summary": "An 8-second high-energy clip of a skateboard trick landing.", "subject": "a skate trick", "desired_feeling": ["energetic", "kinetic"], "emphasis": ["action"]},
+      "music_direction": {"summary": "Punchy, high-energy hit.", "mood_tags": ["energetic", "punchy"], "energy": "high", "progression": "immediate energy"},
+      "story_guide": {"framing_summary": "For this Story: one kinetic burst — the trick and the land.", "dimensions": [{"id":"dim_01","label":"The trick","purpose":"the kinetic moment and its landing"}]},
+      "story_coverage": {"sufficiency":"sufficient","dimension_coverage":[{"story_guide_dimension_id":"dim_01","state":"strong"}],"strengths":["Clean trick landing with impact"],"redundancies":[]},
+      "target_duration_seconds": 8
+    }
+  }
+}
