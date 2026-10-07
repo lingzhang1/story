@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "CapturePossibility": {
+      "additionalProperties": false,
+      "description": "ONE example way a StoryGuideDimension's purpose COULD be expressed \u2014 an\nillustration/inspiration, NEVER a required shot and NEVER camera/framing\ndirection. A dimension may have zero of these. `id` is server-minted stable\nidentity (drives the Figma represented/Shoot/Reshoot affordance in E2-b);\npurpose fulfillment \u2014 NOT literal possibility matching \u2014 determines a\ndimension's coverage, so these are not sub-requirements.",
+      "properties": {
+        "id": {
+          "description": "server/domain-minted stable id; model ordinal is coerced, never canonical",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "description": "short example expression, e.g. 'person beneath huge mountains'",
+          "title": "Label",
+          "type": "string"
+        },
+        "semantic_purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "what this example expresses (optional; used by Director handoff)",
+          "title": "Semantic Purpose"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "CapturePossibility",
+      "type": "object"
+    },
+    "StoryGuideDimension": {
+      "additionalProperties": false,
+      "description": "One Story-specific narrative dimension of the creative map. `id` is\nserver-minted STABLE Story-local identity (StoryCoverage references it by id,\nwhich is the fix for per-recompute dimension drift). label/purpose derive from\nCreativeIntent \u2014 never a fixed vocabulary. NOT a required shot, beat, or task.",
+      "properties": {
+        "capture_possibilities": {
+          "description": "a FEW (prefer 1-3) illustrative expressions; examples, not requirements",
+          "items": {
+            "$ref": "#/$defs/CapturePossibility"
+          },
+          "title": "Capture Possibilities",
+          "type": "array"
+        },
+        "id": {
+          "description": "server/domain-minted STABLE id; model ordinal is coerced, never canonical",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "description": "intent-derived, Story-specific dimension name (domain vocabulary)",
+          "title": "Label",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "what this dimension expresses for THIS Story",
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "purpose"
+      ],
+      "title": "StoryGuideDimension",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The frozen persistent Story creative map (Milestone E2-a). Generated ONCE\nfrom CreativeIntent at Story creation; stable while StoryCoverage recomputes\nas Moments arrive. One active Guide version per Story for MVP; a future\nGuide evolution MUST create a NEW version, never silently mutate meaning old\nCoverage was computed against (versioning per reconciliation \u00a720/\u00a728).",
+  "properties": {
+    "dimensions": {
+      "description": "SMALL, scope-sensitive set of Story-specific dimensions",
+      "items": {
+        "$ref": "#/$defs/StoryGuideDimension"
+      },
+      "title": "Dimensions",
+      "type": "array"
+    },
+    "framing_summary": {
+      "description": "ONE short human-readable statement of what this Story is trying to capture (app's calm voice)",
+      "title": "Framing Summary",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "story_guide/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_creative_intent_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "provenance: which resolved CreativeIntent this Guide was built from",
+      "title": "Source Creative Intent Version"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "story_id",
+    "framing_summary"
+  ],
+  "title": "StoryGuide",
+  "type": "object"
+}

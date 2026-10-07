@@ -1,0 +1,138 @@
+{
+  "_meta": {
+    "experiment": "E2-a StoryGuide intelligence + contract",
+    "purpose": "CreativeIntent -> persistent StoryGuide (long-horizon creative map). Text-only.",
+    "models": {"sonnet": "us.anthropic.claude-sonnet-4-6", "opus": "us.anthropic.claude-opus-4-6-v1"},
+    "rules": "PURPOSE > literal possibility. Scope-sensitive dimension count. No required flags/weights/percent/fixed-vocab/camera. Fewer-is-better: penalize over-planning."
+  },
+  "fixtures": {
+    "A_tmb_hiking": {
+      "domain": "multi-day hiking",
+      "creative_intent": {
+        "summary": "A cinematic film of our 8-day Tour du Mont Blanc hike through the Alps, mostly landscapes and the feeling of the journey, with the two of us included naturally.",
+        "subject": "an 8-day Tour du Mont Blanc trek, two hikers",
+        "desired_feeling": ["cinematic", "scenic"],
+        "style_tags": ["cinematic", "scenic", "journey"],
+        "pace": "gradual",
+        "emphasis": ["environment", "scale", "journey"],
+        "creative_constraints": ["mostly landscapes", "include us naturally, not staged"],
+        "target_duration_seconds": 60,
+        "target_format": "vertical",
+        "raw_user_description": "We're hiking Tour du Mont Blanc for 8 days. It's the two of us, through the Alps - from Chamonix, over the passes, and back. Mostly landscapes and the feeling of the journey. Include us naturally."
+      },
+      "review_notes": "The canonical fixture. Expect a journey-shaped map (departure/movement/scale/human/effort/arrival-ish) in Story-specific language. MUST NOT become a required-shot list. Human presence present but SECONDARY to landscape (intent says 'mostly landscapes')."
+    },
+    "B_sf_exploration": {
+      "domain": "city exploration",
+      "creative_intent": {
+        "summary": "A short film capturing the character of San Francisco - its distinctive buildings, street life, and the people and pulse of the city.",
+        "subject": "exploring San Francisco",
+        "desired_feeling": ["observational", "lived-in"],
+        "style_tags": ["documentary", "urban"],
+        "pace": "moderate",
+        "emphasis": ["environment", "people", "detail"],
+        "creative_constraints": ["the human side of the city", "architectural character"],
+        "target_duration_seconds": 45,
+        "target_format": "vertical",
+        "raw_user_description": "Exploring San Francisco - the buildings, the street life, the people and pulse of the city."
+      },
+      "review_notes": "City-character map (street life / people / architecture / scale or progression). MUST NOT hard-code iconic landmarks the user did not name (no 'Golden Gate', 'cable cars' as required dimensions). Domain vocab = city, NOT travel/trail."
+    },
+    "C_guitar_practice": {
+      "domain": "skill practice",
+      "creative_intent": {
+        "summary": "A film about the daily practice of learning guitar - the focus, the repetition, the small breakthroughs over weeks.",
+        "subject": "learning to play guitar",
+        "desired_feeling": ["intimate", "focused"],
+        "style_tags": ["personal", "process"],
+        "pace": "gradual",
+        "emphasis": ["person", "progression", "detail"],
+        "creative_constraints": ["honest about the struggle, not a highlight reel"],
+        "target_duration_seconds": 45,
+        "target_format": "vertical",
+        "raw_user_description": "Me learning guitar - the focus, the repetition, the small wins over weeks of practice."
+      },
+      "review_notes": "Process/skill map (preparation/focus/struggle/progress/performance/reflection-ish). ZERO travel vocabulary. MUST read as a practice story, not a trip. Tests cross-domain generality hard."
+    },
+    "D_birthday_party": {
+      "domain": "social event",
+      "creative_intent": {
+        "summary": "A warm film of my daughter's 7th birthday party - the anticipation, everyone arriving, the cake and reactions, the kids playing together.",
+        "subject": "a child's 7th birthday party",
+        "desired_feeling": ["warm", "joyful"],
+        "style_tags": ["candid", "family"],
+        "pace": "lively",
+        "emphasis": ["people", "relationship", "reaction"],
+        "creative_constraints": ["candid, not posed"],
+        "target_duration_seconds": 60,
+        "target_format": "vertical",
+        "raw_user_description": "My daughter's 7th birthday party - anticipation, people arriving, cake and reactions, the kids playing."
+      },
+      "review_notes": "Event map (anticipation/gathering/celebration/reactions/relationships/closing-ish). People-centric (NOT landscape). MUST NOT demand 'scale' or 'environment' dimensions that fit travel but not a party."
+    },
+    "E_solitude_minimal": {
+      "domain": "intentionally minimal / solitude",
+      "creative_intent": {
+        "summary": "A quiet, minimal film about being alone in the mountains - just stillness, space, and solitude. No people, no story arc, just the feeling of being small and alone out there.",
+        "subject": "solitude in a vast landscape",
+        "desired_feeling": ["still", "contemplative"],
+        "style_tags": ["minimal", "quiet"],
+        "pace": "slow",
+        "emphasis": ["environment", "scale"],
+        "creative_constraints": ["no people", "no narrative arc", "just stillness and aloneness"],
+        "target_duration_seconds": 30,
+        "target_format": "vertical",
+        "raw_user_description": "Alone in the mountains. Just stillness, space, solitude. The feeling of being small and alone - no people, no arc."
+      },
+      "review_notes": "ANTI-CHECKLIST fixture. MUST respect the narrow intent: a SMALL map about stillness/aloneness/scale. MUST NOT manufacture people, companionship, challenge, or a journey arc the user explicitly rejected. The most important generality test."
+    },
+    "F_very_short": {
+      "domain": "tiny scope",
+      "creative_intent": {
+        "summary": "An 8-second clip of my morning coffee ritual - just the pour and the first sip.",
+        "subject": "a morning coffee ritual",
+        "desired_feeling": ["calm", "simple"],
+        "style_tags": ["intimate", "minimal"],
+        "pace": "slow",
+        "emphasis": ["detail"],
+        "creative_constraints": ["one small moment, nothing elaborate"],
+        "target_duration_seconds": 8,
+        "target_format": "vertical",
+        "raw_user_description": "8 seconds of my morning coffee - the pour, the first sip."
+      },
+      "review_notes": "SCOPE-SENSITIVITY floor. An 8-second Story MUST get a TINY Guide (1-2 dimensions, not six). Over-planning here is a hard fail. Tests whether the model scales the map to scope."
+    },
+    "G_long_rich": {
+      "domain": "large scope",
+      "creative_intent": {
+        "summary": "A rich 2-minute film of our month-long road trip across the American Southwest - deserts, national parks, small towns, diners, the people we met, the long drives, and how the landscape changed day by day.",
+        "subject": "a month-long Southwest US road trip",
+        "desired_feeling": ["expansive", "nostalgic"],
+        "style_tags": ["cinematic", "documentary", "road-trip"],
+        "pace": "varied",
+        "emphasis": ["environment", "people", "progression", "scale", "detail"],
+        "creative_constraints": ["the changing landscape", "the people we met", "the feeling of the long road"],
+        "target_duration_seconds": 120,
+        "target_format": "vertical",
+        "raw_user_description": "A month-long road trip across the Southwest - deserts, parks, small towns, diners, people we met, long drives, the landscape changing day by day."
+      },
+      "review_notes": "SCOPE-SENSITIVITY ceiling. A rich 2-min month-long trip MAY justify a richer map (more dimensions than the 8s coffee). But richness MUST still be useful, not padding. Compare dimension count vs F to confirm the model scales UP appropriately."
+    },
+    "H_unusual_intent": {
+      "domain": "unusual / template-exposing",
+      "creative_intent": {
+        "summary": "A film documenting the slow restoration of a 1960s typewriter - the disassembly, the rust and grime, cleaning each tiny part, and the moment it types its first clean line again.",
+        "subject": "restoring a vintage typewriter",
+        "desired_feeling": ["meticulous", "satisfying"],
+        "style_tags": ["macro", "process", "tactile"],
+        "pace": "gradual",
+        "emphasis": ["detail", "progression", "transformation"],
+        "creative_constraints": ["the texture of old metal", "patience and precision", "before-and-after transformation"],
+        "target_duration_seconds": 60,
+        "target_format": "vertical",
+        "raw_user_description": "Restoring a 1960s typewriter - taking it apart, the rust and grime, cleaning every tiny part, and the first clean line it types again."
+      },
+      "review_notes": "GENERIC-TEMPLATE EXPOSURE fixture. A niche restoration/transformation story with NO people, NO landscape, NO journey. If the model leaks travel/people/scale template dimensions here, it is pattern-matching, not reasoning. Expect a process/transformation/detail map (disassembly/decay/restoration-labor/first-use-ish) in object-restoration vocabulary."
+    }
+  }
+}

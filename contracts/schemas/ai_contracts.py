@@ -601,6 +601,73 @@ class SufficiencyStatus(str, Enum):
     SUFFICIENT = "sufficient"
 
 
+# ---------------------------------------------------------------------------
+# StoryGuide (Milestone E2-a, FROZEN 2026-10-06) — the persistent, long-horizon
+# creative map generated ONCE from CreativeIntent at Story creation, BEFORE any
+# Moment exists. Model: us.anthropic.claude-opus-4-6-v1 (task-specific selection:
+# StoryGuide benefits from restraint + concise framing; NOT a general "use Opus"
+# rule — Sonnet 4.6 remains a valid future cost-optimized alternative, not rejected
+# for capability/safety). Prompt: story_guide/v1. Design: milestone-e2-story-guide-
+# reconciliation.md + milestone-e2a-story-guide-experiment.md.
+#
+# Dimension + capture-possibility `id`s are SERVER/DOMAIN-MINTED stable Story-local
+# identity (the model emits ordinal handles d1/d1p1 which the engine coerces into
+# canonical ids — model ids are NEVER canonical identity). StoryCoverage (E2-b) will
+# reference these stable ids. NO required flags, NO numeric weights, NO completion
+# percentages, NO fixed narrative vocabulary, NO camera/framing direction.
+# ---------------------------------------------------------------------------
+
+
+class CapturePossibility(_Strict):
+    """ONE example way a StoryGuideDimension's purpose COULD be expressed — an
+    illustration/inspiration, NEVER a required shot and NEVER camera/framing
+    direction. A dimension may have zero of these. `id` is server-minted stable
+    identity (drives the Figma represented/Shoot/Reshoot affordance in E2-b);
+    purpose fulfillment — NOT literal possibility matching — determines a
+    dimension's coverage, so these are not sub-requirements."""
+
+    id: str = Field(description="server/domain-minted stable id; model ordinal is coerced, never canonical")
+    label: str = Field(description="short example expression, e.g. 'person beneath huge mountains'")
+    semantic_purpose: str | None = Field(
+        default=None, description="what this example expresses (optional; used by Director handoff)"
+    )
+
+
+class StoryGuideDimension(_Strict):
+    """One Story-specific narrative dimension of the creative map. `id` is
+    server-minted STABLE Story-local identity (StoryCoverage references it by id,
+    which is the fix for per-recompute dimension drift). label/purpose derive from
+    CreativeIntent — never a fixed vocabulary. NOT a required shot, beat, or task."""
+
+    id: str = Field(description="server/domain-minted STABLE id; model ordinal is coerced, never canonical")
+    label: str = Field(description="intent-derived, Story-specific dimension name (domain vocabulary)")
+    purpose: str = Field(description="what this dimension expresses for THIS Story")
+    capture_possibilities: list[CapturePossibility] = Field(
+        default_factory=list, description="a FEW (prefer 1-3) illustrative expressions; examples, not requirements"
+    )
+
+
+class StoryGuideContract(_Strict):
+    """The frozen persistent Story creative map (Milestone E2-a). Generated ONCE
+    from CreativeIntent at Story creation; stable while StoryCoverage recomputes
+    as Moments arrive. One active Guide version per Story for MVP; a future
+    Guide evolution MUST create a NEW version, never silently mutate meaning old
+    Coverage was computed against (versioning per reconciliation §20/§28)."""
+
+    schema_version: str = Field(default="story_guide/1")
+    story_id: UUID
+    source_creative_intent_version: str | None = Field(
+        default=None, description="provenance: which resolved CreativeIntent this Guide was built from"
+    )
+    framing_summary: str = Field(
+        description="ONE short human-readable statement of what this Story is trying to capture (app's calm voice)"
+    )
+    dimensions: list[StoryGuideDimension] = Field(
+        default_factory=list, description="SMALL, scope-sensitive set of Story-specific dimensions"
+    )
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+
 class CoverageDimension(_Strict):
     """One narrative dimension (HYBRID). label/purpose are CreativeIntent-derived
     and Story-specific; `coverage` is categorical. `id` is a handle WITHIN THIS
