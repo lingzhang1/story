@@ -57,24 +57,69 @@ enum StoryCoveragePresentation {
 
 // MARK: - Story Guide section
 
+// Persistent Story Guide (E2-c): renders the StoryGuide creative map (always, when a Guide exists,
+// independent of Coverage) + an optional StoryCoverage/2 overlay (qualitative dimension state +
+// represented-possibility [x]/Shoot/Reshoot affordances). Advisory, NEVER a checklist: no
+// percentages, no X/Y, no progress bars, no required-shot counts. A dimension can be `strong` with
+// ZERO checked possibilities and must still read coherently. Only `represented_possibility_ids` drives
+// a literal [x]/Reshoot; coverage state alone NEVER fakes a possibility check.
 struct StoryGuideSection: View {
+    let guide: StoryGuideDTO?
     let coverage: StoryCoverageV2DTO?
     let isLoading: Bool
+    /// Guide possibility -> Shoot (Director entry point B). Wired in Batch 4.
+    var onShoot: (_ dimension: StoryGuideDimensionDTO, _ possibility: CapturePossibilityDTO) -> Void = { _, _ in }
+
+    private func stateFor(_ dimId: String) -> NarrativeCoverageDTO? {
+        coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == dimId })?.state
+    }
+    private func representedIds(_ dimId: String) -> Set<String> {
+        Set(coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == dimId })?.representedPossibilityIds ?? [])
+    }
+    private func stateLabel(_ s: NarrativeCoverageDTO?) -> String? {
+        switch s {
+        case .strong: return "You've got this covered"
+        case .lookingGood: return "Looking strong"
+        case .couldUseMore: return "Could use more"
+        default: return nil   // unknown -> no tag (neutral)
+        }
+    }
+    private var pendingLine: String? {
+        guard let c = coverage, c.pendingCount > 0 else { return nil }
+        let n = c.pendingCount
+        return "Still looking at \(n) more moment\(n == 1 ? "" : "s") — your guide will fill in as they're ready."
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             StoryEyebrow(text: "Story Guide")
 
-            if let cov = coverage {
-                content(cov)
+            if let g = guide {
+                Text("A guide, not a checklist — capture what feels right.")
+                    .font(StoryTheme.body(12).italic())
+                    .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                if !g.framingSummary.isEmpty {
+                    Text(g.framingSummary)
+                        .font(StoryTheme.body(13).italic())
+                        .foregroundStyle(StoryTheme.cream.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(g.dimensions) { dim in
+                    dimensionBlock(dim)
+                }
+                if let pendingLine {
+                    Text(pendingLine)
+                        .font(StoryTheme.body(12).italic())
+                        .foregroundStyle(StoryTheme.cream.opacity(0.34))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             } else if isLoading {
-                // No coverage yet, computing: neutral Figma-consistent loading.
-                Text("Reading your Story…")
+                Text("Thinking about your Story…")
                     .font(StoryTheme.body(13).italic())
                     .foregroundStyle(StoryTheme.cream.opacity(0.32))
             } else {
-                // No coverage and not computing (e.g. no understood Moments yet): neutral.
-                Text("Your guide appears as your Story's moments come together.")
+                Text("Your guide appears as your Story comes together.")
                     .font(StoryTheme.body(13).italic())
                     .foregroundStyle(StoryTheme.cream.opacity(0.3))
                     .fixedSize(horizontal: false, vertical: true)
@@ -84,55 +129,46 @@ struct StoryGuideSection: View {
     }
 
     @ViewBuilder
-    private func content(_ cov: StoryCoverageV2DTO) -> some View {
-        let strengths = StoryCoveragePresentation.strengthLines(cov)
-        let opportunities = StoryCoveragePresentation.opportunityLines(cov)
-        let pending = StoryCoveragePresentation.pendingLine(cov)
-
-        VStack(alignment: .leading, spacing: 10) {
-            if cov.sufficiency.status == .sufficient {
-                Text(StoryCoveragePresentation.enoughLine(cov))
-                    .font(StoryTheme.display(16))
-                    .foregroundStyle(StoryTheme.cream.opacity(0.78))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if !strengths.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("What your Story has")
-                        .font(StoryTheme.body(11)).tracking(0.4)
-                        .foregroundStyle(StoryTheme.cream.opacity(0.3))
-                    ForEach(strengths, id: \.self) { s in
-                        guideLine(s, tone: StoryTheme.cream.opacity(0.72))
-                    }
+    private func dimensionBlock(_ dim: StoryGuideDimensionDTO) -> some View {
+        let represented = representedIds(dim.id)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(dim.label).font(StoryTheme.display(17))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                Spacer()
+                if let tag = stateLabel(stateFor(dim.id)) {
+                    Text("· \(tag)").font(StoryTheme.body(12))
+                        .foregroundStyle(stateFor(dim.id) == .couldUseMore
+                                         ? StoryTheme.gold.opacity(0.85) : StoryTheme.cream.opacity(0.4))
                 }
             }
-
-            if !opportunities.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Could make it stronger")
-                        .font(StoryTheme.body(11)).tracking(0.4)
-                        .foregroundStyle(StoryTheme.cream.opacity(0.3))
-                    ForEach(opportunities, id: \.self) { o in
-                        guideLine(o, tone: StoryTheme.cream.opacity(0.56))
-                    }
-                }
-            }
-
-            if let pending {
-                Text(pending)
-                    .font(StoryTheme.body(12).italic())
-                    .foregroundStyle(StoryTheme.cream.opacity(0.34))
-                    .fixedSize(horizontal: false, vertical: true)
+            Text(dim.purpose).font(StoryTheme.body(13))
+                .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(dim.capturePossibilities) { poss in
+                possibilityRow(dim: dim, poss: poss, isRepresented: represented.contains(poss.id))
             }
         }
+        .padding(.top, 6)
     }
 
-    private func guideLine(_ text: String, tone: Color) -> some View {
-        HStack(alignment: .top, spacing: 7) {
-            Text("·").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.25))
-            Text(text).font(StoryTheme.body(13)).foregroundStyle(tone)
+    @ViewBuilder
+    private func possibilityRow(dim: StoryGuideDimensionDTO, poss: CapturePossibilityDTO, isRepresented: Bool) -> some View {
+        HStack(spacing: 10) {
+            // [x] only when a real Moment realizes this example; else a dashed-open circle (invitation).
+            Image(systemName: isRepresented ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 15))
+                .foregroundStyle(isRepresented ? StoryTheme.cream.opacity(0.85) : StoryTheme.gold.opacity(0.7))
+            Text(poss.label).font(StoryTheme.body(14))
+                .foregroundStyle(StoryTheme.cream.opacity(isRepresented ? 0.6 : 0.85))
                 .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button { onShoot(dim, poss) } label: {
+                Text(isRepresented ? "Reshoot →" : "Shoot →")
+                    .font(StoryTheme.body(13, .medium))
+                    .foregroundStyle(isRepresented ? StoryTheme.cream.opacity(0.4) : StoryTheme.gold)
+            }
+            .buttonStyle(.plain)
         }
     }
 }

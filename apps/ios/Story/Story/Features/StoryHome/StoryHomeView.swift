@@ -20,7 +20,8 @@ struct StoryHomeView: View {
     @State private var showMoments = false
     @State private var confirmLifecycle = false
 
-    // Milestone E — Story Coverage (real Story Guide + Story Idea).
+    // Milestone E2 — persistent StoryGuide + Coverage/2 (real Story Guide + Story Idea).
+    @State private var guide: StoryGuideDTO?
     @State private var coverage: StoryCoverageV2DTO?
     @State private var coverageLoading = false
 
@@ -106,9 +107,10 @@ struct StoryHomeView: View {
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
 
-                // Story Guide — real StoryCoverage (ordinary language; no ids /
-                // scores / percentages / progress / required-shot counts / jargon).
-                StoryGuideSection(coverage: coverage, isLoading: coverageLoading)
+                // Story Guide — the persistent StoryGuide creative map (renders as soon as the
+                // Guide exists, independent of Coverage) + optional Coverage/2 overlay (state tags +
+                // represented-possibility affordances). Advisory, never a checklist.
+                StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading)
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -157,28 +159,29 @@ struct StoryHomeView: View {
         coverage = engine.cachedCoverage(for: story.id)   // immediate (may be nil)
 
         // Guide lifecycle is SEPARATE from Coverage: ensure the persisted Guide exists
-        // (generates once from CreativeIntent; covers existing-Story migration). Coverage
-        // READS the Guide — it never generates it.
+        // (generates once from CreativeIntent; covers existing-Story migration). The Guide
+        // renders IMMEDIATELY (independent of Coverage). Coverage READS the Guide.
         let coordinator = StoryGuideCoordinator(context: context)
-        guard let guide = await coordinator.ensureGuide(for: story) else {
+        if let existing = coordinator.guide(for: story.id) { guide = existing }  // show at once if present
+        coverageLoading = (guide == nil)
+        guard let g = await coordinator.ensureGuide(for: story) else {
             // Guide unavailable (retryable) — Story stays valid; no Coverage without a Guide.
             coverageLoading = false
             return
         }
+        guide = g
+        coverageLoading = false
         let guideFingerprint = coordinator.guideFingerprint(for: story.id)
 
         let inputs = engine.currentInputs(for: story)
         let hasUnderstood = !inputs.completedMUValues.isEmpty
         guard hasUnderstood else {
             // Nothing understood yet -> Guide supplies content; do NOT call Mapper/Judge.
-            coverageLoading = false
             return
         }
         guard engine.isStale(for: story, guideFingerprint: guideFingerprint) else { return }
 
-        coverageLoading = (coverage == nil)
-        let fresh = await engine.recomputeIfNeeded(for: story, guide: guide, guideFingerprint: guideFingerprint)
-        coverageLoading = false
+        let fresh = await engine.recomputeIfNeeded(for: story, guide: g, guideFingerprint: guideFingerprint)
         if let fresh { coverage = fresh }                  // keep previous on failure
     }
 
