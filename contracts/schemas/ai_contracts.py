@@ -1013,6 +1013,86 @@ class EditPlanContract(_Strict):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+# ---------------------------------------------------------------------------
+# EditPlan/2 — FROZEN (Milestone M-d.3, 2026-10-07). Edit Planner PLANS; Media
+# Engine EXECUTES. Additive over edit_plan/1: carries the E2/music seam the v1
+# shape lacked. Produced by ONE Opus 4.6 call (prompt edit_plan/2) from
+# CreativeIntent + StoryGuide/1 + StoryCoverage/2 + MomentUnderstanding[] +
+# MusicPlan/1 (+ optional MusicAnalysis). A DETERMINISTIC validator is the hard
+# executability gate — the model NEVER self-certifies. See
+# milestone-md3-api-validation-edit-planner-experiment.md + ...-editplan2-contract.md.
+# ---------------------------------------------------------------------------
+
+
+class NativeAudioIntent(str, Enum):
+    """Per-segment intent for the Moment's OWN CAPTURED audio (NOT the soundtrack).
+    keep = preserve the captured sound (it carries the segment); duck = reduce it
+    beneath the soundtrack; mute = omit it. Whether the SOUNDTRACK recedes to
+    protect a kept native moment is a downstream Media-Engine mix decision driven
+    by MusicPlan.audio_strategy + keep — not encoded here."""
+
+    KEEP = "keep"
+    DUCK = "duck"
+    MUTE = "mute"
+
+
+class MusicAlignmentAnchor(str, Enum):
+    """What real-music structural point a segment's leading cut should land on.
+    Only meaningful when a MusicAnalysis is present; default NONE. NO global
+    beat_sync boolean — alignment is per-segment and heterogeneous."""
+
+    NONE = "none"
+    BEAT = "beat"
+    DOWNBEAT = "downbeat"
+    HIGHLIGHT = "highlight"
+
+
+class MusicAlignment(_Strict):
+    """Segment-level alignment INTENT. The Media Engine does the exact snapping to
+    the MusicAnalysis times; the planner only states intent. Narrative-first —
+    set an anchor only when it materially serves pacing/transition/payoff/ending."""
+
+    anchor: MusicAlignmentAnchor = MusicAlignmentAnchor.NONE
+    note: str | None = None
+
+
+class EditSegmentV2Contract(_Strict):
+    """One planned segment (edit_plan/2). asset_id MUST be an existing Moment id;
+    source range MUST lie within the Moment's real duration and useful_segments."""
+
+    order: int = Field(ge=0)
+    asset_id: UUID
+    source_start_seconds: float | None = Field(default=None, ge=0.0)
+    source_end_seconds: float | None = Field(default=None, gt=0.0)
+    output_duration_seconds: float = Field(gt=0.0)
+    crop: CropInstruction | None = None
+    speed: float | None = Field(default=None, gt=0.0)
+    transition: TransitionInstruction | None = None
+    narrative_role: str | None = None
+    native_audio: NativeAudioIntent
+    music_alignment: MusicAlignment | None = None
+
+
+class EditPlanV2Contract(_Strict):
+    """FROZEN edit_plan/2. Output duration tracks the STORY target (CreativeIntent),
+    never the music track length; +/-20% is a feasibility tolerance, not a target.
+    feasible=False + infeasible_reason instead of inventing footage."""
+
+    schema_version: str = Field(default="edit_plan/2")
+    id: UUID
+    story_id: UUID
+    creative_intent_id: UUID
+    target_duration_seconds: float = Field(gt=0.0)
+    output_format: OutputFormat
+    music_asset_id: str | None = None
+    music_plan_id: UUID | None = None
+    music_analysis_ref: MusicAnalysisContract | None = None
+    feasible: bool = True
+    infeasible_reason: str | None = None
+    segments: list[EditSegmentV2Contract] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 __all__ = [
     # enums
     "OutputFormat",
@@ -1069,4 +1149,10 @@ __all__ = [
     "TransitionInstruction",
     "EditSegmentContract",
     "EditPlanContract",
+    # edit plan/2 (M-d.3, frozen edit_plan/2)
+    "NativeAudioIntent",
+    "MusicAlignmentAnchor",
+    "MusicAlignment",
+    "EditSegmentV2Contract",
+    "EditPlanV2Contract",
 ]

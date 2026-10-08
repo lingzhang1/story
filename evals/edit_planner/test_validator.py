@@ -30,10 +30,11 @@ def check(name, p, scenario, expect_valid):
 
 
 results = []
-# valid baseline (two segments ~18s)
+# valid baseline: source spans inside useful_segments, output consistent with span/speed, total within +/-20% of 18s.
+# m_window useful [1,9] -> span 8.0 slowed to 0.8x -> 10.0s out; m_hands useful [0.5,6] -> span 5.5 @1.0 -> 5.5s out; total 15.5s (ok)
 results.append(check("valid_baseline", plan([
-    seg(order=0, asset_id="m_window", source_start_seconds=1.0, source_end_seconds=9.0, output_duration_seconds=10.0),
-    seg(order=1, asset_id="m_hands", source_start_seconds=0.5, source_end_seconds=6.0, output_duration_seconds=8.0),
+    seg(order=0, asset_id="m_window", source_start_seconds=1.0, source_end_seconds=9.0, output_duration_seconds=10.0, speed=0.8),
+    seg(order=1, asset_id="m_hands", source_start_seconds=0.5, source_end_seconds=6.0, output_duration_seconds=5.5),
 ]), sc, True))
 # invalid asset id
 results.append(check("invented_moment", plan([seg(asset_id="m_nope")]), sc, False))

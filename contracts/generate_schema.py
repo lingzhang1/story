@@ -49,6 +49,7 @@ AI_CONTRACTS: dict[str, tuple[type, str]] = {
     "StoryCoverage": (_ai.StoryCoverageContract, "story-coverage.schema.json"),
     "StoryCoverageV2": (_ai.StoryCoverageContractV2, "story-coverage-v2.schema.json"),
     "EditPlan": (_ai.EditPlanContract, "edit-plan.schema.json"),
+    "EditPlanV2": (_ai.EditPlanV2Contract, "edit-plan-v2.schema.json"),
 }
 
 

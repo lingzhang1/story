@@ -61,6 +61,9 @@ SCHEMA = {
     },
     "required": ["target_duration_seconds", "segments"],
 }
+# feasible defaults true; the planner sets it false (with infeasible_reason) rather than inventing footage.
+SCHEMA["properties"]["feasible"] = {"type": "boolean"}
+SCHEMA["properties"]["infeasible_reason"] = {"type": "string"}
 
 SYSTEM = """You are the Edit Planner for a personal Story video. You PLAN the edit; you do NOT render it. You
 never output pixels, mix curves, or sample-level audio automation — you produce a structured, executable plan a
@@ -84,15 +87,29 @@ YOUR JOB — produce an EditPlan:
 - Order the segments into a coherent narrative progression grounded in the Guide/Coverage — not a generic
   montage template. A minimal/solitude Story may be a few calm held shots; do NOT manufacture a
   quiet->build->climax arc that the material does not support.
-- Set source_start_seconds/source_end_seconds (within the Moment's real duration and useful_segments) and
-  output_duration_seconds for each segment. Keep total output within ±20% of target_duration_seconds.
-- NATIVE AUDIO (first-class): per segment set native_audio = keep | duck | mute, driven by MusicPlan
-  audio_strategy. If a Moment's own sound is the emotional payoff (a real guitar performance, birthday
-  singing, meaningful dialogue), native_audio=keep and the music recedes there. Otherwise duck or mute.
-- MUSIC ALIGNMENT: only when MusicAnalysis is given, you MAY set segment music_alignment.anchor
-  (beat|downbeat|highlight|none) to say a cut/segment should land on that structural point — anchor the
-  Story's payoff near the track's real highlight, major cuts on downbeats. Alignment SERVES the narrative;
-  do NOT force every cut onto a beat. Without MusicAnalysis, omit music_alignment or use anchor="none".
+- DURATION DISCIPLINE: target_duration_seconds (from the Story's CreativeIntent) is AUTHORITATIVE. Plan TO the
+  Story target, never to the music track's length. Prefer the requested duration when the usable footage
+  supports it. Do NOT pad, repeat, slow, or stretch footage merely to fill a longer track. The music track is
+  cut/looped downstream to fit the Story — the Story is NOT stretched to fit the track. ±20% is a hard
+  feasibility TOLERANCE, not a planning target: aim at the target, not the edge. If the usable material cannot
+  support the requested duration, do NOT invent footage — instead return feasible=false with a one-line
+  infeasible_reason and your best shorter plan.
+- NATIVE AUDIO (first-class): per segment set native_audio for the Moment's OWN CAPTURED audio:
+    keep = preserve the Moment's meaningful captured sound (it carries the segment);
+    duck = reduce the Moment's captured sound beneath the soundtrack;
+    mute = omit the Moment's captured sound entirely.
+  This controls ONLY the captured/source audio. (Whether the SOUNDTRACK itself recedes to protect a kept native
+  moment is a downstream Media-Engine mix decision driven by MusicPlan.audio_strategy + native_audio=keep — NOT
+  your call here.) If a Moment's own sound is the emotional payoff (a real guitar performance, birthday singing,
+  meaningful dialogue), native_audio=keep. Otherwise duck or mute.
+- MUSIC ALIGNMENT (RESTRAINED): If NO MusicAnalysis is given in the input, you MUST NOT set any
+  music_alignment anchor — leave music_alignment off every segment (or anchor="none"). ONLY when MusicAnalysis
+  IS given may you anchor, and even then default anchor="none" — most segments should NOT carry an anchor. Set
+  an anchor (beat|downbeat|highlight) only when the alignment MATERIALLY serves narrative pacing, a transition,
+  emphasis, the payoff, or the ending (anchor the payoff near the real highlight, a major cut on a downbeat).
+  Do NOT align merely because beats exist. Preserve breathing room in slow/ambient/solitude Stories — stillness
+  anchored to a beat serves nothing. Native-audio importance ALWAYS takes priority over musical alignment:
+  never degrade a kept native moment to hit a beat.
 
 HARD RULES:
 - asset_id MUST be one of the provided Moment ids. NEVER invent footage, Moments, or seconds that do not exist.
@@ -156,9 +173,28 @@ def validate(plan: dict, sc: dict) -> list[str]:
         total_out += od or 0
         if s.get("native_audio") not in NATIVE:
             errs.append(f"seg{i}: native_audio missing/invalid")
+        # source/output/speed physical consistency: output ~= (source_span / speed) within tolerance.
+        sp = s.get("speed") or 1.0
+        if sp <= 0:
+            errs.append(f"seg{i}: non-positive speed {sp}")
+        elif a is not None and b is not None and b > a and od > 0:
+            expected = (b - a) / sp
+            if abs(expected - od) > max(0.5, 0.25 * expected):
+                errs.append(f"seg{i}: output {od}s inconsistent with source span {b-a:.1f}s @ speed {sp} "
+                            f"(expected ~{expected:.1f}s)")
+        # transition feasibility: a crossfade/dip needs a positive duration shorter than the segment.
+        tr = s.get("transition")
+        if tr and tr.get("type") in ("crossfade", "fade_in", "fade_out", "dip_to_black"):
+            td = tr.get("duration_seconds")
+            if td is not None and (td < 0 or (od and td > od)):
+                errs.append(f"seg{i}: transition {tr.get('type')} duration {td}s infeasible vs segment {od}s")
     target = sc["creative_intent"]["target_duration_seconds"]
+    dur_err_abs = round(total_out - target, 2) if total_out else None
     if total_out and abs(total_out - target) / target > 0.20:
-        errs.append(f"total output {total_out:.1f}s is >20% off target {target}s")
+        errs.append(f"total output {total_out:.1f}s is >20% off target {target}s (abs err {dur_err_abs:+}s)")
+    # if the planner declared infeasible, it must give a reason (and that's a valid-but-flagged outcome)
+    if plan.get("feasible") is False and not (plan.get("infeasible_reason") or "").strip():
+        errs.append("feasible=false but no infeasible_reason given")
     # music_alignment only meaningful with analysis; anchor=highlight/beat/downbeat requires those to exist
     if "music_analysis" not in sc:  # arm A: alignment anchors should be none/absent
         for i, s in enumerate(segs):
@@ -171,7 +207,7 @@ def validate(plan: dict, sc: dict) -> list[str]:
 def run_one(sc: dict, with_analysis: bool):
     from model_gateway import BedrockModelGateway, StructuredRequest
     gw = BedrockModelGateway(model_id=MODEL)
-    req = StructuredRequest(task="edit_plan.generate", schema=SCHEMA, prompt_version="edit_plan/exp-v2",
+    req = StructuredRequest(task="edit_plan.generate", schema=SCHEMA, prompt_version="edit_plan/exp-v3",
                             system=SYSTEM, user_content=build_user(sc, with_analysis),
                             max_repair_attempts=2, max_tokens=2600, temperature=0.0)
     t0 = time.time()
@@ -211,22 +247,28 @@ def main():
             try:
                 plan, latency = run_one(sc, wa)
                 errs = validate(plan, sc_arm if not wa else sc)
+                total = round(sum(s.get("output_duration_seconds", 0) for s in plan.get("segments", [])), 1)
+                target = sc["creative_intent"]["target_duration_seconds"]
                 report["scenarios"][k][arm] = {
                     "latency_s": latency, "valid": not errs, "errors": errs,
                     "n_segments": len(plan.get("segments", [])),
-                    "total_out_s": round(sum(s.get("output_duration_seconds", 0) for s in plan.get("segments", [])), 1),
+                    "total_out_s": total,
+                    "target_s": target,
+                    "dur_err_abs_s": round(total - target, 2),
+                    "dur_err_pct": round(100 * (total - target) / target, 1),
+                    "feasible": plan.get("feasible", True),
                     "native_audio": [s.get("native_audio") for s in plan.get("segments", [])],
                     "anchors": [(s.get("music_alignment") or {}).get("anchor") for s in plan.get("segments", [])],
                     "plan": plan,
                 }
                 print(f"{k:18s} {arm:16s} valid={not errs} segs={len(plan.get('segments',[]))} "
-                      f"out={report['scenarios'][k][arm]['total_out_s']}s {latency}s"
+                      f"out={total}s (err {round(total-target,1):+}s) {latency}s"
                       + (f"  ERRS={errs}" if errs else ""))
             except Exception as e:  # noqa
                 report["scenarios"][k][arm] = {"error": repr(e)}
                 print(f"{k:18s} {arm:16s} ERROR {e!r}")
-    (RESULTS / "edit_planner_md3.json").write_text(json.dumps(report, indent=2))
-    print(f"\nwrote {RESULTS/'edit_planner_md3.json'}")
+    (RESULTS / "edit_planner_freeze.json").write_text(json.dumps(report, indent=2))
+    print(f"\nwrote {RESULTS/'edit_planner_freeze.json'}")
 
 
 if __name__ == "__main__":

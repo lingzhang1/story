@@ -691,3 +691,92 @@ def test_music_plan_schema_dropped_key_moments_and_in_sync():
     # the committed schema must equal what the generator emits (no drift)
     assert on_disk["properties"].keys() == generated["properties"].keys()
     assert "key_moments" not in on_disk["properties"]
+
+
+# ---------------------------------------------------------------------------
+# EditPlan/2 (Milestone M-d.3, frozen edit_plan/2)
+# ---------------------------------------------------------------------------
+def _edit_plan_v2_payload(**over):
+    base = {
+        "id": str(uuid4()),
+        "story_id": str(uuid4()),
+        "creative_intent_id": str(uuid4()),
+        "target_duration_seconds": 18.0,
+        "output_format": list(OutputFormat)[0].value,
+        "segments": [
+            {"order": 0, "asset_id": str(uuid4()), "source_start_seconds": 1.0,
+             "source_end_seconds": 9.0, "output_duration_seconds": 10.0, "native_audio": "keep"},
+            {"order": 1, "asset_id": str(uuid4()), "output_duration_seconds": 6.0,
+             "native_audio": "duck", "music_alignment": {"anchor": "none"}},
+        ],
+    }
+    base.update(over)
+    return base
+
+
+def test_edit_plan_v2_roundtrips():
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    p = EditPlanV2Contract.model_validate(_edit_plan_v2_payload())
+    assert p.schema_version == "edit_plan/2"
+    assert p.feasible is True
+    again = EditPlanV2Contract.model_validate(p.model_dump(mode="json"))
+    assert again.segments[0].native_audio.value == "keep"
+
+
+def test_edit_plan_v2_native_audio_required_and_enum():
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    for na in ("keep", "duck", "mute"):
+        EditPlanV2Contract.model_validate(_edit_plan_v2_payload(
+            segments=[{"order": 0, "asset_id": str(uuid4()), "output_duration_seconds": 5.0, "native_audio": na}]))
+    # missing native_audio -> rejected (it is REQUIRED per segment)
+    with pytest.raises(ValidationError):
+        EditPlanV2Contract.model_validate(_edit_plan_v2_payload(
+            segments=[{"order": 0, "asset_id": str(uuid4()), "output_duration_seconds": 5.0}]))
+    # invalid native_audio value -> rejected
+    with pytest.raises(ValidationError):
+        EditPlanV2Contract.model_validate(_edit_plan_v2_payload(
+            segments=[{"order": 0, "asset_id": str(uuid4()), "output_duration_seconds": 5.0, "native_audio": "loud"}]))
+
+
+def test_edit_plan_v2_alignment_is_segment_level_and_enumed():
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    for anchor in ("none", "beat", "downbeat", "highlight"):
+        EditPlanV2Contract.model_validate(_edit_plan_v2_payload(
+            segments=[{"order": 0, "asset_id": str(uuid4()), "output_duration_seconds": 5.0,
+                       "native_audio": "keep", "music_alignment": {"anchor": anchor}}]))
+    with pytest.raises(ValidationError):
+        EditPlanV2Contract.model_validate(_edit_plan_v2_payload(
+            segments=[{"order": 0, "asset_id": str(uuid4()), "output_duration_seconds": 5.0,
+                       "native_audio": "keep", "music_alignment": {"anchor": "chorus"}}]))
+
+
+def test_edit_plan_v2_has_no_global_beat_sync():
+    """Alignment is per-segment; there must be NO global beat_sync boolean (M-d.3 decision)."""
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    assert "beat_sync" not in EditPlanV2Contract.model_fields
+    assert "beat_sync" not in EditPlanV2Contract.model_json_schema()["properties"]
+
+
+def test_edit_plan_v2_feasible_flag_present():
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    p = EditPlanV2Contract.model_validate(_edit_plan_v2_payload(feasible=False, infeasible_reason="not enough footage"))
+    assert p.feasible is False and p.infeasible_reason
+
+
+def test_edit_plan_v2_schema_in_sync():
+    """The committed edit-plan-v2 schema matches the generator (no drift)."""
+    import json
+    from pathlib import Path
+    from contracts.generate_schema import build_ai_schema
+    from contracts.schemas.ai_contracts import EditPlanV2Contract
+
+    generated = build_ai_schema("EditPlanV2", EditPlanV2Contract)
+    on_disk = json.loads(
+        (Path(__file__).resolve().parents[1] / "schemas" / "edit-plan-v2.schema.json").read_text())
+    assert on_disk["properties"].keys() == generated["properties"].keys()
+    assert "beat_sync" not in on_disk["properties"]

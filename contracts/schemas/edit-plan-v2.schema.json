@@ -1,0 +1,436 @@
+{
+  "$defs": {
+    "CropInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "aspect_ratio": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Aspect Ratio"
+        },
+        "height": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Width",
+          "type": "number"
+        },
+        "x": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "CropInstruction",
+      "type": "object"
+    },
+    "EditSegmentV2Contract": {
+      "additionalProperties": false,
+      "description": "One planned segment (edit_plan/2). asset_id MUST be an existing Moment id;\nsource range MUST lie within the Moment's real duration and useful_segments.",
+      "properties": {
+        "asset_id": {
+          "format": "uuid",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "crop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CropInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "music_alignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MusicAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "narrative_role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narrative Role"
+        },
+        "native_audio": {
+          "$ref": "#/$defs/NativeAudioIntent"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "output_duration_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "Output Duration Seconds",
+          "type": "number"
+        },
+        "source_end_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source End Seconds"
+        },
+        "source_start_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Start Seconds"
+        },
+        "speed": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speed"
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransitionInstruction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "order",
+        "asset_id",
+        "output_duration_seconds",
+        "native_audio"
+      ],
+      "title": "EditSegmentV2Contract",
+      "type": "object"
+    },
+    "MusicAlignment": {
+      "additionalProperties": false,
+      "description": "Segment-level alignment INTENT. The Media Engine does the exact snapping to\nthe MusicAnalysis times; the planner only states intent. Narrative-first \u2014\nset an anchor only when it materially serves pacing/transition/payoff/ending.",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/MusicAlignmentAnchor",
+          "default": "none"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "title": "MusicAlignment",
+      "type": "object"
+    },
+    "MusicAlignmentAnchor": {
+      "description": "What real-music structural point a segment's leading cut should land on.\nOnly meaningful when a MusicAnalysis is present; default NONE. NO global\nbeat_sync boolean \u2014 alignment is per-segment and heterogeneous.",
+      "enum": [
+        "none",
+        "beat",
+        "downbeat",
+        "highlight"
+      ],
+      "title": "MusicAlignmentAnchor",
+      "type": "string"
+    },
+    "MusicAnalysisContract": {
+      "additionalProperties": false,
+      "properties": {
+        "beats": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Beats",
+          "type": "array"
+        },
+        "bpm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bpm"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/MusicSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        }
+      },
+      "title": "MusicAnalysisContract",
+      "type": "object"
+    },
+    "MusicSection": {
+      "additionalProperties": false,
+      "properties": {
+        "end_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "End Seconds",
+          "type": "number"
+        },
+        "start_seconds": {
+          "minimum": 0.0,
+          "title": "Start Seconds",
+          "type": "number"
+        },
+        "type": {
+          "$ref": "#/$defs/MusicSectionType"
+        }
+      },
+      "required": [
+        "type",
+        "start_seconds",
+        "end_seconds"
+      ],
+      "title": "MusicSection",
+      "type": "object"
+    },
+    "MusicSectionType": {
+      "enum": [
+        "intro",
+        "build",
+        "peak",
+        "break",
+        "outro",
+        "other"
+      ],
+      "title": "MusicSectionType",
+      "type": "string"
+    },
+    "NativeAudioIntent": {
+      "description": "Per-segment intent for the Moment's OWN CAPTURED audio (NOT the soundtrack).\nkeep = preserve the captured sound (it carries the segment); duck = reduce it\nbeneath the soundtrack; mute = omit it. Whether the SOUNDTRACK recedes to\nprotect a kept native moment is a downstream Media-Engine mix decision driven\nby MusicPlan.audio_strategy + keep \u2014 not encoded here.",
+      "enum": [
+        "keep",
+        "duck",
+        "mute"
+      ],
+      "title": "NativeAudioIntent",
+      "type": "string"
+    },
+    "OutputFormat": {
+      "enum": [
+        "vertical",
+        "square",
+        "landscape"
+      ],
+      "title": "OutputFormat",
+      "type": "string"
+    },
+    "TransitionInstruction": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "type": {
+          "$ref": "#/$defs/TransitionType"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TransitionInstruction",
+      "type": "object"
+    },
+    "TransitionType": {
+      "enum": [
+        "cut",
+        "fade",
+        "dissolve"
+      ],
+      "title": "TransitionType",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "FROZEN edit_plan/2. Output duration tracks the STORY target (CreativeIntent),\nnever the music track length; +/-20% is a feasibility tolerance, not a target.\nfeasible=False + infeasible_reason instead of inventing footage.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "creative_intent_id": {
+      "format": "uuid",
+      "title": "Creative Intent Id",
+      "type": "string"
+    },
+    "feasible": {
+      "default": true,
+      "title": "Feasible",
+      "type": "boolean"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "infeasible_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Infeasible Reason"
+    },
+    "music_analysis_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MusicAnalysisContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "music_asset_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Music Asset Id"
+    },
+    "music_plan_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Music Plan Id"
+    },
+    "output_format": {
+      "$ref": "#/$defs/OutputFormat"
+    },
+    "schema_version": {
+      "default": "edit_plan/2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/EditSegmentV2Contract"
+      },
+      "title": "Segments",
+      "type": "array"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    },
+    "target_duration_seconds": {
+      "exclusiveMinimum": 0.0,
+      "title": "Target Duration Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "id",
+    "story_id",
+    "creative_intent_id",
+    "target_duration_seconds",
+    "output_format"
+  ],
+  "title": "EditPlanV2",
+  "type": "object"
+}
