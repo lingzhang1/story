@@ -1,0 +1,1100 @@
+{
+  "_meta": {
+    "experiment": "M-d.3 Edit Planner planning-quality",
+    "note": "TMB reuses real MomentUnderstanding; others authored. music_analysis is CONTROLLED (synthetic beats/downbeats/highlight) for the A/B comparison \u2014 NOT from a real track.",
+    "arms": "A = MusicPlan only; B = MusicPlan + MusicAnalysis"
+  },
+  "scenarios": {
+    "tmb_cinematic_60s": {
+      "creative_intent": {
+        "summary": "A cinematic departure \u2014 the quiet anticipation before a big trip.",
+        "desired_feeling": [
+          "anticipatory",
+          "cinematic",
+          "intimate"
+        ],
+        "pace": "measured",
+        "target_duration_seconds": 60.0
+      },
+      "story_guide": {
+        "framing_summary": "The threshold of a journey: preparation, the last look home, stepping out.",
+        "dimensions": [
+          {
+            "id": "d_prep",
+            "label": "Preparation",
+            "purpose": "the deliberate readying before leaving"
+          },
+          {
+            "id": "d_threshold",
+            "label": "The Threshold",
+            "purpose": "crossing from home into the journey"
+          }
+        ]
+      },
+      "story_coverage": {
+        "sufficiency": "workable",
+        "reason": "Strong preparation + departure captured; no destination material yet.",
+        "strengths": [
+          "intimate prep detail",
+          "a real walk-away-then-return beat"
+        ]
+      },
+      "moments": [
+        {
+          "id": "S01_backpack_static__A_exact_good",
+          "duration_seconds": 6.0,
+          "useful_segments": [
+            [
+              0.5,
+              5.5
+            ]
+          ],
+          "summary": "A rust/terracotta-colored Osprey hiking backpack (appears to be an Aura or Ariel model) sits upright on a hardwood floor in a living room, with a rain cover loosely draped and bunched over the top. The pack is fully loaded and all straps/buckles are visible. The scene is static throughout the entire clip \u2014 the pack does not move and the camera holds a consistent angle.",
+          "events": [
+            {
+              "t_start_s": 0.0,
+              "t_end_s": 6.533,
+              "description": "Loaded Osprey backpack with rain cover bunched at the top sits stationary on a hardwood floor in front of a green sofa. Camera holds a steady low-angle side view throughout. No movement occurs."
+            }
+          ]
+        },
+        {
+          "id": "S02_departure__A_exact_good",
+          "duration_seconds": 22.2,
+          "useful_segments": [
+            [
+              0.0,
+              7.5
+            ],
+            [
+              11.0,
+              22.2
+            ]
+          ],
+          "summary": "A woman wearing a cream button-down dress and green slides, carrying a large red Osprey hiking backpack, moves from her apartment (daytime, then transitioning to night) through a building corridor, ending by walking toward the camera down a hotel hallway.",
+          "events": [
+            {
+              "t_start_s": 0.0,
+              "t_end_s": 3.0,
+              "description": "Woman stands in a daylit apartment living room, holding the large red backpack on one shoulder, looking down and adjusting straps."
+            },
+            {
+              "t_start_s": 3.0,
+              "t_end_s": 7.5,
+              "description": "Lighting shifts to evening/night; woman continues adjusting and settling the backpack on her back in the apartment, moving and turning while straps are handled."
+            },
+            {
+              "t_start_s": 7.5,
+              "t_end_s": 11.0,
+              "description": "Camera moves close to the woman's face and then to the backpack in a corridor/transitional space outside the apartment, showing close-up details of the pack and her profile."
+            },
+            {
+              "t_start_s": 11.0,
+              "t_end_s": 14.5,
+              "description": "Woman is seen from behind walking away down a hotel corridor, backpack fully on, moving steadily away from camera."
+            },
+            {
+              "t_start_s": 14.5,
+              "t_end_s": 22.2,
+              "description": "Woman turns and walks toward the camera down the hotel hallway, face visible, backpack straps held, striding forward until she passes close to the camera."
+            }
+          ]
+        },
+        {
+          "id": "S03_scenic_reveal__D_reverse_reveal__take1",
+          "duration_seconds": 9.0,
+          "useful_segments": [
+            [
+              1.0,
+              8.0
+            ]
+          ],
+          "summary": "A hiker with trekking poles and a camera walks toward the camera along a narrow alpine trail lined with larch trees, with a dramatic glaciated mountain massif (likely Mont Blanc / Grandes Jorasses area) visible behind. The clip opens on a pure landscape shot \u2014 mountain and larches, no person \u2014 then the hiker enters the frame in the middle section and walks steadily closer until he fills the lower half of the frame by the end.",
+          "events": [
+            {
+              "t_start_s": 0.0,
+              "t_end_s": 7.8,
+              "description": "Camera holds on a static landscape: larch trees in foreground, large rocky glaciated mountain peaks under blue sky. No person visible. The framing slowly shifts/tilts downward, progressively revealing more of the trail and less of the upper mountain."
+            },
+            {
+              "t_start_s": 7.8,
+              "t_end_s": 9.1,
+              "description": "A dirt mountain trail becomes prominent in the lower frame; the hiker first appears as a small figure in the upper-middle distance on the path."
+            },
+            {
+              "t_start_s": 9.1,
+              "t_end_s": 14.97,
+              "description": "The hiker walks steadily toward the camera along the trail, growing progressively larger in frame. He is smiling, wearing a black jacket, cap, and carrying trekking poles and a camera. The mountain massif remains visible behind him throughout."
+            }
+          ]
+        }
+      ],
+      "music_plan": {
+        "character": {
+          "mood_tags": [
+            "anticipatory",
+            "warm",
+            "cinematic"
+          ],
+          "energy": "dynamic"
+        },
+        "energy_arc": [
+          {
+            "label": "quiet readying",
+            "start_fraction": 0.0,
+            "end_fraction": 0.45,
+            "intensity": "low"
+          },
+          {
+            "label": "stepping into the journey",
+            "start_fraction": 0.45,
+            "end_fraction": 1.0,
+            "intensity": "rising"
+          }
+        ],
+        "audio_strategy": {
+          "soundtrack_role": "continuous",
+          "native_audio_priority": "low",
+          "guidance": "music carries this; ambient prep sound is texture, not focus"
+        }
+      },
+      "music_analysis": {
+        "duration_seconds": 62.0,
+        "bpm": 90,
+        "beats": [
+          0.0,
+          0.67,
+          1.33,
+          2.0,
+          2.67,
+          3.33,
+          4.0,
+          4.67,
+          5.33,
+          6.0,
+          6.67,
+          7.33,
+          8.0,
+          8.67,
+          9.33,
+          10.0,
+          10.67,
+          11.33,
+          12.0,
+          12.67,
+          13.33,
+          14.0,
+          14.67,
+          15.33,
+          16.0,
+          16.67,
+          17.33,
+          18.0,
+          18.67,
+          19.33,
+          20.0,
+          20.67,
+          21.33,
+          22.0,
+          22.67,
+          23.33,
+          24.0,
+          24.67,
+          25.33,
+          26.0,
+          26.67,
+          27.33,
+          28.0,
+          28.67,
+          29.33,
+          30.0,
+          30.67,
+          31.33,
+          32.0,
+          32.67,
+          33.33,
+          34.0,
+          34.67,
+          35.33,
+          36.0,
+          36.67,
+          37.33,
+          38.0,
+          38.67,
+          39.33,
+          40.0,
+          40.67,
+          41.33,
+          42.0,
+          42.67,
+          43.33,
+          44.0,
+          44.67,
+          45.33,
+          46.0,
+          46.67,
+          47.33,
+          48.0,
+          48.67,
+          49.33,
+          50.0,
+          50.67,
+          51.33,
+          52.0,
+          52.67,
+          53.33,
+          54.0,
+          54.67,
+          55.33,
+          56.0,
+          56.67,
+          57.33,
+          58.0,
+          58.67,
+          59.33,
+          60.0,
+          60.67,
+          61.33,
+          62.0
+        ],
+        "downbeats": [
+          0.0,
+          2.67,
+          5.33,
+          8.0,
+          10.67,
+          13.33,
+          16.0,
+          18.67,
+          21.33,
+          24.0,
+          26.67,
+          29.33,
+          32.0,
+          34.67,
+          37.33,
+          40.0,
+          42.67,
+          45.33,
+          48.0,
+          50.67,
+          53.33,
+          56.0,
+          58.67,
+          61.33
+        ],
+        "highlight_window": {
+          "from": 41.0,
+          "to": 55.0
+        },
+        "sections": [
+          {
+            "type": "intro",
+            "start_seconds": 0.0,
+            "end_seconds": 20.0
+          },
+          {
+            "type": "build",
+            "start_seconds": 20.0,
+            "end_seconds": 41.0
+          },
+          {
+            "type": "peak",
+            "start_seconds": 41.0,
+            "end_seconds": 55.0
+          },
+          {
+            "type": "outro",
+            "start_seconds": 55.0,
+            "end_seconds": 62.0
+          }
+        ],
+        "vocal_type": "NONE"
+      }
+    },
+    "guitar_progression": {
+      "creative_intent": {
+        "summary": "Weeks of practice building to the first real song played start to finish.",
+        "desired_feeling": [
+          "earnest",
+          "warm",
+          "uplifting"
+        ],
+        "pace": "measured",
+        "target_duration_seconds": 40.0
+      },
+      "story_guide": {
+        "framing_summary": "A learning arc: fumbling practice resolving into one real performance.",
+        "dimensions": [
+          {
+            "id": "d_practice",
+            "label": "The Work",
+            "purpose": "repetitive, imperfect practice"
+          },
+          {
+            "id": "d_payoff",
+            "label": "The Performance",
+            "purpose": "the first clean run-through"
+          }
+        ]
+      },
+      "story_coverage": {
+        "sufficiency": "sufficient",
+        "reason": "Both the grind and a real complete performance are captured.",
+        "strengths": [
+          "authentic practice texture",
+          "a full real performance take with its own audio"
+        ]
+      },
+      "moments": [
+        {
+          "id": "m_practice_1",
+          "duration_seconds": 14.0,
+          "useful_segments": [
+            [
+              2.0,
+              9.0
+            ]
+          ],
+          "summary": "Close on hands fumbling a chord change, restarting several times.",
+          "events": [
+            {
+              "t_start_s": 0.0,
+              "t_end_s": 2.0,
+              "description": "fumble + stop"
+            },
+            {
+              "t_start_s": 2.0,
+              "t_end_s": 9.0,
+              "description": "repeated chord attempts, buzzing strings"
+            }
+          ]
+        },
+        {
+          "id": "m_practice_2",
+          "duration_seconds": 11.0,
+          "useful_segments": [
+            [
+              1.0,
+              8.0
+            ]
+          ],
+          "summary": "Metronome practice, slightly cleaner, player frowning in concentration.",
+          "events": [
+            {
+              "t_start_s": 1.0,
+              "t_end_s": 8.0,
+              "description": "slow clean-ish repetition to a click"
+            }
+          ]
+        },
+        {
+          "id": "m_performance",
+          "duration_seconds": 34.0,
+          "useful_segments": [
+            [
+              0.0,
+              34.0
+            ]
+          ],
+          "summary": "One continuous clean performance of the song, start to finish, warm room tone.",
+          "events": [
+            {
+              "t_start_s": 0.0,
+              "t_end_s": 34.0,
+              "description": "full real performance, the emotional payoff \u2014 its OWN audio matters"
+            }
+          ]
+        }
+      ],
+      "music_plan": {
+        "character": {
+          "mood_tags": [
+            "warm",
+            "earnest",
+            "intimate"
+          ],
+          "energy": "dynamic"
+        },
+        "energy_arc": [
+          {
+            "label": "the grind",
+            "start_fraction": 0.0,
+            "end_fraction": 0.5,
+            "intensity": "low"
+          },
+          {
+            "label": "hand to the real performance",
+            "start_fraction": 0.5,
+            "end_fraction": 1.0,
+            "intensity": "falling"
+          }
+        ],
+        "audio_strategy": {
+          "soundtrack_role": "supportive",
+          "native_audio_priority": "important",
+          "guidance": "step back so the real guitar lands; music under practice, out during the performance"
+        }
+      },
+      "music_analysis": {
+        "duration_seconds": 42.0,
+        "bpm": 76,
+        "beats": [
+          0.0,
+          0.79,
+          1.58,
+          2.37,
+          3.16,
+          3.95,
+          4.74,
+          5.53,
+          6.32,
+          7.11,
+          7.89,
+          8.68,
+          9.47,
+          10.26,
+          11.05,
+          11.84,
+          12.63,
+          13.42,
+          14.21,
+          15.0,
+          15.79,
+          16.58,
+          17.37,
+          18.16,
+          18.95,
+          19.74,
+          20.53,
+          21.32,
+          22.11,
+          22.89,
+          23.68,
+          24.47,
+          25.26,
+          26.05,
+          26.84,
+          27.63,
+          28.42,
+          29.21,
+          30.0,
+          30.79,
+          31.58,
+          32.37,
+          33.16,
+          33.95,
+          34.74,
+          35.53,
+          36.32,
+          37.11,
+          37.89,
+          38.68,
+          39.47,
+          40.26,
+          41.05,
+          41.84
+        ],
+        "downbeats": [
+          0.0,
+          3.16,
+          6.32,
+          9.47,
+          12.63,
+          15.79,
+          18.95,
+          22.11,
+          25.26,
+          28.42,
+          31.58,
+          34.74,
+          37.89,
+          41.05
+        ],
+        "highlight_window": {
+          "from": 6.0,
+          "to": 18.0
+        },
+        "sections": [
+          {
+            "type": "intro",
+            "start_seconds": 0.0,
+            "end_seconds": 6.0
+          },
+          {
+            "type": "verse",
+            "start_seconds": 6.0,
+            "end_seconds": 22.0
+          },
+          {
+            "type": "outro",
+            "start_seconds": 22.0,
+            "end_seconds": 42.0
+          }
+        ],
+        "vocal_type": "NONE"
+      }
+    },
+    "sf_exploration": {
+      "creative_intent": {
+        "summary": "A day wandering San Francisco \u2014 hills, fog, streetcars, a bite to eat.",
+        "desired_feeling": [
+          "curious",
+          "breezy",
+          "warm"
+        ],
+        "pace": "lively",
+        "target_duration_seconds": 45.0
+      },
+      "story_guide": {
+        "framing_summary": "An exploratory city day; a loose string of places, not a climax.",
+        "dimensions": [
+          {
+            "id": "d_streets",
+            "label": "The Streets",
+            "purpose": "movement through the city"
+          },
+          {
+            "id": "d_moments",
+            "label": "Small Discoveries",
+            "purpose": "little found details"
+          }
+        ]
+      },
+      "story_coverage": {
+        "sufficiency": "workable",
+        "reason": "Good variety of places; no strong arc \u2014 a vignette collection.",
+        "strengths": [
+          "varied locations",
+          "nice light on the fog"
+        ]
+      },
+      "moments": [
+        {
+          "id": "m_cablecar",
+          "duration_seconds": 12.0,
+          "useful_segments": [
+            [
+              1.0,
+              7.0
+            ]
+          ],
+          "summary": "Cable car cresting a hill, bay behind.",
+          "events": [
+            {
+              "t_start_s": 1.0,
+              "t_end_s": 7.0,
+              "description": "car climbs, bell dings, bay reveal"
+            }
+          ]
+        },
+        {
+          "id": "m_fog",
+          "duration_seconds": 9.0,
+          "useful_segments": [
+            [
+              0.5,
+              6.0
+            ]
+          ],
+          "summary": "Fog rolling over the bridge towers.",
+          "events": [
+            {
+              "t_start_s": 0.5,
+              "t_end_s": 6.0,
+              "description": "slow fog movement, muted color"
+            }
+          ]
+        },
+        {
+          "id": "m_mission_food",
+          "duration_seconds": 10.0,
+          "useful_segments": [
+            [
+              2.0,
+              8.0
+            ]
+          ],
+          "summary": "Hands holding a taco, mural wall behind.",
+          "events": [
+            {
+              "t_start_s": 2.0,
+              "t_end_s": 8.0,
+              "description": "food close-up, colorful mural"
+            }
+          ]
+        },
+        {
+          "id": "m_street",
+          "duration_seconds": 13.0,
+          "useful_segments": [
+            [
+              1.0,
+              9.0
+            ]
+          ],
+          "summary": "Steep street, pedestrians, afternoon light.",
+          "events": [
+            {
+              "t_start_s": 1.0,
+              "t_end_s": 9.0,
+              "description": "people crossing, streetcar passes"
+            }
+          ]
+        }
+      ],
+      "music_plan": {
+        "character": {
+          "mood_tags": [
+            "curious",
+            "breezy",
+            "upbeat"
+          ],
+          "energy": "medium"
+        },
+        "energy_arc": [
+          {
+            "label": "steady city groove",
+            "start_fraction": 0.0,
+            "end_fraction": 1.0,
+            "intensity": "rising"
+          }
+        ],
+        "audio_strategy": {
+          "soundtrack_role": "continuous",
+          "native_audio_priority": "selective",
+          "guidance": "music leads; let the cable-car bell poke through"
+        }
+      },
+      "music_analysis": {
+        "duration_seconds": 46.0,
+        "bpm": 112,
+        "beats": [
+          0.0,
+          0.54,
+          1.07,
+          1.61,
+          2.14,
+          2.68,
+          3.21,
+          3.75,
+          4.29,
+          4.82,
+          5.36,
+          5.89,
+          6.43,
+          6.96,
+          7.5,
+          8.04,
+          8.57,
+          9.11,
+          9.64,
+          10.18,
+          10.71,
+          11.25,
+          11.79,
+          12.32,
+          12.86,
+          13.39,
+          13.93,
+          14.46,
+          15.0,
+          15.54,
+          16.07,
+          16.61,
+          17.14,
+          17.68,
+          18.21,
+          18.75,
+          19.29,
+          19.82,
+          20.36,
+          20.89,
+          21.43,
+          21.96,
+          22.5,
+          23.04,
+          23.57,
+          24.11,
+          24.64,
+          25.18,
+          25.71,
+          26.25,
+          26.79,
+          27.32,
+          27.86,
+          28.39,
+          28.93,
+          29.46,
+          30.0,
+          30.54,
+          31.07,
+          31.61,
+          32.14,
+          32.68,
+          33.21,
+          33.75,
+          34.29,
+          34.82,
+          35.36,
+          35.89,
+          36.43,
+          36.96,
+          37.5,
+          38.04,
+          38.57,
+          39.11,
+          39.64,
+          40.18,
+          40.71,
+          41.25,
+          41.79,
+          42.32,
+          42.86,
+          43.39,
+          43.93,
+          44.46,
+          45.0,
+          45.54
+        ],
+        "downbeats": [
+          0.0,
+          2.14,
+          4.29,
+          6.43,
+          8.57,
+          10.71,
+          12.86,
+          15.0,
+          17.14,
+          19.29,
+          21.43,
+          23.57,
+          25.71,
+          27.86,
+          30.0,
+          32.14,
+          34.29,
+          36.43,
+          38.57,
+          40.71,
+          42.86,
+          45.0
+        ],
+        "highlight_window": {
+          "from": 24.0,
+          "to": 36.0
+        },
+        "sections": [
+          {
+            "type": "intro",
+            "start_seconds": 0.0,
+            "end_seconds": 10.0
+          },
+          {
+            "type": "groove",
+            "start_seconds": 10.0,
+            "end_seconds": 36.0
+          },
+          {
+            "type": "outro",
+            "start_seconds": 36.0,
+            "end_seconds": 46.0
+          }
+        ],
+        "vocal_type": "NONE"
+      }
+    },
+    "minimal_solitude": {
+      "creative_intent": {
+        "summary": "A quiet solo morning with coffee by the window. Stillness.",
+        "desired_feeling": [
+          "calm",
+          "still",
+          "reflective"
+        ],
+        "pace": "slow",
+        "target_duration_seconds": 18.0
+      },
+      "story_guide": {
+        "framing_summary": "A single quiet mood; no journey, no build \u2014 presence.",
+        "dimensions": [
+          {
+            "id": "d_stillness",
+            "label": "Stillness",
+            "purpose": "being, not doing"
+          }
+        ]
+      },
+      "story_coverage": {
+        "sufficiency": "sufficient",
+        "reason": "The mood is fully present in two held shots; nothing is missing.",
+        "strengths": [
+          "genuine stillness",
+          "soft morning light"
+        ]
+      },
+      "moments": [
+        {
+          "id": "m_window",
+          "duration_seconds": 11.0,
+          "useful_segments": [
+            [
+              1.0,
+              9.0
+            ]
+          ],
+          "summary": "Steam rising from a mug on the sill, soft light, no movement.",
+          "events": [
+            {
+              "t_start_s": 1.0,
+              "t_end_s": 9.0,
+              "description": "steam curls, quiet, static frame"
+            }
+          ]
+        },
+        {
+          "id": "m_hands",
+          "duration_seconds": 8.0,
+          "useful_segments": [
+            [
+              0.5,
+              6.0
+            ]
+          ],
+          "summary": "Hands wrapped around the mug, a slow breath.",
+          "events": [
+            {
+              "t_start_s": 0.5,
+              "t_end_s": 6.0,
+              "description": "hands still, tiny movement, calm"
+            }
+          ]
+        }
+      ],
+      "music_plan": {
+        "character": {
+          "mood_tags": [
+            "calm",
+            "still",
+            "ambient"
+          ],
+          "energy": "low"
+        },
+        "energy_arc": [
+          {
+            "label": "stable stillness",
+            "start_fraction": 0.0,
+            "end_fraction": 1.0,
+            "intensity": "low"
+          }
+        ],
+        "audio_strategy": {
+          "soundtrack_role": "sparse",
+          "native_audio_priority": "selective",
+          "guidance": "barely-there pad; keep the room quiet"
+        }
+      },
+      "music_analysis": {
+        "duration_seconds": 20.0,
+        "bpm": 60,
+        "beats": [
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0,
+          6.0,
+          7.0,
+          8.0,
+          9.0,
+          10.0,
+          11.0,
+          12.0,
+          13.0,
+          14.0,
+          15.0,
+          16.0,
+          17.0,
+          18.0,
+          19.0,
+          20.0
+        ],
+        "downbeats": [
+          0.0,
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0
+        ],
+        "highlight_window": {
+          "from": 6.0,
+          "to": 14.0
+        },
+        "sections": [
+          {
+            "type": "ambient",
+            "start_seconds": 0.0,
+            "end_seconds": 20.0
+          }
+        ],
+        "vocal_type": "NONE"
+      }
+    },
+    "energetic_shortform": {
+      "creative_intent": {
+        "summary": "A punchy skate-session clip for sharing. Fast, fun, loud.",
+        "desired_feeling": [
+          "energetic",
+          "fun",
+          "bold"
+        ],
+        "pace": "fast",
+        "target_duration_seconds": 12.0
+      },
+      "story_guide": {
+        "framing_summary": "A single high-energy burst; land one trick, feel the hit.",
+        "dimensions": [
+          {
+            "id": "d_action",
+            "label": "The Hit",
+            "purpose": "the trick and its impact"
+          }
+        ]
+      },
+      "story_coverage": {
+        "sufficiency": "workable",
+        "reason": "One good landing + some ramp-up; short and punchy.",
+        "strengths": [
+          "clean landing",
+          "good motion energy"
+        ]
+      },
+      "moments": [
+        {
+          "id": "m_rollup",
+          "duration_seconds": 6.0,
+          "useful_segments": [
+            [
+              1.5,
+              5.0
+            ]
+          ],
+          "summary": "Skater rolls toward the ledge, speed building.",
+          "events": [
+            {
+              "t_start_s": 1.5,
+              "t_end_s": 5.0,
+              "description": "approach, crouch"
+            }
+          ]
+        },
+        {
+          "id": "m_trick",
+          "duration_seconds": 7.0,
+          "useful_segments": [
+            [
+              0.5,
+              4.5
+            ]
+          ],
+          "summary": "The kickflip and clean landing, board clack.",
+          "events": [
+            {
+              "t_start_s": 0.5,
+              "t_end_s": 4.5,
+              "description": "pop, flip, land \u2014 the hit; board clack is great native audio"
+            }
+          ]
+        }
+      ],
+      "music_plan": {
+        "character": {
+          "mood_tags": [
+            "energetic",
+            "bold",
+            "driving"
+          ],
+          "energy": "high"
+        },
+        "energy_arc": [
+          {
+            "label": "one stable burst",
+            "start_fraction": 0.0,
+            "end_fraction": 1.0,
+            "intensity": "high"
+          }
+        ],
+        "audio_strategy": {
+          "soundtrack_role": "continuous",
+          "native_audio_priority": "selective",
+          "guidance": "loud music; punch the board-clack through on the landing"
+        }
+      },
+      "music_analysis": {
+        "duration_seconds": 13.0,
+        "bpm": 150,
+        "beats": [
+          0.0,
+          0.4,
+          0.8,
+          1.2,
+          1.6,
+          2.0,
+          2.4,
+          2.8,
+          3.2,
+          3.6,
+          4.0,
+          4.4,
+          4.8,
+          5.2,
+          5.6,
+          6.0,
+          6.4,
+          6.8,
+          7.2,
+          7.6,
+          8.0,
+          8.4,
+          8.8,
+          9.2,
+          9.6,
+          10.0,
+          10.4,
+          10.8,
+          11.2,
+          11.6,
+          12.0,
+          12.4,
+          12.8
+        ],
+        "downbeats": [
+          0.0,
+          1.6,
+          3.2,
+          4.8,
+          6.4,
+          8.0,
+          9.6,
+          11.2,
+          12.8
+        ],
+        "highlight_window": {
+          "from": 3.0,
+          "to": 9.0
+        },
+        "sections": [
+          {
+            "type": "drop",
+            "start_seconds": 0.0,
+            "end_seconds": 13.0
+          }
+        ],
+        "vocal_type": "NONE"
+      }
+    }
+  }
+}
