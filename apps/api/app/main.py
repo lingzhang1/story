@@ -68,6 +68,7 @@ from edit_planner import (
     EditPlanInputs,
     EditPlanInfeasibleError,
 )
+import music_provider as _mp
 from story_coverage_v2 import (
     CoverageV2Input,
     CoverageUnavailableError as CoverageV2UnavailableError,
@@ -167,6 +168,15 @@ class EditPlanRequest(BaseModel):
     music_asset_id: str | None = Field(default=None)
     music_plan_id: UUID | None = Field(default=None)
     music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
+
+
+class MusicCandidatesRequest(BaseModel):
+    """POST /v1/music/candidates body — PROTOTYPING-ONLY Epidemic search+rank. Feature-flagged."""
+
+    model_config = ConfigDict(extra="forbid")
+    music_plan: dict = Field(..., description="MusicPlan/1 (character + audio_strategy drive the query)")
+    target_duration_seconds: float = Field(..., gt=0.0)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class StoryCoverageV2Request(BaseModel):
@@ -604,6 +614,39 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible})
         return plan
+
+    @app.post("/v1/music/candidates", status_code=200)
+    def music_candidates(body: MusicCandidatesRequest):
+        """PROTOTYPING-ONLY (Milestone M-d): MusicPlan -> Epidemic search -> deterministic ranked candidates +
+        normalized music_analysis/1 for the top pick. Gated behind STORY_EPIDEMIC_MODE=prototyping; returns 404
+        when the flag is off so it is invisible in normal production. No sublicense/safelist/export path here."""
+        if not _mp.prototyping_enabled():
+            raise HTTPException(status_code=404, detail="not found")  # invisible unless prototyping-enabled
+        correlation_id = str(uuid4())
+        base = {"operation": "music_candidates", "correlation_id": correlation_id, "mode": "prototyping"}
+        try:
+            client = _mp.EpidemicClient()
+        except _mp.EpidemicAuthError:
+            raise HTTPException(status_code=503, detail="music provider auth unavailable")
+        char = (body.music_plan or {}).get("character", {})
+        term = " ".join(char.get("mood_tags", []) or ["music"])
+        strat = (body.music_plan or {}).get("audio_strategy", {})
+        vocal = "NONE" if strat.get("native_audio_priority") in ("important", "selective") else None
+        try:
+            raw = client.search(term, vocal_type=vocal, limit=body.limit)
+        except _mp.EpidemicProviderError as e:
+            log.warning("music_candidates_provider_error", extra={**base, "error": str(e)[:200]})
+            raise HTTPException(status_code=503, detail="music provider temporarily unavailable")
+        cands = [_mp.Candidate(track_id=t.get("id"), title=t.get("title", ""),
+                               duration_seconds=float(t.get("length") or 0) or 1.0,
+                               bpm=(t.get("bpm") or None), mood_tags=t.get("moods", []) or [],
+                               vocal_type=t.get("vocalType"))
+                 for t in raw if t.get("id")]
+        ranked = _mp.rank_candidates(body.music_plan, cands, target_duration=body.target_duration_seconds)
+        log.info("music_candidates_ranked", extra={**base, "n": len(ranked)})
+        return {"candidates": [{"track_id": c.track_id, "title": c.title, "score": c.score,
+                                "factors": c.factors, "duration_seconds": c.duration_seconds,
+                                "vocal_type": c.vocal_type} for c in ranked[:body.limit]]}
 
     @app.post("/v1/story-coverage/v2", response_model=StoryCoverageContractV2, status_code=200)
     def story_coverage_v2(

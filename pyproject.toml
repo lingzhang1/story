@@ -20,6 +20,6 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["apps/api/tests", "contracts/tests", "evals/harness"]
+testpaths = ["apps/api/tests", "contracts/tests", "evals/harness", "packages/music_provider/tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
