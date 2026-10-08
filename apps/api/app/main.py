@@ -63,12 +63,17 @@ from story_coverage import (
 )
 from story_guide import GuideInput, GuideUnavailableError, StoryGuideEngine
 from music_direction import MusicDirectionEngine
+from edit_planner import (
+    EditPlannerEngine,
+    EditPlanInputs,
+    EditPlanInfeasibleError,
+)
 from story_coverage_v2 import (
     CoverageV2Input,
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -85,6 +90,7 @@ from app.deps import (
     get_story_guide_engine,
     get_story_coverage_v2_engine,
     get_music_direction_engine,
+    get_edit_planner_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -141,6 +147,26 @@ class MusicDirectionRequest(BaseModel):
     guide_framing_summary: str | None = Field(
         default=None, description="StoryGuide.framing_summary as lightweight creative context (optional)"
     )
+
+
+class EditPlanRequest(BaseModel):
+    """POST /v1/edit-plan body (Milestone M-d, frozen edit_plan/2). Produces an EditPlan via one Opus 4.6
+    call under a DETERMINISTIC validator. Music is OPTIONAL (no-music planning supported). The planner PLANS;
+    the Media Engine (separate milestone) renders. On model/validation failure or infeasible material the
+    endpoint returns a structured failure (never a fabricated plan)."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent_id: UUID
+    creative_intent: dict = Field(..., description="resolved CreativeIntent incl. target_duration_seconds")
+    story_guide: dict = Field(default_factory=dict)
+    story_coverage: dict = Field(default_factory=dict)
+    moments: list[dict] = Field(..., description="completed MomentUnderstanding[], each with id/duration_seconds/useful_segments")
+    music_plan: dict = Field(default_factory=dict)
+    output_format: str = Field(default="vertical")
+    music_asset_id: str | None = Field(default=None)
+    music_plan_id: UUID | None = Field(default=None)
+    music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
 
 
 class StoryCoverageV2Request(BaseModel):
@@ -543,6 +569,41 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "mood_tag_count": len(direction.mood_tags)})
         return direction
+
+    @app.post("/v1/edit-plan", response_model=EditPlanV2Contract, status_code=200)
+    def edit_plan(
+        body: EditPlanRequest,
+        engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+    ) -> EditPlanV2Contract:
+        """Produce an executable EditPlan (Milestone M-d, frozen edit_plan/2): CreativeIntent + StoryGuide/1 +
+        StoryCoverage/2 + MomentUnderstanding[] + MusicPlan/1 (+ optional MusicAsset + MusicAnalysis) -> ONE
+        Opus 4.6 call under a DETERMINISTIC validator. Music is OPTIONAL. The planner PLANS; the Media Engine
+        (separate milestone) renders. On model failure / non-executable plan -> 503 (never fabricate). On
+        infeasible material -> 422 with the reason (preserve the user's Story + Moments; allow retry)."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "edit_plan", "correlation_id": correlation_id,
+                "task": "edit_plan.generate", "schema_version": "edit_plan/2",
+                "has_music_analysis": body.music_analysis is not None, "moment_count": len(body.moments)}
+        inputs = EditPlanInputs(
+            story_id=str(body.story_id), creative_intent_id=str(body.creative_intent_id),
+            creative_intent=body.creative_intent, story_guide=body.story_guide,
+            story_coverage=body.story_coverage, moments=body.moments, music_plan=body.music_plan,
+            output_format=body.output_format, music_asset_id=body.music_asset_id,
+            music_plan_id=str(body.music_plan_id) if body.music_plan_id else None,
+            music_analysis=body.music_analysis)
+        try:
+            plan = engine.generate(inputs)
+        except EditPlanInfeasibleError as e:
+            log.warning("edit_plan_infeasible", extra={**base, "success": False, "reason": str(e)[:300]})
+            raise HTTPException(status_code=422, detail=f"edit plan infeasible: {e}")
+        except (StructuredOutputError, ProviderError) as e:
+            log.warning("edit_plan_unavailable", extra={**base, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503, detail="edit planner temporarily unavailable; retry")
+        log.info("edit_plan_generated",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible})
+        return plan
 
     @app.post("/v1/story-coverage/v2", response_model=StoryCoverageContractV2, status_code=200)
     def story_coverage_v2(

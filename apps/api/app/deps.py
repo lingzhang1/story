@@ -58,6 +58,11 @@ from music_direction import (
     DeterministicMusicDirectionEngine,
     MusicDirectionEngine,
 )
+from edit_planner import (
+    EditPlannerEngine,
+    MODEL_ID as EDIT_PLANNER_MODEL,
+    RealEditPlannerEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -186,3 +191,14 @@ def get_music_direction_engine() -> MusicDirectionEngine:
     projection, not a second model surface (M-c owner decision).
     """
     return DeterministicMusicDirectionEngine()
+
+
+def get_edit_planner_engine() -> EditPlannerEngine:
+    """Provide the production Edit Planner engine (Milestone M-d, frozen edit_plan/2).
+
+    One Opus 4.6 call via the generic ModelGateway + the frozen prompt edit_plan/2, under a DETERMINISTIC
+    validator (the model never self-certifies). Model is config-driven (STORY_EDIT_PLANNER_MODEL) but defaults
+    to the frozen us.anthropic.claude-opus-4-6-v1. Music inputs are optional (no-music planning supported).
+    """
+    model = os.environ.get("STORY_EDIT_PLANNER_MODEL", EDIT_PLANNER_MODEL)
+    return RealEditPlannerEngine(BedrockModelGateway(model_id=model))
