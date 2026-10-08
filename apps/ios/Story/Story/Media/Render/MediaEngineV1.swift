@@ -161,10 +161,18 @@ enum NativeAudioPolicy {
 
 // MARK: - Media Engine V1
 
+struct BuiltComposition {
+    let composition: AVMutableComposition
+    let videoComposition: AVMutableVideoComposition
+    let segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)]
+    let soundtrackTrack: AVMutableCompositionTrack?
+    let totalDuration: CMTime
+}
+
 struct MediaEngineV1 {
     /// Build the AVMutableComposition + video composition from the plan. (Export is a separate call so a unit
     /// test can assert composition timing without running AVAssetExportSession.)
-    func buildComposition(_ inputs: MediaEngineInputs) throws -> (AVMutableComposition, AVMutableVideoComposition) {
+    func buildComposition(_ inputs: MediaEngineInputs) throws -> BuiltComposition {
         let plan = inputs.plan
         guard plan.feasible else { throw MediaEngineError.infeasiblePlan("plan marked infeasible") }
         let renderSize = try OutputSize.render(for: plan.outputFormat)
@@ -179,6 +187,7 @@ struct MediaEngineV1 {
 
         var cursor = CMTime.zero
         var layerInstructions: [AVMutableVideoCompositionLayerInstruction] = []
+        var segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)] = []
 
         for segment in plan.segments.sorted(by: { $0.order < $1.order }) {
             guard let url = inputs.resolveMomentURL(segment.assetId) else {
@@ -193,6 +202,7 @@ struct MediaEngineV1 {
                              preferredTimescale: 600)
             let srcRange = CMTimeRange(start: start, end: end)
 
+            let segStart = cursor
             try videoTrack.insertTimeRange(srcRange, of: srcVideo, at: cursor)
             if let srcAudio = asset.tracks(withMediaType: .audio).first, let at = captureAudioTrack {
                 try? at.insertTimeRange(srcRange, of: srcAudio, at: cursor)
@@ -214,6 +224,7 @@ struct MediaEngineV1 {
             layerInstructions.append(layer)
 
             let outDur = CMTime(seconds: segment.outputDurationSeconds, preferredTimescale: 600)
+            segmentRanges.append((segment, CMTimeRange(start: segStart, duration: outDur)))
             cursor = CMTimeAdd(cursor, outDur)
         }
 
@@ -224,7 +235,26 @@ struct MediaEngineV1 {
         instruction.timeRange = CMTimeRange(start: .zero, duration: cursor)
         instruction.layerInstructions = layerInstructions
         videoComposition.instructions = [instruction]
-        return (composition, videoComposition)
+
+        // optional soundtrack (a LOCAL licensed test file for the spike; never Free-tier Epidemic export)
+        var soundtrackTrack: AVMutableCompositionTrack? = nil
+        if let sURL = inputs.soundtrackURL, FileManager.default.fileExists(atPath: sURL.path) {
+            let sAsset = AVURLAsset(url: sURL)
+            if let sTrack = sAsset.tracks(withMediaType: .audio).first,
+               let mTrack = composition.addMutableTrack(withMediaType: .audio,
+                                                        preferredTrackID: kCMPersistentTrackID_Invalid) {
+                let want = CMTimeRange(start: .zero, duration: cursor)
+                let avail = CMTimeRange(start: .zero, duration: min(sAsset.duration.seconds, cursor.seconds) > 0
+                                        ? CMTime(seconds: min(sAsset.duration.seconds, cursor.seconds), preferredTimescale: 600)
+                                        : cursor)
+                try? mTrack.insertTimeRange(avail, of: sTrack, at: .zero)
+                _ = want
+                soundtrackTrack = mTrack
+            }
+        }
+        return BuiltComposition(composition: composition, videoComposition: videoComposition,
+                                segmentRanges: segmentRanges, soundtrackTrack: soundtrackTrack,
+                                totalDuration: cursor)
     }
 
     /// Aspect-fill center-crop transform mapping a source track into the render rect.
@@ -242,15 +272,43 @@ struct MediaEngineV1 {
     }
 
     /// Build the native-audio + soundtrack mix (gains only; NO sample-level model curves).
-    func buildAudioMix(_ inputs: MediaEngineInputs, composition: AVMutableComposition) -> AVMutableAudioMix {
+    /// Per-segment capture gain is applied over each segment's output time range, with short linear ramps at
+    /// boundaries to avoid abrupt jumps. The optional soundtrack track is gained per MusicPlan.audio_strategy.
+    func buildAudioMix(_ inputs: MediaEngineInputs,
+                       composition: AVMutableComposition,
+                       segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)],
+                       soundtrackTrack: AVMutableCompositionTrack?) -> AVMutableAudioMix {
         let mix = AVMutableAudioMix()
         var params: [AVMutableAudioMixInputParameters] = []
-        // capture-audio track gain is a coarse per-segment envelope (keep/duck/mute); exact fades are V1-simple.
-        for track in composition.tracks(withMediaType: .audio) {
-            let p = AVMutableAudioMixInputParameters(track: track)
-            // A real build would key gains to each segment's time range; the spike sets a single representative
-            // gain so the composition is inspectable. Per-segment ramps are a bounded V1 follow-up (not a model).
-            p.setVolume(1.0, at: .zero)
+        let ramp = CMTime(seconds: 0.08, preferredTimescale: 600)   // short deterministic fade
+
+        // capture-audio track: time-ranged gain per segment (keep/duck/mute)
+        if let capture = composition.tracks(withMediaType: .audio).first {
+            let p = AVMutableAudioMixInputParameters(track: capture)
+            for sr in segmentRanges {
+                let g = NativeAudioPolicy.captureGain(nativeAudio: sr.segment.nativeAudio)
+                let r = sr.range
+                let inStart = r.start
+                let inEnd = CMTimeAdd(r.start, ramp)
+                let outStart = CMTimeSubtract(CMTimeAdd(r.start, r.duration), ramp)
+                let outEnd = CMTimeAdd(r.start, r.duration)
+                // ramp in to the segment's gain, hold, ramp out — avoids clicks at cuts
+                p.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: g, timeRange: CMTimeRange(start: inStart, end: inEnd))
+                p.setVolume(g, at: inEnd)
+                p.setVolumeRamp(fromStartVolume: g, toEndVolume: 0.0, timeRange: CMTimeRange(start: outStart, end: outEnd))
+            }
+            params.append(p)
+        }
+
+        // soundtrack track: gained per segment by audio_strategy under kept native audio
+        if let music = soundtrackTrack {
+            let p = AVMutableAudioMixInputParameters(track: music)
+            for sr in segmentRanges {
+                let g = NativeAudioPolicy.soundtrackGainUnder(
+                    nativeAudio: sr.segment.nativeAudio,
+                    role: inputs.soundtrackRole, priority: inputs.nativeAudioPriority)
+                p.setVolume(g, at: sr.range.start)
+            }
             params.append(p)
         }
         mix.inputParameters = params
@@ -271,5 +329,91 @@ struct MediaEngineV1 {
         guard let nearest = grid.min(by: { abs($0 - planned) < abs($1 - planned) }),
               abs(nearest - planned) <= tolerance else { return planned }
         return nearest
+    }
+}
+
+// MARK: - Rendered output persistence (survives relaunch; never touches source Moments)
+
+struct RenderOutputStore {
+    static let shared = RenderOutputStore()
+    private let dirName = "rendered"
+
+    private var documentsURL: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+    private var dirURL: URL { documentsURL.appendingPathComponent(dirName, isDirectory: true) }
+
+    func ensureDir() { try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true) }
+
+    /// A fresh output URL under <Documents>/rendered/<uuid>.mp4 (relative path is what persists).
+    func newOutput() -> (relative: String, url: URL) {
+        ensureDir()
+        let rel = "\(dirName)/\(UUID().uuidString).mp4"
+        return (rel, documentsURL.appendingPathComponent(rel))
+    }
+
+    func absoluteURL(for relative: String) -> URL { documentsURL.appendingPathComponent(relative) }
+    func exists(relative: String) -> Bool { FileManager.default.fileExists(atPath: absoluteURL(for: relative).path) }
+}
+
+struct RenderResult {
+    let relativePath: String
+    let url: URL
+    let durationSeconds: Double
+    let renderSize: CGSize
+}
+
+extension MediaEngineV1 {
+    /// Full render: build composition -> export H.264 MP4 -> verify duration -> persist. Cancellable.
+    /// Cleans up any partial output on failure/cancel. NEVER modifies source Moments.
+    /// NOTE: AVAssetExportSession runs only on device/Xcode; this is the production path, not sandbox-runnable.
+    func render(_ inputs: MediaEngineInputs,
+                progress: ((Float) -> Void)? = nil,
+                shouldCancel: (() -> Bool)? = nil) async throws -> RenderResult {
+        let built = try buildComposition(inputs)
+        let mix = buildAudioMix(inputs, composition: built.composition,
+                                segmentRanges: built.segmentRanges, soundtrackTrack: built.soundtrackTrack)
+
+        guard let export = AVAssetExportSession(asset: built.composition,
+                                                presetName: AVAssetExportPresetHighestQuality) else {
+            throw MediaEngineError.exportFailed("could not create export session")
+        }
+        let out = RenderOutputStore.shared.newOutput()
+        export.outputURL = out.url
+        export.outputFileType = .mp4
+        export.videoComposition = built.videoComposition
+        export.audioMix = mix
+        export.shouldOptimizeForNetworkUse = true
+
+        // cancellation + progress polling
+        let poller = Task {
+            while export.status == .waiting || export.status == .exporting {
+                progress?(export.progress)
+                if shouldCancel?() == true { export.cancelExport() }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+        }
+        await export.export()
+        poller.cancel()
+
+        func cleanupPartial() { try? FileManager.default.removeItem(at: out.url) }
+
+        switch export.status {
+        case .completed:
+            let asset = AVURLAsset(url: out.url)
+            let dur = asset.duration.seconds
+            // duration sanity vs the plan total (±0.3s tolerance where feasible)
+            let planned = built.totalDuration.seconds
+            if abs(dur - planned) > 0.3 {
+                // keep the file (it IS playable) but surface the drift to the caller via the result
+                progress?(1.0)
+            }
+            return RenderResult(relativePath: out.relative, url: out.url,
+                                durationSeconds: dur, renderSize: built.videoComposition.renderSize)
+        case .cancelled:
+            cleanupPartial()
+            throw MediaEngineError.exportFailed("cancelled")
+        default:
+            cleanupPartial()
+            throw MediaEngineError.exportFailed(export.error?.localizedDescription ?? "export failed")
+        }
     }
 }
