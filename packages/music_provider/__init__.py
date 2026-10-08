@@ -181,8 +181,12 @@ def rank_candidates(music_plan: dict, candidates: list[Candidate], *, target_dur
     native_priority = strat.get("native_audio_priority", "low")
     for c in candidates:
         f = {}
-        # mood overlap (0..1)
-        cm = {m.lower() for m in c.mood_tags}
+        # mood overlap (0..1) — coerce provider mood objects {id,name} to strings
+        cm = set()
+        for m in c.mood_tags:
+            s = (m.get("name") or m.get("id")) if isinstance(m, dict) else m
+            if s:
+                cm.add(str(s).lower())
         f["mood"] = (len(plan_moods & cm) / len(plan_moods)) if plan_moods else 0.0
         # duration adequacy: the track must COVER the target (short tracks penalized); over-length is fine (cut downstream)
         f["duration"] = 1.0 if c.duration_seconds >= target_duration else max(0.0, c.duration_seconds / target_duration)
