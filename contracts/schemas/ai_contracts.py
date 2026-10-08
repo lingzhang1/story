@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _utcnow() -> datetime:
@@ -857,6 +857,84 @@ class MusicAssetContract(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# MusicAnalysis/1 — FROZEN (Milestone M-d, 2026-10-07). Minimum provider-aligned
+# OBSERVED track structure the Edit Planner aligns to. Evidence: live Epidemic
+# Partner API validation (milestone-md-epidemic-live-validation-results.md).
+# Every field has an Edit-Planner consumer. NO labelled sections (deferred, our-
+# analysis), NO time-ranged vocal_regions (deferred), NO numeric emotional
+# intensity, NO fabricated section boundaries. Normalizers live in the provider
+# adapter; this contract VALIDATES the normalized result.
+# ---------------------------------------------------------------------------
+
+
+class HighlightWindow(_Strict):
+    """A candidate engaging region (e.g. Epidemic 'highlights'), in SECONDS. A
+    candidate, NOT a guaranteed emotional climax."""
+
+    start_seconds: float = Field(ge=0.0)
+    end_seconds: float = Field(gt=0.0)
+
+
+class MusicAnalysisV1Contract(_Strict):
+    """FROZEN music_analysis/1. duration required+positive; bpm nullable (<=0 ->
+    null upstream — unreliable/absent tempo); beats/downbeats in real seconds;
+    energy_curve a COARSE normalized amplitude envelope (signal amplitude, NOT
+    perceived emotion); vocal_type a provider category. tempo_reliable gates
+    beat-synchronizability — a beat grid alone does NOT make a track beat-synced."""
+
+    schema_version: str = Field(default="music_analysis/1")
+    duration_seconds: float = Field(gt=0.0)
+    bpm: float | None = Field(default=None, description="null when unknown/unreliable (provider 0 -> null)")
+    tempo_reliable: bool = Field(default=False, description="true only when bpm is present AND trustworthy")
+    beats: list[float] = Field(default_factory=list, description="beat times in seconds")
+    downbeats: list[float] = Field(default_factory=list, description="derived from provider value==1, seconds")
+    highlight_window: HighlightWindow | None = None
+    energy_curve: list[float] = Field(
+        default_factory=list, description="coarse 0..1 normalized amplitude samples (bounded resolution)")
+    vocal_type: str | None = Field(default=None, description="NONE | PRESENCE | LEAD (provider category)")
+
+    @field_validator("bpm")
+    @classmethod
+    def _bpm_positive_or_null(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError("bpm must be >0 or null (normalize provider 0 -> null before constructing)")
+        return v
+
+    @field_validator("beats", "downbeats")
+    @classmethod
+    def _times_sorted_nonneg(cls, v: list[float]) -> list[float]:
+        if any(t < 0 for t in v):
+            raise ValueError("beat/downbeat times must be nonnegative")
+        if v != sorted(v):
+            raise ValueError("beat/downbeat times must be chronological")
+        return v
+
+    @field_validator("energy_curve")
+    @classmethod
+    def _energy_bounded(cls, v: list[float]) -> list[float]:
+        if any(not (0.0 <= x <= 1.0) for x in v):
+            raise ValueError("energy_curve samples must be normalized to 0..1")
+        return v
+
+    @model_validator(mode="after")
+    def _consistency(self) -> "MusicAnalysisV1Contract":
+        dur = self.duration_seconds
+        if self.beats and self.beats[-1] > dur + 0.1:
+            raise ValueError("beat time exceeds duration")
+        if self.downbeats and self.downbeats[-1] > dur + 0.1:
+            raise ValueError("downbeat time exceeds duration")
+        if self.highlight_window:
+            h = self.highlight_window
+            if h.end_seconds <= h.start_seconds:
+                raise ValueError("highlight_window end must exceed start")
+            if h.end_seconds > dur + 0.1:
+                raise ValueError("highlight_window exceeds duration")
+        if self.tempo_reliable and self.bpm is None:
+            raise ValueError("tempo_reliable=true requires a non-null bpm")
+        return self
+
+
+# ---------------------------------------------------------------------------
 # MusicPlan (Milestone M-b — FROZEN music_plan/1, Opus 4.6, prompt music_plan/1)
 #
 # Story-level SOUNDTRACK SHAPE a future Edit Planner consumes for pacing. NOT a
@@ -1134,6 +1212,9 @@ __all__ = [
     "MusicSection",
     "MusicAnalysisContract",
     "MusicAssetContract",
+    # music analysis/1 (M-d, frozen music_analysis/1)
+    "HighlightWindow",
+    "MusicAnalysisV1Contract",
     # music plan (M-b, frozen music_plan/1)
     "EnergyIntensity",
     "SoundtrackRole",

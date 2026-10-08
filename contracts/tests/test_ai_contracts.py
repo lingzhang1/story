@@ -780,3 +780,68 @@ def test_edit_plan_v2_schema_in_sync():
         (Path(__file__).resolve().parents[1] / "schemas" / "edit-plan-v2.schema.json").read_text())
     assert on_disk["properties"].keys() == generated["properties"].keys()
     assert "beat_sync" not in on_disk["properties"]
+
+
+# ---------------------------------------------------------------------------
+# MusicAnalysis/1 (Milestone M-d, frozen music_analysis/1)
+# ---------------------------------------------------------------------------
+def test_music_analysis_v1_roundtrips():
+    from contracts.schemas.ai_contracts import MusicAnalysisV1Contract
+
+    a = MusicAnalysisV1Contract.model_validate({
+        "duration_seconds": 62.0, "bpm": 90.0, "tempo_reliable": True,
+        "beats": [0.0, 0.66, 1.33, 2.0], "downbeats": [0.0, 2.0],
+        "highlight_window": {"start_seconds": 41.0, "end_seconds": 55.0},
+        "energy_curve": [0.0, 0.3, 0.8, 1.0, 0.5], "vocal_type": "NONE"})
+    assert a.schema_version == "music_analysis/1"
+    again = MusicAnalysisV1Contract.model_validate(a.model_dump(mode="json"))
+    assert again.downbeats == [0.0, 2.0] and again.tempo_reliable is True
+
+
+def test_music_analysis_v1_bpm_zero_rejected_null_ok():
+    from contracts.schemas.ai_contracts import MusicAnalysisV1Contract
+
+    # bpm must be normalized to null upstream; a literal 0 is rejected
+    with pytest.raises(ValidationError):
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 220.0, "bpm": 0})
+    # null bpm (ambient) is valid, and tempo_reliable must then be false
+    a = MusicAnalysisV1Contract.model_validate({"duration_seconds": 220.0, "bpm": None})
+    assert a.bpm is None and a.tempo_reliable is False
+    with pytest.raises(ValidationError):
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 220.0, "bpm": None, "tempo_reliable": True})
+
+
+def test_music_analysis_v1_beats_chronological_and_in_bounds():
+    from contracts.schemas.ai_contracts import MusicAnalysisV1Contract
+
+    with pytest.raises(ValidationError):  # out of order
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 10.0, "beats": [1.0, 0.5]})
+    with pytest.raises(ValidationError):  # negative
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 10.0, "beats": [-0.1, 1.0]})
+    with pytest.raises(ValidationError):  # beyond duration
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 10.0, "beats": [1.0, 99.0]})
+
+
+def test_music_analysis_v1_highlight_and_energy_bounds():
+    from contracts.schemas.ai_contracts import MusicAnalysisV1Contract
+
+    with pytest.raises(ValidationError):  # highlight beyond duration
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 30.0,
+            "highlight_window": {"start_seconds": 10.0, "end_seconds": 99.0}})
+    with pytest.raises(ValidationError):  # energy not normalized
+        MusicAnalysisV1Contract.model_validate({"duration_seconds": 30.0, "energy_curve": [0.0, 1.5]})
+
+
+def test_music_analysis_v1_schema_in_sync_and_no_sections():
+    import json
+    from pathlib import Path
+    from contracts.generate_schema import build_ai_schema
+    from contracts.schemas.ai_contracts import MusicAnalysisV1Contract
+
+    generated = build_ai_schema("MusicAnalysisV1", MusicAnalysisV1Contract)
+    on_disk = json.loads(
+        (Path(__file__).resolve().parents[1] / "schemas" / "music-analysis-v1.schema.json").read_text())
+    assert on_disk["properties"].keys() == generated["properties"].keys()
+    # frozen minimum: NO labelled sections, NO time-ranged vocal_regions
+    assert "sections" not in on_disk["properties"]
+    assert "vocal_regions" not in on_disk["properties"]

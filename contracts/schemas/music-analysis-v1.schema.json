@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "HighlightWindow": {
+      "additionalProperties": false,
+      "description": "A candidate engaging region (e.g. Epidemic 'highlights'), in SECONDS. A\ncandidate, NOT a guaranteed emotional climax.",
+      "properties": {
+        "end_seconds": {
+          "exclusiveMinimum": 0.0,
+          "title": "End Seconds",
+          "type": "number"
+        },
+        "start_seconds": {
+          "minimum": 0.0,
+          "title": "Start Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_seconds",
+        "end_seconds"
+      ],
+      "title": "HighlightWindow",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "FROZEN music_analysis/1. duration required+positive; bpm nullable (<=0 ->\nnull upstream \u2014 unreliable/absent tempo); beats/downbeats in real seconds;\nenergy_curve a COARSE normalized amplitude envelope (signal amplitude, NOT\nperceived emotion); vocal_type a provider category. tempo_reliable gates\nbeat-synchronizability \u2014 a beat grid alone does NOT make a track beat-synced.",
+  "properties": {
+    "beats": {
+      "description": "beat times in seconds",
+      "items": {
+        "type": "number"
+      },
+      "title": "Beats",
+      "type": "array"
+    },
+    "bpm": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "null when unknown/unreliable (provider 0 -> null)",
+      "title": "Bpm"
+    },
+    "downbeats": {
+      "description": "derived from provider value==1, seconds",
+      "items": {
+        "type": "number"
+      },
+      "title": "Downbeats",
+      "type": "array"
+    },
+    "duration_seconds": {
+      "exclusiveMinimum": 0.0,
+      "title": "Duration Seconds",
+      "type": "number"
+    },
+    "energy_curve": {
+      "description": "coarse 0..1 normalized amplitude samples (bounded resolution)",
+      "items": {
+        "type": "number"
+      },
+      "title": "Energy Curve",
+      "type": "array"
+    },
+    "highlight_window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HighlightWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "default": "music_analysis/1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tempo_reliable": {
+      "default": false,
+      "description": "true only when bpm is present AND trustworthy",
+      "title": "Tempo Reliable",
+      "type": "boolean"
+    },
+    "vocal_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "NONE | PRESENCE | LEAD (provider category)",
+      "title": "Vocal Type"
+    }
+  },
+  "required": [
+    "duration_seconds"
+  ],
+  "title": "MusicAnalysisV1",
+  "type": "object"
+}
