@@ -184,7 +184,9 @@ struct CreativeDirectionView: View {
     // The one-line feel shown in the row: user/inferred summary, or a calm pending line.
     private var musicSummaryLine: String {
         if let md = musicDirection {
-            if !md.moodTags.isEmpty { return md.moodTags.joined(separator: " · ") }
+            if !md.moodTags.isEmpty {
+                return md.moodTags.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " · ")
+            }
             return md.summary
         }
         return musicLoading ? "Finding the right feel…" : "Story will choose a fitting feel"
@@ -363,6 +365,14 @@ private struct MusicDirectionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private static let feels = ["Cinematic", "Emotional", "Epic", "Dreamy", "Energetic", "Chill"]
+    // Inferred mood vocabulary (DeterministicMusicDirectionEngine) -> the nearest UI chip, so the
+    // sheet pre-selects what the row shows. Keeps the row, sheet, and saved edit in ONE vocabulary.
+    private static let inferredToChip: [String: String] = [
+        "cinematic": "Cinematic", "emotional": "Emotional", "intimate": "Emotional",
+        "uplifting": "Emotional", "epic": "Epic", "dreamy": "Dreamy", "atmospheric": "Dreamy",
+        "energetic": "Energetic", "gritty": "Energetic", "playful": "Energetic",
+        "calm": "Chill", "chill": "Chill",
+    ]
     @State private var selected: Set<String> = []
     @State private var desc: String = ""
 
@@ -393,7 +403,14 @@ private struct MusicDirectionSheet: View {
         .onAppear {
             if let md = current, md.rawUserDescription != nil || !md.moodTags.isEmpty {
                 desc = md.rawUserDescription ?? ""
-                selected = Set(md.moodTags.map { $0.capitalized }.filter { Self.feels.contains($0) })
+                // Map each inferred mood tag to its nearest chip; also accept any tag that is already
+                // a chip label (user-authored edits store chip labels lowercased).
+                selected = Set(md.moodTags.compactMap { tag -> String? in
+                    let lower = tag.lowercased()
+                    if let chip = Self.inferredToChip[lower] { return chip }
+                    let titled = lower.prefix(1).uppercased() + lower.dropFirst()
+                    return Self.feels.contains(titled) ? titled : nil
+                })
             }
         }
     }
