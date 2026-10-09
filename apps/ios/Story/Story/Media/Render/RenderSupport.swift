@@ -62,6 +62,45 @@ enum DebugEditPlanFixture {
     static func decode(_ json: Data) throws -> EditPlanV2 {
         try JSONDecoder().decode(EditPlanV2.self, from: json)
     }
+
+    /// CASE D (speed) — a deterministic plan exercising 0.5x and 2.0x playback. Needs >=2 Moments; the first
+    /// segment plays at 0.5x (slow), the second at 2.0x (fast). Straight cuts (the engine does not yet render
+    /// crossfades — that is a documented R-b gap, not forced here). output_duration = source span / speed.
+    static func speedCases(media: [MomentMedia], outputFormat: String = "vertical") -> EditPlanV2 {
+        let speeds: [Double] = [0.5, 2.0, 1.0]
+        var segs: [EditSegmentV2] = []
+        for (i, m) in media.prefix(3).enumerated() {
+            let span = min(2.0, max(1.0, m.durationSeconds))     // 2s source window
+            let speed = speeds[i % speeds.count]
+            segs.append(EditSegmentV2(
+                order: i, assetId: m.momentId.uuidString,
+                sourceStartSeconds: 0.0, sourceEndSeconds: span,
+                outputDurationSeconds: round((span / speed) * 100) / 100,   // 0.5x -> longer, 2x -> shorter
+                speed: speed, nativeAudio: "keep", musicAlignment: nil))
+        }
+        let total = segs.reduce(0.0) { $0 + $1.outputDurationSeconds }
+        return EditPlanV2(schemaVersion: "edit_plan/2", targetDurationSeconds: total,
+                          outputFormat: outputFormat, musicAssetId: nil, feasible: true, segments: segs)
+    }
+
+    /// CASE F (missing Moment) — a plan whose FIRST segment references a Moment id that does not resolve to any
+    /// local file. The renderer MUST throw MediaEngineError.missingMoment and produce NO output (never a partial
+    /// MP4, never a silent skip). The remaining segments are valid so the failure is unambiguously the bad id.
+    static func missingMoment(media: [MomentMedia], outputFormat: String = "vertical") -> EditPlanV2 {
+        var segs: [EditSegmentV2] = [
+            EditSegmentV2(order: 0, assetId: "00000000-0000-0000-0000-000000000000",   // deliberately unresolvable
+                          sourceStartSeconds: 0.0, sourceEndSeconds: 2.0,
+                          outputDurationSeconds: 2.0, speed: 1.0, nativeAudio: "keep", musicAlignment: nil)
+        ]
+        for (i, m) in media.prefix(2).enumerated() {
+            segs.append(EditSegmentV2(order: i + 1, assetId: m.momentId.uuidString,
+                sourceStartSeconds: 0.0, sourceEndSeconds: 2.0,
+                outputDurationSeconds: 2.0, speed: 1.0, nativeAudio: "keep", musicAlignment: nil))
+        }
+        let total = segs.reduce(0.0) { $0 + $1.outputDurationSeconds }
+        return EditPlanV2(schemaVersion: "edit_plan/2", targetDurationSeconds: total,
+                          outputFormat: outputFormat, musicAssetId: nil, feasible: true, segments: segs)
+    }
 }
 
 // MARK: - Real EditPlan request builder (R-b Case G)

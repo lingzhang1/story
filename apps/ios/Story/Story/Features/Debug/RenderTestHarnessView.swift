@@ -22,6 +22,14 @@ struct RenderTestHarnessView: View {
     @State private var useRealPlan = false
     @State private var cancelFlag = false
     @State private var diag: Diagnostics?
+    @State private var fixtureCase: FixtureCase = .montage
+
+    enum FixtureCase: String, CaseIterable, Identifiable {
+        case montage = "Montage (A)"
+        case speed = "Speed 0.5x/2x (D)"
+        case missing = "Missing Moment (F)"
+        var id: String { rawValue }
+    }
 
     // Case G diagnostics (DEBUG-only; no raw private video, no API keys, no personal paths).
     struct Diagnostics {
@@ -52,8 +60,18 @@ struct RenderTestHarnessView: View {
                     Toggle("Use real Edit Planner (/v1/edit-plan)", isOn: $useRealPlan)
                     Text(useRealPlan
                          ? "Real AI plan — Opus 4.6 via the deployed backend, no-music mode"
-                         : "Deterministic montage fixture (no network)")
+                         : "Deterministic fixture (no network)")
                         .font(.caption).foregroundStyle(.secondary)
+                    if !useRealPlan {
+                        Picker("Fixture case", selection: $fixtureCase) {
+                            ForEach(FixtureCase.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        if fixtureCase == .missing {
+                            Text("Expect a clear missingMoment error and NO output (Case F).")
+                                .font(.caption2).foregroundStyle(.orange)
+                        }
+                    }
                 }
                 Section("Render") {
                     Button(rendering ? "Working…" : (useRealPlan ? "Generate AI EditPlan + Render" : "Render Test Story")) {
@@ -115,10 +133,16 @@ struct RenderTestHarnessView: View {
 
     private func renderFixture() async {
         rendering = true; cancelFlag = false; progress = 0; status = "Building fixture plan…"; result = nil; player = nil
-        var d = Diagnostics(); d.mode = "fixture (no network)"; d.model = "none (deterministic)"
-        let plan = DebugEditPlanFixture.montage(media: media)
+        var d = Diagnostics(); d.mode = "fixture: \(fixtureCase.rawValue)"; d.model = "none (deterministic)"
+        let plan: EditPlanV2
+        switch fixtureCase {
+        case .montage: plan = DebugEditPlanFixture.montage(media: media)
+        case .speed:   plan = DebugEditPlanFixture.speedCases(media: media)
+        case .missing: plan = DebugEditPlanFixture.missingMoment(media: media)
+        }
         d.selectedMoments = media.count; d.segments = plan.segments.count; d.plannedDuration = plan.targetDurationSeconds
         diag = d
+        // Case F deliberately includes an unresolvable id: do NOT pre-filter it — the engine must hard-fail.
         await render(plan: plan, resolver: MomentResolver.urlResolver(for: media), diag: &d)
     }
 
