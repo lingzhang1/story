@@ -63,6 +63,11 @@ from edit_planner import (
     MODEL_ID as EDIT_PLANNER_MODEL,
     RealEditPlannerEngine,
 )
+from music_plan import (
+    MODEL_ID as MUSIC_PLAN_MODEL,
+    MusicPlanEngine,
+    RealMusicPlanEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -202,3 +207,16 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     """
     model = os.environ.get("STORY_EDIT_PLANNER_MODEL", EDIT_PLANNER_MODEL)
     return RealEditPlannerEngine(BedrockModelGateway(model_id=model))
+
+
+def get_music_plan_engine() -> MusicPlanEngine:
+    """Provide the production MusicPlan engine (Milestone R-d, frozen music_plan/1).
+
+    One Opus 4.6 call via the generic ModelGateway + the frozen prompt music_plan/1. Produces the Story-level
+    soundtrack SHAPE at creation time (not per Moment) from CreativeIntent + authoritative MusicDirection +
+    StoryGuide + StoryCoverage/2 + target duration. Model is config-driven (STORY_MUSIC_PLAN_MODEL) but
+    defaults to the frozen us.anthropic.claude-opus-4-6-v1. Never fabricates — a failure propagates so the
+    caller falls back to no-music creation.
+    """
+    model = os.environ.get("STORY_MUSIC_PLAN_MODEL", MUSIC_PLAN_MODEL)
+    return RealMusicPlanEngine(BedrockModelGateway(model_id=model))

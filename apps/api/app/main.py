@@ -69,13 +69,14 @@ from edit_planner import (
     EditPlanInfeasibleError,
     MalformedPlanError,
 )
+from music_plan import MusicPlanEngine, MusicPlanInputs
 import music_provider as _mp
 from story_coverage_v2 import (
     CoverageV2Input,
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -93,6 +94,7 @@ from app.deps import (
     get_story_coverage_v2_engine,
     get_music_direction_engine,
     get_edit_planner_engine,
+    get_music_plan_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -169,6 +171,21 @@ class EditPlanRequest(BaseModel):
     music_asset_id: str | None = Field(default=None)
     music_plan_id: UUID | None = Field(default=None)
     music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
+
+
+class MusicPlanRequest(BaseModel):
+    """POST /v1/music-plan body (Milestone R-d, frozen music_plan/1). Produces the Story-level soundtrack
+    SHAPE via one Opus 4.6 call at creation time. MusicDirection is AUTHORITATIVE for mood/energy (a
+    user-authored direction is passed through). On model/provider failure the endpoint returns 503 — it
+    NEVER fabricates a plan; the client falls back to no-music creation."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent: dict = Field(..., description="resolved CreativeIntent incl. target_duration_seconds")
+    music_direction: dict = Field(..., description="authoritative MusicDirection (user-authored overrides inferred)")
+    target_duration_seconds: float = Field(..., gt=0.0)
+    story_guide: dict = Field(default_factory=dict)
+    story_coverage: dict = Field(default_factory=dict)
 
 
 class MusicCandidatesRequest(BaseModel):
@@ -633,6 +650,45 @@ def create_app() -> FastAPI:
                    "first_pass_executable": diag.get("first_pass_executable"),
                    "normalized": diag.get("normalized"), "repaired": diag.get("repaired"),
                    "model_calls": diag.get("model_calls")})
+        return plan
+
+    @app.post("/v1/music-plan", response_model=MusicPlanContract, status_code=200)
+    def music_plan(
+        body: MusicPlanRequest,
+        engine: MusicPlanEngine = Depends(get_music_plan_engine),
+    ) -> MusicPlanContract:
+        """Produce the Story-level MusicPlan (Milestone R-d, frozen music_plan/1): CreativeIntent +
+        authoritative MusicDirection + StoryGuide + StoryCoverage/2 + target duration -> ONE Opus 4.6 call,
+        structured tool-use. Generated at creation time, NOT per Moment. The engine NEVER fabricates: on
+        model/provider failure the endpoint returns 503 so the client falls back to no-music creation."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "music_plan", "correlation_id": correlation_id,
+                "task": "music_plan.generate", "schema_version": "music_plan/1",
+                "target_s": body.target_duration_seconds}
+        inputs = MusicPlanInputs(
+            story_id=str(body.story_id),
+            creative_intent=body.creative_intent,
+            music_direction=body.music_direction,
+            target_duration_seconds=body.target_duration_seconds,
+            story_guide=body.story_guide,
+            story_coverage=body.story_coverage,
+        )
+        try:
+            plan = engine.generate(inputs)
+        except StructuredOutputError as e:
+            log.warning("music_plan_invalid", extra={**base, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503, detail="music plan could not be produced; create without music or retry")
+        except ProviderError as e:
+            log.warning("music_plan_unavailable", extra={**base, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503, detail="music planner temporarily unavailable; retry")
+        diag = getattr(engine, "last_diagnostics", {}) or {}
+        log.info("music_plan_generated",
+                 extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                        "success": True, "regions": diag.get("regions"),
+                        "soundtrack_role": plan.audio_strategy.soundtrack_role,
+                        "native_audio_priority": plan.audio_strategy.native_audio_priority,
+                        "model_calls": diag.get("model_calls")})
         return plan
 
     @app.post("/v1/music/candidates", status_code=200)
