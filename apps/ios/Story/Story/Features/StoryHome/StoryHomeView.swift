@@ -85,12 +85,22 @@ struct StoryHomeView: View {
                     if story.status == .active {
                         StoryPrimaryButton(title: "Shoot a moment") { showCapture = true }
                     }
-                    Button { showPreview = true } label: {
-                        Text("Create my Story").font(StoryTheme.body(14))
-                            .foregroundStyle(story.moments.isEmpty ? StoryTheme.cream.opacity(0.2) : StoryTheme.cream.opacity(0.38))
-                            .frame(maxWidth: .infinity)
+                    // R-c Batch C: readiness-gated real Create. Plannable iff >=1 Moment has BOTH a resolvable
+                    // local file AND a completed MomentUnderstanding (same rule as EditPlanRequestBuilder).
+                    let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
+                    VStack(spacing: 4) {
+                        Button { showPreview = true } label: {
+                            Text("Create my Story").font(StoryTheme.body(14))
+                                .foregroundStyle(readiness.isPlannable ? StoryTheme.cream.opacity(0.7) : StoryTheme.cream.opacity(0.2))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .disabled(!readiness.isPlannable)
+                        .accessibilityHint(readiness.isPlannable ? "" : readiness.copy)
+                        // Honest status line — never a generic "coming later".
+                        Text(readiness.copy)
+                            .font(StoryTheme.body(11))
+                            .foregroundStyle(readiness.isPlannable ? StoryTheme.cream.opacity(0.3) : StoryTheme.textMuted)
                     }
-                    .disabled(story.moments.isEmpty)
                 }
                 .padding(.top, 20)
 

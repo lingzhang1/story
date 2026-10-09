@@ -3,11 +3,14 @@ import SwiftData
 import AVKit
 
 // Create My Story — preview (frozen Figma ScreenTMBPreview). Shows the Story
-// material and the intended Create action, but real generation (Edit Planner +
-// Media Engine) is NOT built, so the generate action is an intentional
-// disabled/empty state. Music is disabled (Music Engine). In DEBUG the old
-// Milestone-A mock output path remains, clearly marked as dev-only — never
-// presented as a real AI-generated Story. See ui-capability-matrix.md.
+// material and the REAL Create action (R-c Batch C): enabled only when the Story
+// is plannable (>=1 Moment with a resolvable local file AND a completed
+// MomentUnderstanding — the same rule EditPlanRequestBuilder enforces), routing
+// to the Batch-B coordinator flow (StoryCreatingView -> StoryResultView) or, when
+// a good persisted output already exists, straight to the Result screen via
+// ReopenDecision. Music is disabled (Music Engine). The Milestone-A MOCK output
+// path is DEBUG-only (showsDiagnostics block) and is NEVER on the consumer
+// production path. See ui-capability-matrix.md.
 struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
@@ -28,9 +31,14 @@ struct CreateStoryPreviewView: View {
         StoryUseCases(repository: StoryRepository(context: context))
     }
 
+    /// Duplicate-guard reflection: a create/result flow is already presented for this Story, so the Create
+    /// action must not launch a second one (the coordinator also guards concurrent runs via `isCreating`).
+    private var isCreateFlowActive: Bool { showCreating || reopenOutput != nil }
+
     /// Open the create flow. REOPEN: if the Story already has a successful, non-stale, file-present output,
     /// go straight to the Result screen (no re-render); otherwise start the coordinator-driven Creating screen.
     private func startCreate() {
+        guard !isCreateFlowActive else { return }   // duplicate guard
         let decision = ReopenDecision.decide(
             outputs: story.generatedOutputs,
             isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
@@ -78,34 +86,25 @@ struct CreateStoryPreviewView: View {
                 StoryUnavailableSection(header: { StoryEyebrow(text: "Music") },
                     message: "Story will score your video to music. Not available yet.")
 
-                // Create — real generation unavailable (Edit Planner + Media).
+                // Create — REAL consumer action (R-c Batch C). Enabled only when the Story is plannable
+                // (>=1 Moment with a resolvable file AND a completed MomentUnderstanding — same rule as
+                // EditPlanRequestBuilder). Tap -> ReopenDecision (existing good output -> Result; else Creating).
+                // Duplicate guard: the button also disables while a flow is already active for this Story.
+                let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
+                let canCreate = readiness.isPlannable && !isCreateFlowActive
                 VStack(alignment: .leading, spacing: 8) {
-                    StoryUnavailableButton(title: "Create my Story",
-                                           note: "Story generation is coming in a later update.")
+                    if canCreate {
+                        StoryPrimaryButton(title: "Create my Story") { startCreate() }
+                    } else {
+                        StoryUnavailableButton(title: "Create my Story", note: readiness.copy)
+                    }
+                    if readiness.isPlannable, case .pendingAnalysis = readiness {
+                        // Honest: a plan uses only the ready moments; the rest are still analyzing.
+                        Text(readiness.copy)
+                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
+                    }
                 }
                 .padding(.top, 4)
-
-                #if DEBUG
-                // R-c Batch B: DEBUG-only entry that exercises the REAL coordinator-driven create/result flow
-                // wired behind this screen. The CONSUMER Create action above stays an intentional disabled
-                // state — Batch C flips availability on Story Home and routes it to startCreate(); the full
-                // path (ReopenDecision -> Creating/Result) is already in place here. Kept separate from and
-                // in addition to the Media Engine render-test harness below, which is untouched.
-                Button {
-                    startCreate()
-                } label: {
-                    HStack {
-                        Text("▶ Create (dev wiring) · Coordinator")
-                        Spacer()
-                    }
-                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream)
-                    .padding(.vertical, 12).padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(StoryTheme.cream.opacity(0.12), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .disabled(story.moments.isEmpty)
-                #endif
 
                 #if DEBUG
                 // R-b Case G: reachable entry to the Media Engine V1 render test harness. Visible in ANY
