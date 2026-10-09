@@ -198,13 +198,25 @@ struct StoryResultView: View {
                 .foregroundStyle(StoryTheme.cream.opacity(0.3))
 
             if isStale {
-                // Stale: offer Re-create while KEEPING the existing output visible/playable.
+                // Stale: surface WHY a new version is worth making, but the action below is the same.
                 Text("Your moments changed since this was made.")
                     .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold.opacity(0.8))
-                StoryPrimaryButton(title: "Re-create") { recreate() }
-            } else {
-                StoryPrimaryButton(title: "Save") { saveToPhotos() }
             }
+
+            // Save is always primary (Figma Screen11Result). The real export stays the saved result.
+            StoryPrimaryButton(title: "Save") { saveToPhotos() }
+
+            // Create a new version — ALWAYS available (Figma): re-runs the pipeline and ADDS a new
+            // GeneratedOutputModel without deleting this one, so the user can iterate instead of being stuck
+            // with the single first render. (Previously this only appeared when the output was stale, which is
+            // why there was "no way to recreate".) Secondary outline style per the mock.
+            Button { recreate() } label: {
+                Text("Create a new version")
+                    .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.6))
+                    .frame(maxWidth: .infinity).padding(.vertical, 13)
+                    .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.14), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
 
             Button { showShare = true } label: {
                 Text("Share to Files")
@@ -215,7 +227,7 @@ struct StoryResultView: View {
             .buttonStyle(.plain)
 
             HStack(spacing: 18) {
-                // "Change music" — DISABLED future feature. Never implies music is present.
+                // "Change music" — DISABLED future feature (R-d). Never implies music is present.
                 Text("♫ Change music")
                     .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.18))
                     .accessibilityHint("Not available yet")
