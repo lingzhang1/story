@@ -45,6 +45,22 @@ enum CreatingPhase: Equatable {
     }
 }
 
+/// Pure mapping from the coordinator's structured failure to the recovery affordances the Failed screen shows.
+/// Extracted so tests assert "insufficient material -> duration choice, NOT Retry" without a SwiftUI host.
+enum FailureRecovery: Equatable {
+    case shorterStory(suggestedSeconds: Double)   // insufficient material, a shorter Story is possible
+    case keepShooting                              // insufficient material, not even a minimum Story -> only "keep shooting"
+    case technical                                 // recoverable technical failure -> honest "Try again"
+
+    static func from(_ error: StoryCreationError?) -> FailureRecovery {
+        if case let .insufficientMaterial(_, _, suggested)? = error {
+            if let s = suggested { return .shorterStory(suggestedSeconds: s) }
+            return .keepShooting
+        }
+        return .technical
+    }
+}
+
 struct StoryCreatingView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -197,9 +213,59 @@ struct StoryCreatingView: View {
         }
     }
 
-    // MARK: - Failed (concise message + Retry + back; NEVER a fabricated montage)
+    // MARK: - Failed (actionable recovery; NEVER a fabricated montage)
 
+    @ViewBuilder
     private func failedBody(message: String) -> some View {
+        // Branch on the STRUCTURED failure: insufficient material gets an actionable duration choice
+        // (Create a shorter Story / Keep shooting), everything else keeps the honest Try again.
+        switch FailureRecovery.from(coordinator?.lastFailure) {
+        case .shorterStory(let suggested):
+            insufficientBody(message: message, suggestedSeconds: suggested)
+        case .keepShooting:
+            insufficientBody(message: message, suggestedSeconds: nil)
+        case .technical:
+            technicalFailedBody(message: message)
+        }
+    }
+
+    /// Insufficient-material recovery. "Create a shorter Story" (when a suggestion exists) accepts the
+    /// conservative shorter target as a per-attempt override — it does NOT change the Story's saved target.
+    /// "Keep shooting" returns to the Story with nothing lost. NO "Try again" here (an identical impossible
+    /// target would just fail again and re-call nothing — we never re-ask the planner for the impossible).
+    private func insufficientBody(message: String, suggestedSeconds: Double?) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Text("Not quite enough footage yet.")
+                .font(StoryTheme.display(22))
+                .foregroundStyle(StoryTheme.cream)
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(StoryTheme.body(14))
+                .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if let suggested = suggestedSeconds {
+                StoryPrimaryButton(title: "Create a \(Int(suggested.rounded()))-second Story") {
+                    coordinator?.createShorter(targetSeconds: suggested)
+                }
+            }
+            Button {
+                dismiss()   // Keep shooting: back to Story Home, nothing lost.
+            } label: {
+                Text("Keep shooting")
+                    .font(StoryTheme.body(14))
+                    .foregroundStyle(StoryTheme.cream.opacity(suggestedSeconds == nil ? 0.7 : 0.4))
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 24)
+        }
+    }
+
+    /// Recoverable technical failure (503 planner outage, transport, render error): concise message + Retry.
+    private func technicalFailedBody(message: String) -> some View {
         VStack(spacing: 20) {
             Spacer()
             Text("I couldn't finish your Story.")

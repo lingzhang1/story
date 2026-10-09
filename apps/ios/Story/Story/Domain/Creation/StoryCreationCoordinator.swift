@@ -49,6 +49,11 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     case invalidPlan(String)           // our deterministic validator rejected the plan (pre-AVFoundation)
     case renderFailed(String)          // the renderer threw
     case alreadyCreating               // duplicate-job guard
+    /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
+    /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
+    /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
+    /// choice, never a plain Retry, and the planner is NEVER called with the impossible target.
+    case insufficientMaterial(achievable: Double, requested: Double, suggested: Double?)
 
     var errorDescription: String? {
         switch self {
@@ -59,6 +64,14 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .invalidPlan(let r): return "The plan can't be rendered: \(r)"
         case .renderFailed(let r): return "Rendering failed: \(r)"
         case .alreadyCreating: return "A video is already being created for this Story."
+        case .insufficientMaterial(let achievable, let requested, let suggested):
+            let a = Int(achievable.rounded()), req = Int(requested.rounded())
+            if let s = suggested {
+                return "There's about \(a)s of usable footage — not enough for a \(req)s Story. "
+                     + "You can create a shorter \(Int(s.rounded()))s Story, or keep shooting."
+            }
+            return "There's only about \(a)s of usable footage — not enough for a \(req)s Story yet. "
+                 + "Shoot or add a little more and try again."
         }
     }
 }
@@ -97,6 +110,10 @@ final class StoryCreationCoordinator {
     private(set) var state: State = .idle
     /// Duplicate-job guard: true while a creation is in flight for this coordinator's Story.
     private(set) var isCreating: Bool = false
+    /// The structured error behind the CURRENT `.failed` state (nil otherwise). The UI reads this to decide
+    /// whether to show a plain Retry (recoverable technical failure) or the actionable duration choice
+    /// (insufficient material). `state` keeps carrying only the human message, so existing behavior/tests hold.
+    private(set) var lastFailure: StoryCreationError?
 
     // Seams
     private let planner: EditPlanning
@@ -155,6 +172,7 @@ final class StoryCreationCoordinator {
         isCreating = true
         cancelRequested = false
         partialRelativePath = nil
+        lastFailure = nil
         task = Task { [weak self] in await self?.run(story: story, outputFormat: outputFormat, targetSeconds: targetSeconds) }
     }
 
@@ -172,6 +190,16 @@ final class StoryCreationCoordinator {
         create(for: story, outputFormat: lastOutputFormat, targetSeconds: lastTargetSeconds)
     }
 
+    /// Accept a SHORTER duration after an insufficient-material preflight verdict and re-run. The shorter value
+    /// is passed as a per-attempt `targetSeconds` override ONLY — the Story's own CreativeIntent target
+    /// (`intentTargetDurationSeconds`) is NOT mutated, so the user's original intent is preserved unless they
+    /// explicitly edit it. No-op unless we are in `.failed` after an insufficient-material verdict.
+    func createShorter(targetSeconds: Double) {
+        guard case .failed = state, let story = lastStory, !isCreating else { return }
+        guard case .insufficientMaterial = lastFailure else { return }
+        create(for: story, outputFormat: lastOutputFormat, targetSeconds: targetSeconds)
+    }
+
     // MARK: - Pipeline
 
     private func run(story: StoryModel, outputFormat: String, targetSeconds: Double?) async {
@@ -187,6 +215,21 @@ final class StoryCreationCoordinator {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
             return finishFailed(.missingPrerequisite("Couldn't assemble the creation request: \(error)"))
+        }
+        if cancelRequested { return finishCancelled() }
+
+        // ---- feasibility preflight: deterministic, BEFORE the planner. If the material can't reach the
+        // target's lower tolerance bound, DON'T call Opus with an impossible target — surface an actionable
+        // duration choice (shorter Story / keep shooting). Uses the SAME request.moments the planner would get. ----
+        if let target = build.resolvedTargetSeconds {
+            switch DurationFeasibility.evaluate(materials: build.materials, targetSeconds: target) {
+            case .feasible:
+                break   // proceed to planning
+            case .shorterPossible(let achievable, let suggested, let requested):
+                return finishFailed(.insufficientMaterial(achievable: achievable, requested: requested, suggested: suggested))
+            case .insufficient(let achievable, let requested):
+                return finishFailed(.insufficientMaterial(achievable: achievable, requested: requested, suggested: nil))
+            }
         }
         if cancelRequested { return finishCancelled() }
 
@@ -363,6 +406,7 @@ final class StoryCreationCoordinator {
 
     private func finishFailed(_ error: StoryCreationError) {
         if let rel = partialRelativePath { cleanup(relative: rel) }
+        lastFailure = error
         state = .failed(message: error.errorDescription ?? "Creation failed.")
     }
 

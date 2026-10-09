@@ -140,6 +140,32 @@ enum EditPlanRequestBuilder {
         let request: EditPlanRequestDTO
         let includedMedia: [MomentMedia]       // the resolvable Moments actually sent (drives URL resolution)
         let excludedMomentIds: [UUID]          // Moments dropped: no completed AU, or no local file
+
+        /// The resolved Story target that was baked into the request's CreativeIntent. Reading it back from the
+        /// request (not recomputing) guarantees the preflight sees EXACTLY the target the planner will.
+        var resolvedTargetSeconds: Double? {
+            if case let .object(ci) = request.creativeIntent,
+               case let .number(t)? = ci["target_duration_seconds"] { return t }
+            return nil
+        }
+
+        /// The per-Moment usable material, parsed from the SAME request.moments the planner receives — so the
+        /// duration-feasibility preflight and the planner can never disagree about what footage exists.
+        var materials: [DurationFeasibility.MomentMaterial] {
+            request.moments.compactMap { mv in
+                guard case let .object(m) = mv else { return nil }
+                let dur: Double = { if case let .number(d)? = m["duration_seconds"] { return d }; return 0 }()
+                var spans: [(start: Double, end: Double)] = []
+                if case let .array(segs)? = m["useful_segments"] {
+                    for s in segs {
+                        guard case let .array(pair) = s, pair.count == 2,
+                              case let .number(a) = pair[0], case let .number(b) = pair[1] else { continue }
+                        spans.append((start: a, end: b))
+                    }
+                }
+                return DurationFeasibility.MomentMaterial(durationSeconds: dur, usefulSegments: spans)
+            }
+        }
     }
 
     enum BuildError: Error, LocalizedError {
