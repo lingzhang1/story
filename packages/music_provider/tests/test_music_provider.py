@@ -135,6 +135,11 @@ def test_music_candidates_endpoint_ranks_when_enabled(monkeypatch):
                 {"id": "t_loud", "title": "Loud", "length": 200, "bpm": 174, "moods": ["epic"], "vocalType": "LEAD"},
                 {"id": "t_fit", "title": "Calm Warm", "length": 90, "bpm": 70, "moods": ["calm", "warm"], "vocalType": "NONE"},
             ]
+        # R-d Batch B enriched the endpoint: it now also fetches a preview url + MusicAnalysis for the top pick.
+        def preview_url(self, track_id): return f"https://preview.example/{track_id}.mp3"
+        def beats(self, track_id): return [{"start": 0}, {"start": 500}]
+        def highlights(self, track_id, duration=15): return {"start": 5000, "end": 20000}
+        def metadata(self, track_id): return {"length": 90, "bpm": 70, "vocalType": "NONE"}
     monkeypatch.setattr(mp, "EpidemicClient", _FakeClient)
     client = TestClient(create_app())
     r = client.post("/v1/music/candidates", json={

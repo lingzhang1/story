@@ -197,6 +197,14 @@ class MusicCandidatesRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=10)
 
 
+class MusicTrackRequest(BaseModel):
+    """POST /v1/music/analysis and /v1/music/soundtrack body — a specific chosen track. PROTOTYPING-ONLY."""
+
+    model_config = ConfigDict(extra="forbid")
+    track_id: str = Field(..., description="Epidemic track id (from a candidate)")
+    duration_seconds: float | None = Field(default=None, gt=0.0, description="optional hint when metadata lacks length")
+
+
 class StoryCoverageV2Request(BaseModel):
     """POST /v1/story-coverage/v2 body — the FROZEN Guide-relative Coverage. CreativeIntent + the
     persisted frozen StoryGuide + completed MomentUnderstanding[] + pending_count -> StoryCoverage/2
@@ -719,10 +727,86 @@ def create_app() -> FastAPI:
                                vocal_type=t.get("vocalType"))
                  for t in raw if t.get("id")]
         ranked = _mp.rank_candidates(body.music_plan, cands, target_duration=body.target_duration_seconds)
+        # Enrich each ranked candidate with a PREVIEW url (consumer can audition before choosing). Best-effort:
+        # a provider hiccup on one preview must not fail the whole list.
+        out = []
+        for c in ranked[: body.limit]:
+            preview = None
+            try:
+                preview = client.preview_url(c.track_id)
+            except _mp.EpidemicProviderError:
+                preview = None
+            out.append({"track_id": c.track_id, "title": c.title, "score": c.score,
+                        "factors": c.factors, "duration_seconds": c.duration_seconds,
+                        "vocal_type": c.vocal_type, "preview_url": preview})
+        # Compute MusicAnalysis/1 for the TOP pick only (the Edit Planner needs it; computing it for every
+        # candidate would be wasteful). Normalized through the frozen music_analysis/1 path. Best-effort.
+        top_analysis = None
+        if ranked:
+            top = ranked[0]
+            try:
+                top_analysis = _mp.to_music_analysis_v1(
+                    duration_seconds=top.duration_seconds,
+                    raw_bpm=top.bpm,
+                    raw_beats=client.beats(top.track_id),
+                    raw_highlights=client.highlights(top.track_id),
+                    waveform=None,
+                    vocal_type=top.vocal_type,
+                ).model_dump(mode="json")
+            except _mp.EpidemicProviderError as e:
+                log.warning("music_candidates_analysis_error", extra={**base, "error": str(e)[:200]})
+                top_analysis = None
         log.info("music_candidates_ranked", extra={**base, "n": len(ranked)})
-        return {"candidates": [{"track_id": c.track_id, "title": c.title, "score": c.score,
-                                "factors": c.factors, "duration_seconds": c.duration_seconds,
-                                "vocal_type": c.vocal_type} for c in ranked[:body.limit]]}
+        return {"candidates": out, "top_track_id": ranked[0].track_id if ranked else None,
+                "top_music_analysis": top_analysis}
+
+    @app.post("/v1/music/analysis", status_code=200)
+    def music_analysis(body: MusicTrackRequest):
+        """PROTOTYPING-ONLY: MusicAnalysis/1 for a SPECIFIC chosen track (used when the user picks a candidate
+        other than the top pick, so the Edit Planner gets analysis for the actual selection). Flag-gated 404."""
+        if not _mp.prototyping_enabled():
+            raise HTTPException(status_code=404, detail="not found")
+        base = {"operation": "music_analysis", "correlation_id": str(uuid4()), "mode": "prototyping"}
+        try:
+            client = _mp.EpidemicClient()
+            meta = client.metadata(body.track_id)
+            analysis = _mp.to_music_analysis_v1(
+                duration_seconds=float(meta.get("length") or body.duration_seconds or 1.0),
+                raw_bpm=meta.get("bpm"),
+                raw_beats=client.beats(body.track_id),
+                raw_highlights=client.highlights(body.track_id),
+                waveform=None,
+                vocal_type=meta.get("vocalType"),
+            )
+        except _mp.EpidemicAuthError:
+            raise HTTPException(status_code=503, detail="music provider auth unavailable")
+        except _mp.EpidemicProviderError as e:
+            log.warning("music_analysis_provider_error", extra={**base, "error": str(e)[:200]})
+            raise HTTPException(status_code=503, detail="music provider temporarily unavailable")
+        return analysis.model_dump(mode="json")
+
+    @app.post("/v1/music/soundtrack", status_code=200)
+    def music_soundtrack(body: MusicTrackRequest):
+        """PROTOTYPING-ONLY: return a short-lived AUTHORIZED download link for the SELECTED track so the device
+        can fetch the audio for a PRIVATE, NON-COMMERCIAL test render. Flag-gated 404 when the prototyping flag
+        is off. This is NOT a sublicense/export surface: COMMERCIAL export stays behind a SEPARATE flag
+        (STORY_MUSIC_COMMERCIAL_EXPORT) that remains OFF — when the business API lands, only that flag + the
+        provider key swap change, not this code path."""
+        if not _mp.prototyping_enabled():
+            raise HTTPException(status_code=404, detail="not found")
+        base = {"operation": "music_soundtrack", "correlation_id": str(uuid4()), "mode": "prototyping"}
+        try:
+            client = _mp.EpidemicClient()
+            link = client.download_link(body.track_id, quality="normal")
+        except _mp.EpidemicAuthError:
+            raise HTTPException(status_code=503, detail="music provider auth unavailable")
+        except _mp.EpidemicProviderError as e:
+            log.warning("music_soundtrack_provider_error", extra={**base, "error": str(e)[:200]})
+            raise HTTPException(status_code=503, detail="music provider temporarily unavailable")
+        log.info("music_soundtrack_link", extra={**base, "track_id": body.track_id})
+        # usage='prototyping_test' makes the non-commercial constraint explicit to the client.
+        return {"track_id": body.track_id, "download_url": link, "usage": "prototyping_test",
+                "commercial_export_enabled": False}
 
     @app.post("/v1/story-coverage/v2", response_model=StoryCoverageContractV2, status_code=200)
     def story_coverage_v2(
