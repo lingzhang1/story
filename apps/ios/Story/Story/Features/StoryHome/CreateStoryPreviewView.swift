@@ -63,8 +63,25 @@ struct CreateStoryPreviewView: View {
                 .padding(.top, 4)
 
                 #if DEBUG
+                // R-b Case G: reachable entry to the Media Engine V1 render test harness. Visible in ANY
+                // DEBUG build (every Xcode build-and-run) — NOT gated on aiDebug — so there is no launch
+                // argument to set. #if DEBUG keeps it out of Release / consumer flow entirely.
+                Divider().overlay(StoryTheme.gold.opacity(0.25))
+                Button {
+                    showRenderHarness = true
+                } label: {
+                    HStack {
+                        Text("▶ Render Test (dev) · Media Engine V1")
+                        Spacer()
+                    }
+                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.ink)
+                    .padding(.vertical, 12).padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity)
+                    .background(StoryTheme.gold, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+
                 if AppMode.current.showsDiagnostics {
-                    Divider().overlay(StoryTheme.gold.opacity(0.25))
                     StoryEyebrow(text: "DEBUG · dev mock output")
                     Button("Generate mock output (dev only)") {
                         try? useCases.createStoryOutput(for: story)
@@ -74,11 +91,6 @@ struct CreateStoryPreviewView: View {
                         Text("mock outputs: \(story.generatedOutputs.count)")
                             .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
                     }
-
-                    // R-b Case G: reachable entry to the Media Engine V1 render test harness (DEBUG only,
-                    // never in Release / consumer flow). Renders a fixture OR a real /v1/edit-plan plan.
-                    Button("Render Test (dev) · Media Engine V1") { showRenderHarness = true }
-                        .font(StoryTheme.body(13)).tint(StoryTheme.gold)
                 }
                 #endif
 
