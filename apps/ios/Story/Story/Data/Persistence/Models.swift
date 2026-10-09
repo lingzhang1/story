@@ -150,29 +150,91 @@ final class MomentModel {
     }
 }
 
+// R-c Batch A: GeneratedOutputModel is now a REAL persisted render output, not
+// mock metadata. ADDITIVE / MIGRATION-SAFE evolution — the existing Milestone-A
+// stores stay valid without a schema migration step:
+//   - every field kept: id (unique), story, title, durationSeconds, createdAt.
+//   - `momentIds` is KEPT for back-compat (old mock outputs set only this). New
+//     real outputs ALSO populate `sourceMomentIds` (the ordered set the staleness
+//     fingerprint is computed over). `momentIds` therefore stays authoritative for
+//     already-persisted rows; `sourceMomentIds` is the forward field. We keep both
+//     rather than migrate because a lightweight SwiftData migration cannot run in
+//     the sandbox and the duplication is cheap + non-lossy.
+//   - all NEW fields carry defaults (String? = nil, [] , "" , false), so an old
+//     store that never wrote them decodes cleanly (SwiftData lightweight migration
+//     requirement: added properties must be optional or defaulted).
+//
+// LOCAL-FIRST: `relativeFilePath` is the RenderOutputStore relative path under
+// <Documents>/rendered/ — we NEVER store the video bytes in SwiftData and never a
+// cloud URL. A nil `relativeFilePath` means "mock / metadata-only" (legacy row).
 @Model
 final class GeneratedOutputModel {
-    // A Story may have MANY GeneratedOutputs. This is METADATA only —
-    // no rendered video for Milestone A (mock EditEngine).
+    // A Story may have MANY GeneratedOutputs.
     @Attribute(.unique) var id: UUID
     var story: StoryModel?
     var title: String
     var durationSeconds: Double
-    // Snapshot of the moment ids this output was planned from.
+    // LEGACY snapshot of the moment ids this output was planned from (mock path).
+    // Kept for back-compat; real outputs mirror this into `sourceMomentIds`.
     var momentIds: [UUID]
     var createdAt: Date
+
+    // --- R-c Batch A real-render fields (all defaulted = migration-safe) ---
+
+    // RenderOutputStore RELATIVE path (e.g. "rendered/<uuid>.mp4"). nil = legacy/mock.
+    // Never the absolute container path (it changes across installs/launches) and
+    // NEVER the video bytes.
+    var relativeFilePath: String?
+
+    // The ordered set of Moment ids this output was rendered from. Drives the
+    // staleness fingerprint (see StoryCreationCoordinator.fingerprint).
+    var sourceMomentIds: [UUID] = []
+
+    // Stable hash of {sorted included Moment ids + each Moment's asset.relativePath
+    // + durationSeconds}. Replacing media under an UNCHANGED Moment id invalidates
+    // the output (the fingerprint changes). Computed by the coordinator.
+    var sourceFingerprint: String = ""
+
+    // SHORT provenance string: schema_version + planner model (or "none") + planned
+    // duration. NOT the raw plan JSON (we never persist that here).
+    var editPlanProvenance: String = ""
+
+    // Render shape (echoed from the EditPlan / RenderResult).
+    var outputFormat: String = "vertical"
+    var renderWidth: Double = 0
+    var renderHeight: Double = 0
+
+    // Set true when the Story's current inputs no longer match `sourceFingerprint`.
+    // Advisory UX flag; recomputed, never user-authored.
+    var isStale: Bool = false
 
     init(
         id: UUID = UUID(),
         title: String,
         durationSeconds: Double,
         momentIds: [UUID],
+        relativeFilePath: String? = nil,
+        sourceMomentIds: [UUID] = [],
+        sourceFingerprint: String = "",
+        editPlanProvenance: String = "",
+        outputFormat: String = "vertical",
+        renderWidth: Double = 0,
+        renderHeight: Double = 0,
+        isStale: Bool = false,
         createdAt: Date = .now
     ) {
         self.id = id
         self.title = title
         self.durationSeconds = durationSeconds
         self.momentIds = momentIds
+        self.relativeFilePath = relativeFilePath
+        self.sourceMomentIds = sourceMomentIds
+        self.sourceFingerprint = sourceFingerprint
+        self.editPlanProvenance = editPlanProvenance
+        self.outputFormat = outputFormat
+        self.renderWidth = renderWidth
+        self.renderHeight = renderHeight
+        self.isStale = isStale
         self.createdAt = createdAt
     }
 }
