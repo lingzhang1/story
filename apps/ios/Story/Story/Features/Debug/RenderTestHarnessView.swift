@@ -22,7 +22,7 @@ struct RenderTestHarnessView: View {
     @State private var useRealPlan = false
     @State private var cancelFlag = false
     @State private var diag: Diagnostics?
-    @State private var fixtureCase: FixtureCase = .montage
+    @State private var fixtureCase: FixtureCase = .crossfade
 
     enum FixtureCase: String, CaseIterable, Identifiable {
         case montage = "Montage (A)"
@@ -30,6 +30,15 @@ struct RenderTestHarnessView: View {
         case speed = "Speed 0.5x/2x (D)"
         case missing = "Missing Moment (F)"
         var id: String { rawValue }
+    }
+
+    private var fixtureHint: String {
+        switch fixtureCase {
+        case .montage:   return "Straight cuts, 3 clips. Baseline montage."
+        case .crossfade: return "0.3s cross-dissolve between clips — watch the blend, no black frame."
+        case .speed:     return "Clip 1 at 0.5x (slow), clip 2 at 2.0x (fast)."
+        case .missing:   return "Expect a clear missingMoment error and NO output (Case F)."
+        }
     }
 
     // Case G diagnostics (DEBUG-only; no raw private video, no API keys, no personal paths).
@@ -68,10 +77,7 @@ struct RenderTestHarnessView: View {
                             ForEach(FixtureCase.allCases) { Text($0.rawValue).tag($0) }
                         }
                         .pickerStyle(.menu)
-                        if fixtureCase == .missing {
-                            Text("Expect a clear missingMoment error and NO output (Case F).")
-                                .font(.caption2).foregroundStyle(.orange)
-                        }
+                        Text(fixtureHint).font(.caption2).foregroundStyle(fixtureCase == .missing ? .orange : .secondary)
                     }
                 }
                 Section("Render") {
