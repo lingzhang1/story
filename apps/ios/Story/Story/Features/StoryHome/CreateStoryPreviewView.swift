@@ -12,6 +12,9 @@ struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
+    #if DEBUG
+    @State private var showRenderHarness = false
+    #endif
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -71,6 +74,11 @@ struct CreateStoryPreviewView: View {
                         Text("mock outputs: \(story.generatedOutputs.count)")
                             .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
                     }
+
+                    // R-b Case G: reachable entry to the Media Engine V1 render test harness (DEBUG only,
+                    // never in Release / consumer flow). Renders a fixture OR a real /v1/edit-plan plan.
+                    Button("Render Test (dev) · Media Engine V1") { showRenderHarness = true }
+                        .font(StoryTheme.body(13)).tint(StoryTheme.gold)
                 }
                 #endif
 
@@ -80,6 +88,11 @@ struct CreateStoryPreviewView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
+        #if DEBUG
+        .sheet(isPresented: $showRenderHarness) {
+            RenderTestHarnessView(story: story)
+        }
+        #endif
     }
 
     private func thumb(_ m: MomentModel) -> some View {
