@@ -16,8 +16,31 @@ struct CreateStoryPreviewView: View {
     @State private var showRenderHarness = false
     #endif
 
+    // R-c Batch B: coordinator-driven create/result navigation. The visible Create
+    // button is still an intentional disabled state (Batch C flips availability on
+    // Story Home) — but the full path is wired HERE so Batch C only toggles the
+    // trigger, not the plumbing. `createRoute` decides, via ReopenDecision, whether
+    // to open the Result screen for an existing good output or start a new render.
+    @State private var showCreating = false
+    @State private var reopenOutput: GeneratedOutputModel?
+
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
+    }
+
+    /// Open the create flow. REOPEN: if the Story already has a successful, non-stale, file-present output,
+    /// go straight to the Result screen (no re-render); otherwise start the coordinator-driven Creating screen.
+    private func startCreate() {
+        let decision = ReopenDecision.decide(
+            outputs: story.generatedOutputs,
+            isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
+            fileExists: { RenderOutputStore.shared.exists(relative: $0) })
+        switch decision {
+        case .showResult(let outputId):
+            reopenOutput = story.generatedOutputs.first { $0.id == outputId }
+        case .create:
+            showCreating = true
+        }
     }
 
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
@@ -63,6 +86,28 @@ struct CreateStoryPreviewView: View {
                 .padding(.top, 4)
 
                 #if DEBUG
+                // R-c Batch B: DEBUG-only entry that exercises the REAL coordinator-driven create/result flow
+                // wired behind this screen. The CONSUMER Create action above stays an intentional disabled
+                // state — Batch C flips availability on Story Home and routes it to startCreate(); the full
+                // path (ReopenDecision -> Creating/Result) is already in place here. Kept separate from and
+                // in addition to the Media Engine render-test harness below, which is untouched.
+                Button {
+                    startCreate()
+                } label: {
+                    HStack {
+                        Text("▶ Create (dev wiring) · Coordinator")
+                        Spacer()
+                    }
+                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream)
+                    .padding(.vertical, 12).padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(StoryTheme.cream.opacity(0.12), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(story.moments.isEmpty)
+                #endif
+
+                #if DEBUG
                 // R-b Case G: reachable entry to the Media Engine V1 render test harness. Visible in ANY
                 // DEBUG build (every Xcode build-and-run) — NOT gated on aiDebug — so there is no launch
                 // argument to set. #if DEBUG keeps it out of Release / consumer flow entirely.
@@ -100,6 +145,14 @@ struct CreateStoryPreviewView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
+        // R-c Batch B: coordinator-driven routes. New render -> Creating (which on completion pushes Result);
+        // reopen of an existing good output -> Result directly (no re-render).
+        .navigationDestination(isPresented: $showCreating) {
+            StoryCreatingView(story: story)
+        }
+        .navigationDestination(item: $reopenOutput) { output in
+            StoryResultView(story: story, output: output)
+        }
         #if DEBUG
         .sheet(isPresented: $showRenderHarness) {
             RenderTestHarnessView(story: story)
