@@ -49,10 +49,17 @@ struct StoryCreatingView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
+    /// When the render completes, hand the output UP to the parent so it can present Result in place of this
+    /// screen (stack stays Home -> Preview -> Result instead of Home -> Preview -> Creating -> Result, which
+    /// left the stuck "Finishing up…" screen behind when Result dismissed). When nil, this view falls back to
+    /// pushing Result itself (standalone / test host).
+    var onCompleted: ((GeneratedOutputModel) -> Void)? = nil
 
     @State private var coordinator: StoryCreationCoordinator?
-    /// Set when the coordinator reaches .completed — drives navigation to the Result screen.
+    /// Set when the coordinator reaches .completed — drives navigation to the Result screen (fallback path only).
     @State private var completedOutput: GeneratedOutputModel?
+    /// Guard so the completion hand-off fires exactly once.
+    @State private var didHandOffCompletion = false
 
     private var phase: CreatingPhase {
         guard let coordinator else { return .indeterminate(status: "Getting your moments ready…") }
@@ -67,7 +74,24 @@ struct StoryCreatingView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $completedOutput) { output in
-            StoryResultView(story: story, output: output)
+            StoryResultView(
+                story: story,
+                output: output,
+                onHome: {
+                    // Pop BOTH Result and this Creating screen so the user lands on Story Home in one tap
+                    // (fixes the stuck "Finishing up…" screen that a single dismiss left behind). Clearing
+                    // `completedOutput` pops Result; dismissing on the next runloop pops Creating.
+                    completedOutput = nil
+                    DispatchQueue.main.async { dismiss() }
+                },
+                onRecreate: {
+                    // Drop Result and re-run the pipeline on THIS same Creating screen (live progress again).
+                    // create() is the right entry from a COMPLETED run (retry() only resumes a .failed run);
+                    // the coordinator's isCreating defer has already cleared, so create() is accepted.
+                    completedOutput = nil
+                    didHandOffCompletion = false
+                    coordinator?.create(for: story)
+                })
         }
         .task {
             // Build the real coordinator once and start the pipeline. Prod planner = EditPlannerService,
@@ -79,7 +103,15 @@ struct StoryCreatingView: View {
             }
         }
         .onChange(of: completedState) { _, newValue in
-            if let output = newValue { completedOutput = output }
+            guard let output = newValue, !didHandOffCompletion else { return }
+            didHandOffCompletion = true
+            if let onCompleted {
+                // Parent presents Result in our place (no stacked Creating screen left behind).
+                onCompleted(output)
+            } else {
+                // Standalone fallback: push Result from here.
+                completedOutput = output
+            }
         }
     }
 

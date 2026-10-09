@@ -75,6 +75,19 @@ struct StoryResultView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
     let output: GeneratedOutputModel
+    /// Collapse the ENTIRE create flow back to Story Home. When this Result was reached via the
+    /// Creating screen (new render) the view stack is Home -> Preview -> Result, so a plain `dismiss()`
+    /// would only pop one level. The parent (CreateStoryPreviewView) injects a closure that resets the
+    /// create-flow bindings AND pops the preview, landing on Story Home in a single tap. Falls back to
+    /// `dismiss()` when presented standalone (e.g. a direct reopen or a test host).
+    var onHome: (() -> Void)? = nil
+    /// Start a re-create. Injected so the parent can drive the shared Creating screen instead of this
+    /// view pushing its own. Falls back to the local coordinator + `dismiss()` when absent.
+    var onRecreate: (() -> Void)? = nil
+
+    private func goHome() {
+        if let onHome { onHome() } else { dismiss() }
+    }
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -155,7 +168,7 @@ struct StoryResultView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Button { dismiss() } label: {
+            Button { goHome() } label: {
                 Text("← Home").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
             }
             .buttonStyle(.plain)
@@ -261,8 +274,14 @@ struct StoryResultView: View {
     }
 
     /// Re-create: run the coordinator again. We do NOT delete the existing output — the coordinator only ADDs a
-    /// new successful GeneratedOutputModel once its render succeeds (Batch A invariant).
+    /// new successful GeneratedOutputModel once its render succeeds (Batch A invariant). Prefer the parent-driven
+    /// path (reuses the shared Creating screen, so the view stack doesn't accumulate); fall back to a local
+    /// coordinator + dismiss when presented standalone.
     private func recreate() {
+        if let onRecreate {
+            onRecreate()
+            return
+        }
         if recreateCoordinator == nil {
             recreateCoordinator = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         }

@@ -51,6 +51,21 @@ struct CreateStoryPreviewView: View {
         }
     }
 
+    /// Re-create from a REOPENED Result (stale output): drop Result and enter the Creating screen (child of
+    /// this preview), which runs the pipeline and self-manages its own Result.
+    private func handleRecreate() {
+        reopenOutput = nil
+        DispatchQueue.main.async { showCreating = true }
+    }
+
+    /// Collapse the create flow back to Story Home in one tap: clear the reopen binding and pop the preview
+    /// itself (a pushed destination of Story Home). The new-render path pops itself via Creating's onHome.
+    private func goHome() {
+        reopenOutput = nil
+        showCreating = false
+        dismiss()
+    }
+
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
@@ -144,13 +159,15 @@ struct CreateStoryPreviewView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
-        // R-c Batch B: coordinator-driven routes. New render -> Creating (which on completion pushes Result);
-        // reopen of an existing good output -> Result directly (no re-render).
+        // R-c Batch B: coordinator-driven routes. New render -> Creating, which OWNS its Result child and,
+        // via Result's onHome, pops BOTH itself and Result back to Story Home (fixes the stuck "Finishing up…"
+        // screen). Reopen of an existing good output -> Result directly; its onHome collapses the flow too
+        // (Result is a child of this preview, so a plain dismiss would stop at the preview, not Home).
         .navigationDestination(isPresented: $showCreating) {
             StoryCreatingView(story: story)
         }
         .navigationDestination(item: $reopenOutput) { output in
-            StoryResultView(story: story, output: output)
+            StoryResultView(story: story, output: output, onHome: goHome, onRecreate: handleRecreate)
         }
         #if DEBUG
         .sheet(isPresented: $showRenderHarness) {
