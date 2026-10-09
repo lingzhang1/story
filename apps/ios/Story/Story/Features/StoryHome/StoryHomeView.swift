@@ -157,6 +157,7 @@ struct StoryHomeView: View {
         .storyBackground()
         .overlay(alignment: .top) { importBanner }
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackToDismiss(dismiss)
         .task(id: story.id) { await loadCoverage() }
         .fullScreenCover(isPresented: $showCapture, onDismiss: {
             // Returning from capture: the new Moment's AU runs async — poll until it lands so

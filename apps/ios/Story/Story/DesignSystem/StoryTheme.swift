@@ -76,4 +76,20 @@ struct StoryBackground: ViewModifier {
 }
 extension View {
     func storyBackground() -> some View { modifier(StoryBackground()) }
+
+    /// Restore iOS-style "swipe right to go back" on a pushed screen. These screens hide the navigation bar
+    /// (`toolbar(.hidden)`), which also disables UIKit's default interactive edge-swipe-pop — so a user's
+    /// natural right-swipe did nothing. This re-adds it in SwiftUI: a clear rightward swipe calls `dismiss()`.
+    /// `simultaneousGesture` so it coexists with any in-content horizontal control (e.g. a video scrubber);
+    /// we act only on a decisive mostly-horizontal rightward drag.
+    func swipeBackToDismiss(_ dismiss: DismissAction) -> some View {
+        self.simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.width > 80 && value.translation.width > abs(value.translation.height) {
+                        dismiss()
+                    }
+                }
+        )
+    }
 }

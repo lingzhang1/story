@@ -159,6 +159,7 @@ struct CreateStoryPreviewView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackToDismiss(dismiss)
         // R-c Batch B: coordinator-driven routes. New render -> Creating, which OWNS its Result child and,
         // via Result's onHome, pops BOTH itself and Result back to Story Home (fixes the stuck "Finishing up…"
         // screen). Reopen of an existing good output -> Result directly; its onHome collapses the flow too

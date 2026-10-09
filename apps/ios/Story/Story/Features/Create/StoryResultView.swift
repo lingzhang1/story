@@ -123,6 +123,15 @@ struct StoryResultView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // Swipe-right-to-go-back, matching the ← Home button (collapses the whole create flow, not one level).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.width > 80 && value.translation.width > abs(value.translation.height) {
+                        goHome()
+                    }
+                }
+        )
         .sheet(isPresented: $showShare) {
             if let url = resolvedURL { ShareSheet(items: [url]) }
         }

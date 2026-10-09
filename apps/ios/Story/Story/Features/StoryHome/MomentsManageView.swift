@@ -76,6 +76,7 @@ struct MomentsManageView: View {
             .padding(.horizontal, 20)
         }
         .storyBackground()
+        .swipeBackToDismiss(dismiss)
         .overlay(alignment: .top) { importBanner }
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(item: $previewMoment) { m in
@@ -189,19 +190,32 @@ private struct MomentPreviewView: View {
         ZStack {
             StoryTheme.ink.ignoresSafeArea()
             content
-            VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Text("✕").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.7))
-                            .frame(width: 44, height: 44)
-                    }.buttonStyle(.plain).accessibilityLabel("Close preview")
-                    Spacer()
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 8).padding(.top, 8)
         }
+        // Close chrome lives in a top overlay OUTSIDE the player's ignoresSafeArea layer, so the native
+        // VideoPlayer controls can't swallow the tap (the previous ✕ sat UNDER the player and never fired).
+        .overlay(alignment: .topLeading) {
+            Button { close() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(StoryTheme.cream)
+                    .frame(width: 40, height: 40)
+                    .background(StoryTheme.ink.opacity(0.55), in: Circle())
+                    .overlay(Circle().stroke(StoryTheme.cream.opacity(0.15), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .contentShape(Circle())
+            .padding(.leading, 12).padding(.top, 8)
+            .accessibilityLabel("Back")
+        }
+        // Swipe-right-to-go-back, like a standard iOS detail screen (shared modifier). Coexists with the
+        // player's own scrubber; acts only on a decisive rightward swipe.
+        .swipeBackToDismiss(dismiss)
         .onDisappear { player?.pause() }
+    }
+
+    private func close() {
+        player?.pause()
+        dismiss()
     }
 
     @ViewBuilder

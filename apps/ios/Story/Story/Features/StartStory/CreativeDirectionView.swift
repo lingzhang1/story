@@ -54,6 +54,7 @@ struct CreativeDirectionView: View {
         }
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
+        .swipeBackToDismiss(dismiss)
         .navigationDestination(isPresented: $navigate) {
             if let s = resolvedStory { StoryHomeView(story: s) }
         }
