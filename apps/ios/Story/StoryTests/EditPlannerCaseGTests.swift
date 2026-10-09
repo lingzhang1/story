@@ -124,6 +124,17 @@ final class EditPlannerCaseGTests: XCTestCase {
         XCTAssertThrowsError(try EditPlanRequestBuilder.build(story: s, context: ctx))
     }
 
+    func test_resolver_is_case_insensitive_for_planner_lowercased_ids() {
+        // The Edit Planner round-trips the Moment id through Opus, which lowercases the hex; Swift's
+        // uuidString is UPPERCASE. The resolver must still find the file (UUIDs are case-insensitive).
+        let id = UUID()
+        let media = [MomentMedia(momentId: id, relativePath: "media/caseg-ci.mov", durationSeconds: 5)]
+        let resolver = MomentResolver.urlResolver(for: media)
+        XCTAssertNotNil(resolver(id.uuidString))                 // uppercase (as the request sent it)
+        XCTAssertNotNil(resolver(id.uuidString.lowercased()))    // lowercase (as the planner returns it)
+        XCTAssertNil(resolver(UUID().uuidString))                // a different id still misses
+    }
+
     func test_editplan_v2_decodes_real_response() throws {
         let json = """
         {"schema_version":"edit_plan/2","target_duration_seconds":9.0,"output_format":"vertical",

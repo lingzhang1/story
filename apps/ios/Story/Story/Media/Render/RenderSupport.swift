@@ -27,9 +27,13 @@ enum MomentResolver {
     }
 
     /// A Media-Engine URL resolver closure keyed by the Moment id STRING (matches EditSegmentV2.assetId).
+    /// UUIDs are case-insensitive: the Edit Planner round-trips the id through the model, which may normalize
+    /// its hex case (Swift's `uuidString` is UPPERCASE; the planner returns it lowercased), so we lowercase
+    /// BOTH the key and the lookup — otherwise a valid plan resolves to "no local file".
     static func urlResolver(for media: [MomentMedia]) -> (String) -> URL? {
-        let map = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId.uuidString, $0.relativePath) })
-        return { id in map[id].map { MediaStore.shared.absoluteURL(for: $0) } }
+        let map = Dictionary(uniqueKeysWithValues:
+            media.map { ($0.momentId.uuidString.lowercased(), $0.relativePath) })
+        return { id in map[id.lowercased()].map { MediaStore.shared.absoluteURL(for: $0) } }
     }
 }
 
