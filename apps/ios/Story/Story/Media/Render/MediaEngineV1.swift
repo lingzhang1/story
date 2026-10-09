@@ -283,39 +283,68 @@ struct MediaEngineV1 {
             return Self.aspectFillTransform(natural: v.naturalSize, preferred: v.preferredTransform, render: renderSize)
         }
 
+        // AVVideoComposition.instructions MUST tile [0, total] CONTIGUOUSLY with NO gaps and NO overlapping
+        // time ranges — otherwise AVAssetExportSession fails with "Operation Stopped" and never produces a
+        // file. The previous per-segment loop double-covered the crossfade window (segment i's overlap range
+        // and segment i+1's solo range both started at the same boundary), which is exactly that failure.
+        //
+        // Build instructions by a BOUNDARY SWEEP instead: collect every segment's start and end as boundary
+        // times, sort+dedupe them, and emit exactly ONE instruction per [t_k, t_{k+1}) slice. For each slice,
+        // whichever placed segments are live over it are drawn (one = solo, two = crossfade overlap). This
+        // guarantees contiguous, non-overlapping coverage by construction.
+        func liveSegments(in slice: CMTimeRange) -> [(segment: EditSegmentV2, track: Int, range: CMTimeRange)] {
+            placed.filter { p in
+                let pEnd = CMTimeAdd(p.range.start, p.range.duration)
+                // live if the segment's range strictly contains the slice interior
+                return CMTimeCompare(p.range.start, slice.start) <= 0 && CMTimeCompare(pEnd, slice.end) >= 0
+            }
+        }
+
+        // boundary set: every segment start + end, clamped to [0, total], sorted & deduped
+        var boundaries: [CMTime] = [CMTime.zero, total]
+        for p in placed {
+            boundaries.append(p.range.start)
+            boundaries.append(CMTimeAdd(p.range.start, p.range.duration))
+        }
+        boundaries = boundaries
+            .filter { CMTimeCompare($0, .zero) >= 0 && CMTimeCompare($0, total) <= 0 }
+            .sorted { CMTimeCompare($0, $1) < 0 }
+        // dedupe adjacent equal times
+        var distinct: [CMTime] = []
+        for b in boundaries where distinct.last.map({ CMTimeCompare($0, b) != 0 }) ?? true { distinct.append(b) }
+
         var instructions: [AVVideoCompositionInstructionProtocol] = []
-        for (i, p) in placed.enumerated() {
-            let next = i + 1 < placed.count ? placed[i + 1] : nil
-            let overlapStart = next.map { $0.range.start } ?? CMTimeAdd(p.range.start, p.range.duration)
-            let soloEnd = overlapStart   // this segment is solo until the next one starts
-            // SOLO range: only this segment's track is visible.
-            if CMTimeCompare(soloEnd, p.range.start) > 0 {
-                let inst = AVMutableVideoCompositionInstruction()
-                inst.timeRange = CMTimeRange(start: p.range.start, end: soloEnd)
+        for k in 0..<max(0, distinct.count - 1) {
+            let sliceStart = distinct[k]
+            let sliceEnd = distinct[k + 1]
+            guard CMTimeCompare(sliceEnd, sliceStart) > 0 else { continue }   // skip zero-length slices
+            let slice = CMTimeRange(start: sliceStart, end: sliceEnd)
+            let live = liveSegments(in: slice)
+            guard !live.isEmpty else { continue }   // (should not happen: coverage is total)
+
+            let inst = AVMutableVideoCompositionInstruction()
+            inst.timeRange = slice
+            if live.count == 1 {
+                // SOLO slice: one track visible, full opacity.
+                let p = live[0]
                 let li = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[p.track])
-                li.setTransform(try transform(for: p.segment), at: p.range.start)
+                li.setTransform(try transform(for: p.segment), at: slice.start)
                 inst.layerInstructions = [li]
-                instructions.append(inst)
+            } else {
+                // OVERLAP slice (crossfade): two segments live. The one that STARTED EARLIER is outgoing
+                // (ramps 1→0 across this slice); the later one is incoming (ramps 0→1), drawn on top.
+                let ordered = live.sorted { CMTimeCompare($0.range.start, $1.range.start) < 0 }
+                let outP = ordered[0]
+                let inP = ordered[1]
+                let outLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[outP.track])
+                outLI.setTransform(try transform(for: outP.segment), at: slice.start)
+                outLI.setOpacityRamp(fromStartOpacity: 1.0, toEndOpacity: 0.0, timeRange: slice)
+                let inLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[inP.track])
+                inLI.setTransform(try transform(for: inP.segment), at: slice.start)
+                inLI.setOpacityRamp(fromStartOpacity: 0.0, toEndOpacity: 1.0, timeRange: slice)
+                inst.layerInstructions = [outLI, inLI]   // incoming drawn over outgoing
             }
-            // OVERLAP range with the next segment (crossfade): both tracks, outgoing 1→0, incoming 0→1.
-            if let n = next {
-                let segEnd = CMTimeAdd(p.range.start, p.range.duration)
-                if CMTimeCompare(segEnd, n.range.start) > 0 {
-                    let ov = CMTimeRange(start: n.range.start, end: segEnd)
-                    let inst = AVMutableVideoCompositionInstruction()
-                    inst.timeRange = ov
-                    let outLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[p.track])
-                    outLI.setTransform(try transform(for: p.segment), at: ov.start)
-                    outLI.setOpacityRamp(fromStartOpacity: 1.0, toEndOpacity: 0.0,
-                                         timeRange: ov)                 // outgoing fades out
-                    let inLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[n.track])
-                    inLI.setTransform(try transform(for: n.segment), at: ov.start)
-                    inLI.setOpacityRamp(fromStartOpacity: 0.0, toEndOpacity: 1.0,
-                                        timeRange: ov)                  // incoming fades in
-                    inst.layerInstructions = [outLI, inLI]              // incoming drawn over outgoing
-                    instructions.append(inst)
-                }
-            }
+            instructions.append(inst)
         }
         videoComposition.instructions = instructions
 

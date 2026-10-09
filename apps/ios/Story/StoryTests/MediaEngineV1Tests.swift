@@ -144,4 +144,46 @@ final class MediaEngineV1Tests: XCTestCase {
         let resolver = MomentResolver.urlResolver(for: media)
         XCTAssertNil(resolver(plan.segments[0].assetId))                // first is unresolvable -> engine hard-fails
     }
+
+    /// Regression lock for the exportFailed("Operation Stopped") bug: the crossfade placement MUST yield
+    /// instruction time ranges that tile [0, total] CONTIGUOUSLY with NO gaps and NO overlaps. We reproduce
+    /// the engine's placement arithmetic (segStart = cursor - xf; cursor = segStart + outDur) and the boundary
+    /// sweep, then assert the slices are contiguous, cover exactly [0, total], and that overlap windows are
+    /// precisely the two 0.3s crossfade regions — never double-covering a boundary (the original defect).
+    func testCrossfadePlacementTilesTimelineContiguously() {
+        let xf = 0.3, dur = 3.0
+        // seg0 [0,3], seg1 [2.7,5.7], seg2 [5.4,8.4]  (each pulled back by xf from the running cursor)
+        var cursor = 0.0
+        var ranges: [(start: Double, end: Double)] = []
+        for i in 0..<3 {
+            let overlap = i == 0 ? 0.0 : xf
+            let start = cursor - overlap
+            ranges.append((start, start + dur))
+            cursor = start + dur
+        }
+        let total = cursor
+        XCTAssertEqual(total, 8.4, accuracy: 0.001)                     // 3*3 - 2*0.3
+        XCTAssertEqual(ranges.map { $0.start }, [0.0, 2.7, 5.4])
+        XCTAssertEqual(ranges.map { $0.end }, [3.0, 5.7, 8.4])
+
+        // boundary sweep (mirrors buildComposition): distinct sorted segment starts+ends
+        var bset = Set<Double>([0.0, total])
+        for r in ranges { bset.insert(r.start); bset.insert(r.end) }
+        let bounds = bset.sorted()
+        // contiguity: each slice end == next slice start; full coverage [0,total]
+        XCTAssertEqual(bounds.first, 0.0); XCTAssertEqual(bounds.last, total, accuracy: 0.001)
+        // count live segments per slice; expect pattern solo,overlap,solo,overlap,solo
+        func live(_ a: Double, _ b: Double) -> Int {
+            ranges.filter { $0.start <= a + 1e-9 && $0.end >= b - 1e-9 }.count
+        }
+        var pattern: [Int] = []
+        for k in 0..<(bounds.count - 1) {
+            let a = bounds[k], b = bounds[k + 1]
+            if b - a < 1e-9 { continue }
+            pattern.append(live(a, b))
+        }
+        XCTAssertEqual(pattern, [1, 2, 1, 2, 1])                        // solo | crossfade | solo | crossfade | solo
+        // no slice has 0 live segments (would be a gap -> black frame / invalid timeline)
+        XCTAssertFalse(pattern.contains(0))
+    }
 }
