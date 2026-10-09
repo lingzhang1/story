@@ -45,6 +45,7 @@ struct EditSegmentV2: Decodable {
     let speed: Double?
     let nativeAudio: String             // keep | duck | mute
     let musicAlignment: MusicAlignment?
+    let transition: Transition?         // frozen TransitionInstruction: cut | fade | dissolve (+ duration)
 
     enum CodingKeys: String, CodingKey {
         case order
@@ -55,7 +56,31 @@ struct EditSegmentV2: Decodable {
         case speed
         case nativeAudio = "native_audio"
         case musicAlignment = "music_alignment"
+        case transition
     }
+
+    init(order: Int, assetId: String, sourceStartSeconds: Double?, sourceEndSeconds: Double?,
+         outputDurationSeconds: Double, speed: Double?, nativeAudio: String,
+         musicAlignment: MusicAlignment?, transition: Transition? = nil) {
+        self.order = order; self.assetId = assetId
+        self.sourceStartSeconds = sourceStartSeconds; self.sourceEndSeconds = sourceEndSeconds
+        self.outputDurationSeconds = outputDurationSeconds; self.speed = speed
+        self.nativeAudio = nativeAudio; self.musicAlignment = musicAlignment; self.transition = transition
+    }
+}
+
+/// Mirrors the frozen TransitionInstruction (ai_contracts.TransitionType = cut | fade | dissolve). The renderer
+/// treats a CROSSFADE as `dissolve` (both clips visible, cross-dissolving opacity) — the standard meaning;
+/// `fade` is a single-clip fade and `cut` is a straight cut. We do NOT change the frozen contract.
+struct Transition: Decodable {
+    let type: String                    // cut | fade | dissolve
+    let durationSeconds: Double?
+    enum CodingKeys: String, CodingKey {
+        case type
+        case durationSeconds = "duration_seconds"
+    }
+    /// The crossfade overlap this transition implies on its INCOMING segment (0 for cut/fade/absent).
+    var crossfadeSeconds: Double { type == "dissolve" ? (durationSeconds ?? 0.3) : 0.0 }
 }
 
 struct MusicAlignment: Decodable {
@@ -178,18 +203,27 @@ struct MediaEngineV1 {
         let renderSize = try OutputSize.render(for: plan.outputFormat)
 
         let composition = AVMutableComposition()
-        guard let videoTrack = composition.addMutableTrack(
-            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            throw MediaEngineError.exportFailed("could not add video track")
+        // TWO video tracks (ping-pong) so adjacent segments can OVERLAP for a crossfade. A straight cut simply
+        // places the next segment at the previous one's end (zero overlap) — the two-track arrangement is a
+        // superset of the old single-track cut behavior.
+        guard let vTrackA = composition.addMutableTrack(
+                withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+              let vTrackB = composition.addMutableTrack(
+                withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw MediaEngineError.exportFailed("could not add video tracks")
         }
-        let captureAudioTrack = composition.addMutableTrack(
-            withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        let vTracks = [vTrackA, vTrackB]
+        // Matching TWO capture-audio tracks so overlapping segment audio can cross-ramp without a spike.
+        let aTrackA = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        let aTrackB = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        let aTracks = [aTrackA, aTrackB]
 
+        let sorted = plan.segments.sorted(by: { $0.order < $1.order })
         var cursor = CMTime.zero
-        var layerInstructions: [AVMutableVideoCompositionLayerInstruction] = []
-        var segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)] = []
+        // Per-segment placement on the timeline (track index + output range) — drives instructions + audio mix.
+        var placed: [(segment: EditSegmentV2, track: Int, range: CMTimeRange)] = []
 
-        for segment in plan.segments.sorted(by: { $0.order < $1.order }) {
+        for (i, segment) in sorted.enumerated() {
             guard let url = inputs.resolveMomentURL(segment.assetId) else {
                 throw MediaEngineError.missingMoment(segment.assetId)   // fail — never silently skip
             }
@@ -197,64 +231,111 @@ struct MediaEngineV1 {
             guard let srcVideo = asset.tracks(withMediaType: .video).first else {
                 throw MediaEngineError.noVideoTrack(segment.assetId)
             }
+            // A segment crossfades with the PREVIOUS one when THIS segment requests a dissolve. Clamp the
+            // overlap to < both neighbours' durations so it can never invert the timeline.
+            var xf = segment.transition?.crossfadeSeconds ?? 0.0
+            if i == 0 { xf = 0.0 }                                       // nothing to blend into before seg 0
+            if xf > 0 {
+                let prevOut = placed.last?.range.duration.seconds ?? 0
+                xf = max(0.0, min(xf, min(segment.outputDurationSeconds, prevOut) - 0.05))
+            }
+
+            let track = vTracks[i % 2]
+            let aTrack = aTracks[i % 2]
             let start = CMTime(seconds: segment.sourceStartSeconds ?? 0, preferredTimescale: 600)
             let end = CMTime(seconds: segment.sourceEndSeconds ?? segment.outputDurationSeconds,
                              preferredTimescale: 600)
             let srcRange = CMTimeRange(start: start, end: end)
 
-            let segStart = cursor
-            try videoTrack.insertTimeRange(srcRange, of: srcVideo, at: cursor)
-            if let srcAudio = asset.tracks(withMediaType: .audio).first, let at = captureAudioTrack {
-                try? at.insertTimeRange(srcRange, of: srcAudio, at: cursor)
-            }
+            // Overlap: pull this segment's start back by xf so it begins while the previous is still visible.
+            let segStart = i == 0 ? cursor
+                : CMTimeSubtract(cursor, CMTime(seconds: xf, preferredTimescale: 600))
 
+            try track.insertTimeRange(srcRange, of: srcVideo, at: segStart)
+            if let srcAudio = asset.tracks(withMediaType: .audio).first, let at = aTrack {
+                try? at.insertTimeRange(srcRange, of: srcAudio, at: segStart)
+            }
             // speed (0.5x–2.0x): scale the inserted range to the requested output duration
             if let speed = segment.speed, speed > 0, abs(speed - 1.0) > 0.01 {
-                let inserted = CMTimeRange(start: cursor, duration: srcRange.duration)
+                let inserted = CMTimeRange(start: segStart, duration: srcRange.duration)
                 let scaled = CMTime(seconds: srcRange.duration.seconds / speed, preferredTimescale: 600)
-                videoTrack.scaleTimeRange(inserted, toDuration: scaled)
+                track.scaleTimeRange(inserted, toDuration: scaled)
             }
 
-            // 9:16 (or chosen) reframe: aspect-fill transform (center crop) for this segment
-            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-            let transform = Self.aspectFillTransform(natural: srcVideo.naturalSize,
-                                                     preferred: srcVideo.preferredTransform,
-                                                     render: renderSize)
-            layer.setTransform(transform, at: cursor)
-            layerInstructions.append(layer)
-
             let outDur = CMTime(seconds: segment.outputDurationSeconds, preferredTimescale: 600)
-            segmentRanges.append((segment, CMTimeRange(start: segStart, duration: outDur)))
-            cursor = CMTimeAdd(cursor, outDur)
+            placed.append((segment, i % 2, CMTimeRange(start: segStart, duration: outDur)))
+            cursor = CMTimeAdd(segStart, outDur)   // next segment appends after THIS one's end
         }
 
+        // Build per-time-range video-composition instructions. Collect boundary times, then for each slice
+        // decide which track(s) are visible and ramp opacity across any overlap.
+        let total = cursor
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: cursor)
-        instruction.layerInstructions = layerInstructions
-        videoComposition.instructions = [instruction]
 
-        // optional soundtrack (a LOCAL licensed test file for the spike; never Free-tier Epidemic export)
+        // transform per track for the CURRENTLY-active segment on it (set at each segment start)
+        func transform(for segment: EditSegmentV2) throws -> CGAffineTransform {
+            guard let url = inputs.resolveMomentURL(segment.assetId),
+                  let v = AVURLAsset(url: url).tracks(withMediaType: .video).first else {
+                throw MediaEngineError.missingMoment(segment.assetId)
+            }
+            return Self.aspectFillTransform(natural: v.naturalSize, preferred: v.preferredTransform, render: renderSize)
+        }
+
+        var instructions: [AVVideoCompositionInstructionProtocol] = []
+        for (i, p) in placed.enumerated() {
+            let next = i + 1 < placed.count ? placed[i + 1] : nil
+            let overlapStart = next.map { $0.range.start } ?? CMTimeAdd(p.range.start, p.range.duration)
+            let soloEnd = overlapStart   // this segment is solo until the next one starts
+            // SOLO range: only this segment's track is visible.
+            if CMTimeCompare(soloEnd, p.range.start) > 0 {
+                let inst = AVMutableVideoCompositionInstruction()
+                inst.timeRange = CMTimeRange(start: p.range.start, end: soloEnd)
+                let li = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[p.track])
+                li.setTransform(try transform(for: p.segment), at: p.range.start)
+                inst.layerInstructions = [li]
+                instructions.append(inst)
+            }
+            // OVERLAP range with the next segment (crossfade): both tracks, outgoing 1→0, incoming 0→1.
+            if let n = next {
+                let segEnd = CMTimeAdd(p.range.start, p.range.duration)
+                if CMTimeCompare(segEnd, n.range.start) > 0 {
+                    let ov = CMTimeRange(start: n.range.start, end: segEnd)
+                    let inst = AVMutableVideoCompositionInstruction()
+                    inst.timeRange = ov
+                    let outLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[p.track])
+                    outLI.setTransform(try transform(for: p.segment), at: ov.start)
+                    outLI.setOpacityRamp(fromStartOpacity: 1.0, toEndOpacity: 0.0,
+                                         timeRange: ov)                 // outgoing fades out
+                    let inLI = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[n.track])
+                    inLI.setTransform(try transform(for: n.segment), at: ov.start)
+                    inLI.setOpacityRamp(fromStartOpacity: 0.0, toEndOpacity: 1.0,
+                                        timeRange: ov)                  // incoming fades in
+                    inst.layerInstructions = [outLI, inLI]              // incoming drawn over outgoing
+                    instructions.append(inst)
+                }
+            }
+        }
+        videoComposition.instructions = instructions
+
+        // optional soundtrack (a LOCAL licensed test file; never Free-tier Epidemic export)
         var soundtrackTrack: AVMutableCompositionTrack? = nil
         if let sURL = inputs.soundtrackURL, FileManager.default.fileExists(atPath: sURL.path) {
             let sAsset = AVURLAsset(url: sURL)
             if let sTrack = sAsset.tracks(withMediaType: .audio).first,
                let mTrack = composition.addMutableTrack(withMediaType: .audio,
                                                         preferredTrackID: kCMPersistentTrackID_Invalid) {
-                let want = CMTimeRange(start: .zero, duration: cursor)
-                let avail = CMTimeRange(start: .zero, duration: min(sAsset.duration.seconds, cursor.seconds) > 0
-                                        ? CMTime(seconds: min(sAsset.duration.seconds, cursor.seconds), preferredTimescale: 600)
-                                        : cursor)
-                try? mTrack.insertTimeRange(avail, of: sTrack, at: .zero)
-                _ = want
+                let avail = CMTime(seconds: min(sAsset.duration.seconds, total.seconds), preferredTimescale: 600)
+                try? mTrack.insertTimeRange(CMTimeRange(start: .zero, duration: avail), of: sTrack, at: .zero)
                 soundtrackTrack = mTrack
             }
         }
+        // segmentRanges keeps the old (segment, timeline-range) shape the audio mix + duration-verify expect.
+        let segmentRanges = placed.map { (segment: $0.segment, range: $0.range) }
         return BuiltComposition(composition: composition, videoComposition: videoComposition,
                                 segmentRanges: segmentRanges, soundtrackTrack: soundtrackTrack,
-                                totalDuration: cursor)
+                                totalDuration: total)
     }
 
     /// Aspect-fill center-crop transform mapping a source track into the render rect.
@@ -280,20 +361,24 @@ struct MediaEngineV1 {
                        soundtrackTrack: AVMutableCompositionTrack?) -> AVMutableAudioMix {
         let mix = AVMutableAudioMix()
         var params: [AVMutableAudioMixInputParameters] = []
-        let ramp = CMTime(seconds: 0.08, preferredTimescale: 600)   // short deterministic fade
+        let ramp = CMTime(seconds: 0.08, preferredTimescale: 600)   // short deterministic click-guard fade
 
-        // capture-audio track: time-ranged gain per segment (keep/duck/mute)
-        if let capture = composition.tracks(withMediaType: .audio).first {
-            let p = AVMutableAudioMixInputParameters(track: capture)
-            for sr in segmentRanges {
+        // Capture audio lives on up to TWO tracks (ping-pong, index = segment order % 2). A crossfade overlaps
+        // segment i's track with segment i+1's; we ramp each segment's gain in/out across its OWN output range,
+        // and the ramp-out of the outgoing segment coincides with the ramp-in of the incoming one over the
+        // overlap window — so the sum never spikes above the two segments' target gains.
+        let captureTracks = composition.tracks(withMediaType: .audio).prefix(soundtrackTrack == nil ? 2 : 2)
+        let captureArr = Array(captureTracks)
+        for (idx, track) in captureArr.enumerated() where track != soundtrackTrack {
+            let p = AVMutableAudioMixInputParameters(track: track)
+            // segments placed on THIS track (every other segment)
+            for (i, sr) in segmentRanges.enumerated() where i % 2 == idx {
                 let g = NativeAudioPolicy.captureGain(nativeAudio: sr.segment.nativeAudio)
                 let r = sr.range
-                let inStart = r.start
                 let inEnd = CMTimeAdd(r.start, ramp)
                 let outStart = CMTimeSubtract(CMTimeAdd(r.start, r.duration), ramp)
                 let outEnd = CMTimeAdd(r.start, r.duration)
-                // ramp in to the segment's gain, hold, ramp out — avoids clicks at cuts
-                p.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: g, timeRange: CMTimeRange(start: inStart, end: inEnd))
+                p.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: g, timeRange: CMTimeRange(start: r.start, end: inEnd))
                 p.setVolume(g, at: inEnd)
                 p.setVolumeRamp(fromStartVolume: g, toEndVolume: 0.0, timeRange: CMTimeRange(start: outStart, end: outEnd))
             }

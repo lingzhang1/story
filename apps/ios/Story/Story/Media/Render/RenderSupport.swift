@@ -63,9 +63,28 @@ enum DebugEditPlanFixture {
         try JSONDecoder().decode(EditPlanV2.self, from: json)
     }
 
+    /// CASE D (crossfade) — a deterministic plan where segments 1..n carry a 0.3s `dissolve` so the renderer
+    /// overlaps them with an opacity ramp (a REAL crossfade, not a fade-to-black). Needs >=2 Moments.
+    static func crossfade(media: [MomentMedia], outputFormat: String = "vertical") -> EditPlanV2 {
+        var segs: [EditSegmentV2] = []
+        for (i, m) in media.prefix(3).enumerated() {
+            let span = min(3.0, max(1.5, m.durationSeconds))   // >= 1.5s so a 0.3s dissolve fits comfortably
+            segs.append(EditSegmentV2(
+                order: i, assetId: m.momentId.uuidString,
+                sourceStartSeconds: 0.0, sourceEndSeconds: span,
+                outputDurationSeconds: round(span * 100) / 100,
+                speed: 1.0, nativeAudio: "keep", musicAlignment: nil,
+                transition: i == 0 ? nil : Transition(type: "dissolve", durationSeconds: 0.3)))
+        }
+        // output duration = sum of segments minus the overlaps (one 0.3s overlap per dissolve)
+        let dissolves = max(0, segs.count - 1)
+        let total = segs.reduce(0.0) { $0 + $1.outputDurationSeconds } - 0.3 * Double(dissolves)
+        return EditPlanV2(schemaVersion: "edit_plan/2", targetDurationSeconds: round(total * 100) / 100,
+                          outputFormat: outputFormat, musicAssetId: nil, feasible: true, segments: segs)
+    }
+
     /// CASE D (speed) — a deterministic plan exercising 0.5x and 2.0x playback. Needs >=2 Moments; the first
-    /// segment plays at 0.5x (slow), the second at 2.0x (fast). Straight cuts (the engine does not yet render
-    /// crossfades — that is a documented R-b gap, not forced here). output_duration = source span / speed.
+    /// segment plays at 0.5x (slow), the second at 2.0x (fast). Straight cuts. output_duration = span / speed.
     static func speedCases(media: [MomentMedia], outputFormat: String = "vertical") -> EditPlanV2 {
         let speeds: [Double] = [0.5, 2.0, 1.0]
         var segs: [EditSegmentV2] = []

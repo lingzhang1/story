@@ -91,4 +91,57 @@ final class MediaEngineV1Tests: XCTestCase {
                                        musicAnalysis: nil, soundtrackRole: "supportive", nativeAudioPriority: "low")
         XCTAssertThrowsError(try MediaEngineV1().buildComposition(inputs))
     }
+
+    // MARK: - R-b.1 crossfade
+
+    func testTransitionDecodeAndCrossfadeMapping() throws {
+        let json = """
+        {"schema_version":"edit_plan/2","target_duration_seconds":6.0,"output_format":"vertical",
+         "music_asset_id":null,"feasible":true,"segments":[
+           {"order":0,"asset_id":"a","source_start_seconds":0,"source_end_seconds":3,
+            "output_duration_seconds":3,"native_audio":"keep","transition":{"type":"cut"}},
+           {"order":1,"asset_id":"b","source_start_seconds":0,"source_end_seconds":3,
+            "output_duration_seconds":3,"native_audio":"keep","transition":{"type":"dissolve","duration_seconds":0.3}}]}
+        """.data(using: .utf8)!
+        let plan = try DebugEditPlanFixture.decode(json)
+        XCTAssertEqual(plan.segments[0].transition?.type, "cut")
+        XCTAssertEqual(plan.segments[0].transition?.crossfadeSeconds ?? -1, 0.0, accuracy: 0.0001)  // cut => no overlap
+        XCTAssertEqual(plan.segments[1].transition?.type, "dissolve")
+        XCTAssertEqual(plan.segments[1].transition?.crossfadeSeconds ?? -1, 0.3, accuracy: 0.0001)  // dissolve => 0.3 overlap
+    }
+
+    func testDissolveDefaultsToPointThreeWhenDurationOmitted() {
+        XCTAssertEqual(Transition(type: "dissolve", durationSeconds: nil).crossfadeSeconds, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(Transition(type: "fade", durationSeconds: 0.3).crossfadeSeconds, 0.0, accuracy: 0.0001)  // fade != crossfade
+    }
+
+    func testCrossfadeFixtureOverlapAndDuration() {
+        // 3 Moments, 2 dissolves of 0.3s each. output = sum(segments) - 0.3*2.
+        let media = (0..<3).map { _ in MomentMedia(momentId: UUID(), relativePath: "media/x.mov", durationSeconds: 5) }
+        let plan = DebugEditPlanFixture.crossfade(media: media)
+        XCTAssertEqual(plan.segments.count, 3)
+        XCTAssertNil(plan.segments[0].transition)                       // first never crossfades
+        XCTAssertEqual(plan.segments[1].transition?.type, "dissolve")
+        XCTAssertEqual(plan.segments[2].transition?.type, "dissolve")
+        let segSum = plan.segments.reduce(0.0) { $0 + $1.outputDurationSeconds }
+        XCTAssertEqual(plan.targetDurationSeconds, segSum - 0.6, accuracy: 0.01)   // two 0.3s overlaps removed
+    }
+
+    func testSpeedFixtureDurationConsistency() {
+        // 0.5x -> output = span/0.5 (longer); 2.0x -> span/2 (shorter); span fixed at 2.0s head window.
+        let media = (0..<2).map { _ in MomentMedia(momentId: UUID(), relativePath: "media/x.mov", durationSeconds: 5) }
+        let plan = DebugEditPlanFixture.speedCases(media: media)
+        XCTAssertEqual(plan.segments[0].speed, 0.5)
+        XCTAssertEqual(plan.segments[0].outputDurationSeconds, 4.0, accuracy: 0.01)   // 2.0 / 0.5
+        XCTAssertEqual(plan.segments[1].speed, 2.0)
+        XCTAssertEqual(plan.segments[1].outputDurationSeconds, 1.0, accuracy: 0.01)   // 2.0 / 2.0
+    }
+
+    func testMissingMomentFixtureHasUnresolvableFirstSegment() {
+        let media = (0..<2).map { _ in MomentMedia(momentId: UUID(), relativePath: "media/x.mov", durationSeconds: 5) }
+        let plan = DebugEditPlanFixture.missingMoment(media: media)
+        XCTAssertEqual(plan.segments.first?.assetId, "00000000-0000-0000-0000-000000000000")
+        let resolver = MomentResolver.urlResolver(for: media)
+        XCTAssertNil(resolver(plan.segments[0].assetId))                // first is unresolvable -> engine hard-fails
+    }
 }

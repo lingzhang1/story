@@ -26,6 +26,7 @@ struct RenderTestHarnessView: View {
 
     enum FixtureCase: String, CaseIterable, Identifiable {
         case montage = "Montage (A)"
+        case crossfade = "Crossfade 0.3s (D)"
         case speed = "Speed 0.5x/2x (D)"
         case missing = "Missing Moment (F)"
         var id: String { rawValue }
@@ -136,9 +137,10 @@ struct RenderTestHarnessView: View {
         var d = Diagnostics(); d.mode = "fixture: \(fixtureCase.rawValue)"; d.model = "none (deterministic)"
         let plan: EditPlanV2
         switch fixtureCase {
-        case .montage: plan = DebugEditPlanFixture.montage(media: media)
-        case .speed:   plan = DebugEditPlanFixture.speedCases(media: media)
-        case .missing: plan = DebugEditPlanFixture.missingMoment(media: media)
+        case .montage:   plan = DebugEditPlanFixture.montage(media: media)
+        case .crossfade: plan = DebugEditPlanFixture.crossfade(media: media)
+        case .speed:     plan = DebugEditPlanFixture.speedCases(media: media)
+        case .missing:   plan = DebugEditPlanFixture.missingMoment(media: media)
         }
         d.selectedMoments = media.count; d.segments = plan.segments.count; d.plannedDuration = plan.targetDurationSeconds
         diag = d
