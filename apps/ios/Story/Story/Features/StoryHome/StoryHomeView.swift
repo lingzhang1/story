@@ -169,7 +169,16 @@ struct StoryHomeView: View {
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems) { picked in
-            try? useCases.addExistingMedia(to: story, relativePaths: picked)
+            // Import: persist the Moments FIRST (files already durable in MediaStore), THEN enqueue AU for the
+            // imported VIDEOS — same frozen pipeline as directed captures, but contextless (no Shot/Beat). AU
+            // runs in the background; the import never blocks on it. Coverage recomputes when the MU lands.
+            let created = (try? useCases.addExistingMedia(to: story, relativePaths: picked)) ?? []
+            if !created.isEmpty {
+                let auQueue = AssetUnderstandingQueue(context: context)
+                auQueue.enqueueImportedVideos(created)
+                Task { await auQueue.drain() }        // opportunistic; failures leave the job PENDING
+                Task { await refreshAfterCapture() }  // reuse the capture poll: AU lands -> Coverage/Idea update
+            }
         }
         .sheet(isPresented: $showMenu) {
             StoryOptionsSheet(
@@ -191,6 +200,12 @@ struct StoryHomeView: View {
     //   - Only recompute when there is at least one understood Moment to reason from;
     //     an empty / all-pending Story shows the neutral state (pending = unknown).
     private func loadCoverage() async {
+        // R-c.1 legacy backfill: videos imported BEFORE import-AU shipped have no MomentUnderstanding and no
+        // job. Enqueue them once (idempotent — a Moment already understood or already queued is skipped, so
+        // this is a no-op on subsequent opens and never duplicates analysis). Then drain opportunistically.
+        let auQueue = AssetUnderstandingQueue(context: context)
+        let backfilled = auQueue.backfillImports(for: story, context: context)
+        if backfilled > 0 { Task { await auQueue.drain() } }
         await refreshGuideAndCoverage()
     }
 
