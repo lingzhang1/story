@@ -222,4 +222,30 @@ final class ImportedVideoUnderstandingTests: XCTestCase {
         XCTAssertEqual(v.source, originalSource)
         XCTAssertEqual(story.moments.count, 1, "no moment added or removed by enqueue")
     }
+
+    // MARK: - Import progress banner copy (R-c.1 UX)
+
+    func test_importCopy_inFlight_showsCount() {
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 3, done: 1, failed: 0, finished: false)),
+                       "Adding your videos… (1 of 3)")
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 1, done: 0, failed: 0, finished: false)),
+                       "Adding your video…")
+    }
+
+    func test_importCopy_finished_allSucceeded() {
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 2, done: 2, failed: 0, finished: true)),
+                       "Added 2 videos.")
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 1, done: 1, failed: 0, finished: true)),
+                       "Added your video.")
+    }
+
+    func test_importCopy_finished_partialFailure_isHonest() {
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 3, done: 2, failed: 1, finished: true)),
+                       "Added 2 · 1 couldn't be added.")
+    }
+
+    func test_importCopy_finished_allFailed() {
+        XCTAssertEqual(StoryImportCopy.line(for: ImportProgress(total: 2, done: 0, failed: 2, finished: true)),
+                       "Couldn't add those videos. Please try again.")
+    }
 }

@@ -7,17 +7,54 @@ import AVFoundation
 // back (relativePath, durationSeconds) for StoryUseCases.addExistingMedia.
 // Local/mechanical only — NO AI analysis (the analyze path stays disabled;
 // ui-capability-matrix). C3.5.
+//
+// R-c.1 UX: copying picked videos out of the Photos library (often an iCloud
+// download of the full file) can take seconds with NO visible change on Story
+// Home, which read as "my import failed". `onProgress` reports the copy as it
+// happens — started (0 of N), each item done (k of N), and finished — so the
+// caller can show an honest, non-blocking "Adding your videos…" signal.
+
+/// Progress of a running import, driven from the picker. `done`/`total` count
+/// COPIED items; `failed` counts items that couldn't be read/copied (reported at
+/// the end so the user is never told "done" when some silently dropped).
+struct ImportProgress: Equatable {
+    var total: Int
+    var done: Int
+    var failed: Int
+    var finished: Bool
+    static let idle = ImportProgress(total: 0, done: 0, failed: 0, finished: true)
+}
+
+/// Pure mapping from import progress to an honest one-line banner. Extracted so it's unit-testable without a
+/// SwiftUI host. Never says "done" while work is in flight, and surfaces partial failures plainly.
+enum StoryImportCopy {
+    static func line(for p: ImportProgress) -> String {
+        if !p.finished {
+            // In flight: "Adding your videos… (k of N)".
+            return p.total > 1 ? "Adding your videos… (\(p.done) of \(p.total))" : "Adding your video…"
+        }
+        // Finished.
+        if p.done == 0 { return "Couldn't add those videos. Please try again." }
+        if p.failed > 0 {
+            return "Added \(p.done) · \(p.failed) couldn't be added."
+        }
+        return p.done > 1 ? "Added \(p.done) videos." : "Added your video."
+    }
+}
+
 extension View {
     func photosPickerSheet(
         isPresented: Binding<Bool>,
+        onProgress: @escaping (ImportProgress) -> Void = { _ in },
         onPicked: @escaping ([(path: String, duration: Double)]) -> Void
     ) -> some View {
-        modifier(PhotosPickerModifier(isPresented: isPresented, onPicked: onPicked))
+        modifier(PhotosPickerModifier(isPresented: isPresented, onProgress: onProgress, onPicked: onPicked))
     }
 }
 
 private struct PhotosPickerModifier: ViewModifier {
     @Binding var isPresented: Bool
+    let onProgress: (ImportProgress) -> Void
     let onPicked: ([(path: String, duration: Double)]) -> Void
     @State private var selection: [PhotosPickerItem] = []
 
@@ -32,9 +69,17 @@ private struct PhotosPickerModifier: ViewModifier {
     }
 
     private func importAll(_ items: [PhotosPickerItem]) async {
+        let total = items.count
+        await report(ImportProgress(total: total, done: 0, failed: 0, finished: false))
+
         var results: [(path: String, duration: Double)] = []
+        var failed = 0
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                failed += 1
+                await report(ImportProgress(total: total, done: results.count, failed: failed, finished: false))
+                continue
+            }
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString + ".mov")
             do {
@@ -42,12 +87,21 @@ private struct PhotosPickerModifier: ViewModifier {
                 let dur = CMTimeGetSeconds(AVURLAsset(url: tmp).duration)
                 let rel = try MediaStore.shared.adoptCapturedFile(tempURL: tmp)
                 results.append((rel, dur.isFinite ? dur : 0))
-            } catch { continue }
+            } catch {
+                failed += 1
+            }
+            await report(ImportProgress(total: total, done: results.count, failed: failed, finished: false))
         }
         let final = results
+        let finalFailed = failed
         await MainActor.run {
             selection = []
             if !final.isEmpty { onPicked(final) }
+            onProgress(ImportProgress(total: total, done: final.count, failed: finalFailed, finished: true))
         }
+    }
+
+    private func report(_ p: ImportProgress) async {
+        await MainActor.run { onProgress(p) }
     }
 }

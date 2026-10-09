@@ -19,6 +19,9 @@ struct StoryHomeView: View {
     @State private var pickerItems = false
     @State private var showMoments = false
     @State private var confirmLifecycle = false
+    /// R-c.1 UX: live import progress so the user sees "Adding your videos…" instead of a frozen Home while
+    /// picked videos are copied out of Photos (can be an iCloud download). nil = no import in flight.
+    @State private var importProgress: ImportProgress?
     // E2-c: an opportunity-driven capture (Story Idea Show-me / Guide possibility Shoot). When set,
     // the scan flow carries this selected_opportunity into Director. Identifiable wrapper for cover(item:).
     @State private var pendingOpportunity: OpportunityLaunch?
@@ -152,6 +155,7 @@ struct StoryHomeView: View {
             .padding(.horizontal, 20)
         }
         .storyBackground()
+        .overlay(alignment: .top) { importBanner }
         .toolbar(.hidden, for: .navigationBar)
         .task(id: story.id) { await loadCoverage() }
         .fullScreenCover(isPresented: $showCapture, onDismiss: {
@@ -168,7 +172,16 @@ struct StoryHomeView: View {
         }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
-        .photosPickerSheet(isPresented: $pickerItems) { picked in
+        .photosPickerSheet(isPresented: $pickerItems, onProgress: { p in
+            // Non-blocking live signal while videos copy out of Photos. Clear ~1.2s after finish so a
+            // success/partial-failure line is briefly visible, then falls away.
+            importProgress = p.finished && p.done == 0 && p.failed == 0 ? nil : p
+            if p.finished {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    if importProgress?.finished == true { importProgress = nil }
+                }
+            }
+        }) { picked in
             // Import: persist the Moments FIRST (files already durable in MediaStore), THEN enqueue AU for the
             // imported VIDEOS — same frozen pipeline as directed captures, but contextless (no Shot/Beat). AU
             // runs in the background; the import never blocks on it. Coverage recomputes when the MU lands.
@@ -242,6 +255,26 @@ struct StoryHomeView: View {
     /// After returning from capture, the new Moment's Asset Understanding runs ASYNCHRONOUSLY and is
     /// usually NOT complete yet. Poll a few times so Coverage (and the Story Idea) recompute once AU
     /// lands — otherwise the Idea/Guide-state would stay stale until the next manual revisit.
+
+    // R-c.1 UX: a non-blocking banner shown while picked videos copy out of Photos (so the user isn't left
+    // staring at an unchanged Home wondering if the import failed). Driven purely by importProgress.
+    @ViewBuilder
+    private var importBanner: some View {
+        if let p = importProgress {
+            Text(StoryImportCopy.line(for: p))
+                .font(StoryTheme.body(13))
+                .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                .padding(.vertical, 10).padding(.horizontal, 18)
+                .background(StoryTheme.surfaceAlt, in: Capsule())
+                .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.12), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: importProgress)
+                .accessibilityLabel(StoryImportCopy.line(for: p))
+        }
+    }
+
     private func refreshAfterCapture() async {
         let engine = coverageEngine
         var lastCompleted = engine.currentInputs(for: story).completedMUValues.count
