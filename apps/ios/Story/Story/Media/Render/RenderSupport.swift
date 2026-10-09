@@ -181,7 +181,10 @@ enum EditPlanRequestBuilder {
     static func build(story: StoryModel,
                       context: ModelContext,
                       targetSeconds: Double? = nil,
-                      outputFormat: String = "vertical") throws -> Build {
+                      outputFormat: String = "vertical",
+                      musicPlan: JSONValue? = nil,
+                      musicAssetId: String? = nil,
+                      musicAnalysis: JSONValue? = nil) throws -> Build {
         // Resolvable local media, keyed by Moment id.
         let media = MomentResolver.resolve(moments: story.moments)
         let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
@@ -230,7 +233,10 @@ enum EditPlanRequestBuilder {
             storyGuide: .object([:]),                   // optional; omitted-equivalent
             storyCoverage: .object([:]),                // optional; omitted-equivalent
             moments: moments,
-            outputFormat: outputFormat)
+            outputFormat: outputFormat,
+            musicPlan: musicPlan,                       // R-d: present => music-aware planning; nil => no-music parity
+            musicAssetId: musicAssetId,
+            musicAnalysis: musicAnalysis)
 
         return Build(request: req, includedMedia: included, excludedMomentIds: excluded)
     }

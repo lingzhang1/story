@@ -99,9 +99,10 @@ struct StoryResultView: View {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
     }
 
-    // R-c: nothing requests a soundtrack, so this is always createdWithoutMusic.
+    // R-c renders without music; R-d may bake a real soundtrack. Honest: show the actual track title when the
+    // output carries one, else the no-music line. NEVER a fabricated name.
     private var music: MusicPresentation {
-        MusicPresentation.decide(intendedSoundtrack: false, soundtrackIncluded: false)
+        MusicPresentation.decide(intendedSoundtrack: false, soundtrackIncluded: output.soundtrackTitle != nil)
     }
 
     private var lengthLabel: String {
@@ -192,8 +193,8 @@ struct StoryResultView: View {
 
     private var actionPanel: some View {
         VStack(spacing: 10) {
-            // Honest no-music line (never a fake track).
-            Text(music.copy)
+            // Music line: the REAL track title when a soundtrack was baked in (R-d), else honest no-music.
+            Text(output.soundtrackTitle.map { "♫ \($0)" } ?? music.copy)
                 .font(StoryTheme.body(12))
                 .foregroundStyle(StoryTheme.cream.opacity(0.3))
 

@@ -25,7 +25,11 @@ struct EditPlanRequestDTO: Encodable {
     let storyCoverage: JSONValue
     let moments: [JSONValue]               // each: {id, duration_seconds, useful_segments:[[a,b],...]}
     let outputFormat: String               // vertical | square | landscape
-    // No-music mode: music_plan / music_asset_id / music_analysis intentionally omitted.
+    // Music is OPTIONAL (R-d). When present, the planner plans MUSIC-AWARE; when nil these keys are OMITTED
+    // from the wire body so a no-music request is byte-identical to the device-verified R-c path.
+    var musicPlan: JSONValue? = nil        // frozen music_plan/1
+    var musicAssetId: String? = nil        // selected Epidemic track id
+    var musicAnalysis: JSONValue? = nil    // frozen music_analysis/1 for the selected track
 
     enum CodingKeys: String, CodingKey {
         case storyId = "story_id"
@@ -35,6 +39,24 @@ struct EditPlanRequestDTO: Encodable {
         case storyCoverage = "story_coverage"
         case moments
         case outputFormat = "output_format"
+        case musicPlan = "music_plan"
+        case musicAssetId = "music_asset_id"
+        case musicAnalysis = "music_analysis"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(storyId, forKey: .storyId)
+        try c.encode(creativeIntentId, forKey: .creativeIntentId)
+        try c.encode(creativeIntent, forKey: .creativeIntent)
+        try c.encode(storyGuide, forKey: .storyGuide)
+        try c.encode(storyCoverage, forKey: .storyCoverage)
+        try c.encode(moments, forKey: .moments)
+        try c.encode(outputFormat, forKey: .outputFormat)
+        // Omit music keys entirely when nil (no-music parity).
+        if let musicPlan { try c.encode(musicPlan, forKey: .musicPlan) }
+        if let musicAssetId { try c.encode(musicAssetId, forKey: .musicAssetId) }
+        if let musicAnalysis { try c.encode(musicAnalysis, forKey: .musicAnalysis) }
     }
 }
 

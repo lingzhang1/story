@@ -127,6 +127,22 @@ final class StoryCreationCoordinator {
     private let musicAnalysis: MusicAnalysisV1?
     private let soundtrackURL: URL?
 
+    /// R-d: a music selection RESOLVED by the UI (MusicPlan + chosen track + its analysis + a downloaded
+    /// local soundtrack file). Set per-run via create(for:music:). When nil the pipeline runs the
+    /// device-verified no-music path unchanged. The planner plans MUSIC-AWARE and the renderer mixes the
+    /// soundtrack only when this is present; a music failure upstream simply leaves it nil (no-music fallback).
+    struct MusicSelection {
+        let musicPlanJSON: JSONValue       // frozen music_plan/1 (threaded into the planner request)
+        let trackId: String                // selected Epidemic track id
+        let analysisJSON: JSONValue        // frozen music_analysis/1 for the planner request
+        let analysis: MusicAnalysisV1      // decoded, for the renderer's beat/highlight alignment
+        let soundtrackURL: URL             // local downloaded audio file for the render
+        let soundtrackRole: String         // from the plan's audio_strategy
+        let nativeAudioPriority: String
+        let trackTitle: String
+    }
+    private var pendingMusic: MusicSelection?
+
     // In-flight task + cancel flag + the partial output path to clean up on cancel/failure.
     private var task: Task<Void, Never>?
     private var cancelRequested = false
@@ -136,6 +152,7 @@ final class StoryCreationCoordinator {
     private var lastStory: StoryModel?
     private var lastOutputFormat: String = "vertical"
     private var lastTargetSeconds: Double?
+    private var lastMusic: MusicSelection?
 
     init(
         planner: EditPlanning,
@@ -162,13 +179,20 @@ final class StoryCreationCoordinator {
     /// Begin creating a video for `story`. Refuses a second concurrent creation
     /// (duplicate-job guard). Returns immediately; progress is observable via `state`.
     func create(for story: StoryModel, outputFormat: String = "vertical", targetSeconds: Double? = nil) {
-        guard !isCreating else {
-            // Do NOT clobber the running state; surface the refusal honestly and keep going.
-            return
-        }
+        createWithMusic(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: nil)
+    }
+
+    /// R-d: begin creation with a RESOLVED music selection (or nil for no-music). The UI resolves music
+    /// (MusicPlan -> candidates -> pick -> download) and hands it in; the pipeline then plans music-aware and
+    /// renders with the soundtrack. A nil selection is the exact no-music path.
+    func createWithMusic(for story: StoryModel, outputFormat: String = "vertical",
+                         targetSeconds: Double? = nil, music: MusicSelection?) {
+        guard !isCreating else { return }
         lastStory = story
         lastOutputFormat = outputFormat
         lastTargetSeconds = targetSeconds
+        pendingMusic = music
+        lastMusic = music
         isCreating = true
         cancelRequested = false
         partialRelativePath = nil
@@ -187,7 +211,7 @@ final class StoryCreationCoordinator {
     /// Retry after a recoverable failure. No-op unless we are in `.failed` with a remembered request.
     func retry() {
         guard case .failed = state, let story = lastStory, !isCreating else { return }
-        create(for: story, outputFormat: lastOutputFormat, targetSeconds: lastTargetSeconds)
+        createWithMusic(for: story, outputFormat: lastOutputFormat, targetSeconds: lastTargetSeconds, music: lastMusic)
     }
 
     /// Accept a SHORTER duration after an insufficient-material preflight verdict and re-run. The shorter value
@@ -197,7 +221,7 @@ final class StoryCreationCoordinator {
     func createShorter(targetSeconds: Double) {
         guard case .failed = state, let story = lastStory, !isCreating else { return }
         guard case .insufficientMaterial = lastFailure else { return }
-        create(for: story, outputFormat: lastOutputFormat, targetSeconds: targetSeconds)
+        createWithMusic(for: story, outputFormat: lastOutputFormat, targetSeconds: targetSeconds, music: lastMusic)
     }
 
     // MARK: - Pipeline
@@ -210,7 +234,10 @@ final class StoryCreationCoordinator {
         let build: EditPlanRequestBuilder.Build
         do {
             build = try EditPlanRequestBuilder.build(
-                story: story, context: context, targetSeconds: targetSeconds, outputFormat: outputFormat)
+                story: story, context: context, targetSeconds: targetSeconds, outputFormat: outputFormat,
+                musicPlan: pendingMusic?.musicPlanJSON,
+                musicAssetId: pendingMusic?.trackId,
+                musicAnalysis: pendingMusic?.analysisJSON)
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
@@ -266,10 +293,10 @@ final class StoryCreationCoordinator {
         let inputs = MediaEngineInputs(
             plan: plan,
             resolveMomentURL: resolver,
-            soundtrackURL: soundtrackURL,          // R-c: nil. Future music: a temporary licensed file.
-            musicAnalysis: musicAnalysis,          // R-c: nil.
-            soundtrackRole: "supportive",
-            nativeAudioPriority: "selective")
+            soundtrackURL: pendingMusic?.soundtrackURL ?? soundtrackURL,   // R-d: resolved local audio; else nil (no-music)
+            musicAnalysis: pendingMusic?.analysis ?? musicAnalysis,         // R-d: selected-track analysis; else nil
+            soundtrackRole: pendingMusic?.soundtrackRole ?? "supportive",
+            nativeAudioPriority: pendingMusic?.nativeAudioPriority ?? "selective")
 
         let result: RenderResult
         do {
@@ -385,7 +412,8 @@ final class StoryCreationCoordinator {
             outputFormat: plan.outputFormat,
             renderWidth: Double(result.renderSize.width),
             renderHeight: Double(result.renderSize.height),
-            isStale: false)
+            isStale: false,
+            soundtrackTitle: pendingMusic?.trackTitle)
         output.story = story
         context.insert(output)
         story.generatedOutputs.append(output)

@@ -208,6 +208,11 @@ final class GeneratedOutputModel {
     // Advisory UX flag; recomputed, never user-authored.
     var isStale: Bool = false
 
+    /// R-d: the title of the soundtrack baked into THIS output, or nil for a no-music render. Migration-safe
+    /// (optional, defaulted nil) so existing persisted outputs stay valid and read as no-music. Result shows
+    /// the real title when present; NEVER a fabricated track name.
+    var soundtrackTitle: String? = nil
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -221,6 +226,7 @@ final class GeneratedOutputModel {
         renderWidth: Double = 0,
         renderHeight: Double = 0,
         isStale: Bool = false,
+        soundtrackTitle: String? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
@@ -235,6 +241,7 @@ final class GeneratedOutputModel {
         self.renderWidth = renderWidth
         self.renderHeight = renderHeight
         self.isStale = isStale
+        self.soundtrackTitle = soundtrackTitle
         self.createdAt = createdAt
     }
 }

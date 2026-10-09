@@ -111,11 +111,19 @@ struct StoryCreatingView: View {
         }
         .task {
             // Build the real coordinator once and start the pipeline. Prod planner = EditPlannerService,
-            // prod renderer = MediaEngineV1 (device-gated). Music seams omitted -> all nil (no-music).
+            // prod renderer = MediaEngineV1 (device-gated). R-d: resolve a soundtrack FIRST (recommend top
+            // track -> download), then start MUSIC-AWARE creation; if music is unavailable (provider off,
+            // plan/provider failure) fall back to the device-verified no-music path. Music never blocks.
             if coordinator == nil {
                 let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
                 coordinator = coord
-                coord.create(for: story)
+                let resolver = MusicSelectionResolver(context: context)
+                var music: StoryCreationCoordinator.MusicSelection? = nil
+                if let rec = await resolver.recommend(for: story, guideFramingSummary: nil),
+                   let top = rec.topTrackId {
+                    music = await resolver.resolveSelection(recommendation: rec, trackId: top)
+                }
+                coord.createWithMusic(for: story, music: music)
             }
         }
         .onChange(of: completedState) { _, newValue in
