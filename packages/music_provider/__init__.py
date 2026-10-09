@@ -59,9 +59,15 @@ def _require_flag() -> None:
 def load_key(secret_id: str | None = None) -> str:
     """Read the API key from Secrets Manager in-process. Never logged/returned to callers other than the client."""
     import boto3  # noqa
+    from botocore.exceptions import BotoCoreError, ClientError  # noqa
     sid = secret_id or os.environ.get(SECRET_ENV, DEFAULT_SECRET_ID)
     sm = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-    s = (sm.get_secret_value(SecretId=sid).get("SecretString") or "").strip()
+    try:
+        s = (sm.get_secret_value(SecretId=sid).get("SecretString") or "").strip()
+    except (ClientError, BotoCoreError) as e:
+        # Missing secret, denied access (instance role lacks secretsmanager:GetSecretValue), region/network
+        # fault — all surface as a clean auth failure the endpoint maps to 503, never an unhandled 500.
+        raise EpidemicAuthError(f"could not read Epidemic key secret '{sid}': {type(e).__name__}") from e
     if s.startswith("{"):
         d = json.loads(s)
         for k in ("EPIDEMIC_API_KEY", "api_key", "apiKey", "key", "value"):

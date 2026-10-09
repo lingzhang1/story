@@ -150,3 +150,19 @@ def test_music_candidates_endpoint_ranks_when_enabled(monkeypatch):
     cands = r.json()["candidates"]
     assert cands[0]["track_id"] == "t_fit"  # mood + instrumental wins, not the louder/higher-bpm track
     assert "factors" in cands[0]
+
+
+def test_load_key_wraps_secret_access_error_as_auth(monkeypatch):
+    """A denied/missing Secrets Manager read must surface as EpidemicAuthError (clean 503 upstream),
+    never an unhandled boto ClientError (500)."""
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    import botocore.exceptions as be
+
+    class _SM:
+        def get_secret_value(self, **k):
+            raise be.ClientError({"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "GetSecretValue")
+
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: _SM())
+    with pytest.raises(mp.EpidemicAuthError):
+        mp.load_key("story-epidemic-key")

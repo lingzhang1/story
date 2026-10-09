@@ -9,7 +9,7 @@
 #   docker build -f apps/api/Dockerfile -t story-api .
 
 # ---- builder ------------------------------------------------------------
-FROM python:3.12-slim AS builder
+FROM public.ecr.aws/docker/library/python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
@@ -25,7 +25,7 @@ RUN pip install --prefix=/install/deps \
     "python-multipart"
 
 # ---- runtime ------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM public.ecr.aws/docker/library/python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
