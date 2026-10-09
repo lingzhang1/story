@@ -67,6 +67,7 @@ from edit_planner import (
     EditPlannerEngine,
     EditPlanInputs,
     EditPlanInfeasibleError,
+    MalformedPlanError,
 )
 import music_provider as _mp
 from story_coverage_v2 import (
@@ -604,15 +605,34 @@ def create_app() -> FastAPI:
             music_analysis=body.music_analysis)
         try:
             plan = engine.generate(inputs)
+        except MalformedPlanError as e:
+            # Structurally malformed inputs/plan (e.g. wrong-shaped useful_segments) — a CLIENT fault.
+            # Clean 422, never an unhandled 500.
+            log.warning("edit_plan_malformed", extra={**base, "success": False, "reason": str(e)[:300]})
+            raise HTTPException(status_code=422, detail=f"edit plan input malformed: {e}")
         except EditPlanInfeasibleError as e:
             log.warning("edit_plan_infeasible", extra={**base, "success": False, "reason": str(e)[:300]})
             raise HTTPException(status_code=422, detail=f"edit plan infeasible: {e}")
-        except (StructuredOutputError, ProviderError) as e:
+        except StructuredOutputError as e:
+            # The model produced a schema-valid but NON-executable plan that survived bounded repair.
+            # Distinct from a provider outage so clients/logs do not conflate the two. Still 503 (retryable).
+            diag = getattr(engine, "last_diagnostics", {}) or {}
+            log.warning("edit_plan_invalid_after_repair",
+                        extra={**base, "success": False, "error": str(e)[:300],
+                               "model_calls": diag.get("model_calls"),
+                               "repairs_used": diag.get("executability_repairs_used")})
+            raise HTTPException(status_code=503,
+                                detail="edit plan could not be made executable; retry")
+        except ProviderError as e:
             log.warning("edit_plan_unavailable", extra={**base, "success": False, "error": str(e)[:300]})
             raise HTTPException(status_code=503, detail="edit planner temporarily unavailable; retry")
+        diag = getattr(engine, "last_diagnostics", {}) or {}
         log.info("edit_plan_generated",
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
-                   "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible})
+                   "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible,
+                   "first_pass_executable": diag.get("first_pass_executable"),
+                   "normalized": diag.get("normalized"), "repaired": diag.get("repaired"),
+                   "model_calls": diag.get("model_calls")})
         return plan
 
     @app.post("/v1/music/candidates", status_code=200)

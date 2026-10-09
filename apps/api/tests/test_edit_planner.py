@@ -158,3 +158,236 @@ def test_endpoint_422_on_infeasible():
     r = client.post("/v1/edit-plan", json=_req_body())
     assert r.status_code == 422
     assert "infeasible" in r.json()["detail"].lower()
+
+
+# ===========================================================================
+# R-c executability-repair + deterministic normalization + error semantics.
+# A SeqGateway returns a scripted sequence of plans so we can exercise the
+# repair loop without a live model. No real model is invoked.
+# ===========================================================================
+from edit_planner import (  # noqa: E402
+    MalformedPlanError, normalize_plan, timeline_total_seconds, validate_plan as _vp,
+)
+from model_gateway import StructuredResult, Usage  # noqa: E402
+
+
+class SeqGateway:
+    """Returns plans[0], plans[1], ... on successive calls (clamps at the last)."""
+    def __init__(self, plans):
+        self.plans = plans
+        self.calls = 0
+
+    def generate_structured(self, req):
+        import json as _j
+        p = self.plans[min(self.calls, len(self.plans) - 1)]
+        self.calls += 1
+        return StructuredResult(data=_j.loads(_j.dumps(p)), usage=Usage(100, 40, 140),
+                                attempts=1, model="fake", provider="fake")
+
+
+def _target12_inputs(**over):
+    base = dict(
+        story_id=str(uuid4()), creative_intent_id=str(uuid4()),
+        creative_intent={"target_duration_seconds": 12.0},
+        story_guide={}, story_coverage={},
+        moments=[
+            {"id": M1, "duration_seconds": 8.0, "useful_segments": [[0.0, 6.0]]},
+            {"id": M2, "duration_seconds": 7.0, "useful_segments": [[0.0, 5.0]]},
+        ],
+        music_plan={})
+    base.update(over)
+    return EditPlanInputs(**base)
+
+
+def _plan12(d0, d1, **seg_over):
+    """Two-segment plan for the target-12 inputs; d0/d1 are output_duration_seconds."""
+    s0 = {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 6.0,
+          "output_duration_seconds": d0, "native_audio": "keep"}
+    s1 = {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+          "output_duration_seconds": d1, "native_audio": "keep"}
+    s0.update(seg_over.get("s0", {}))
+    s1.update(seg_over.get("s1", {}))
+    return {"target_duration_seconds": 12.0, "feasible": True, "segments": [s0, s1]}
+
+
+# ---- reproduce the two exact production failures (validator level) ----
+def test_repro_failure1_total_off_target():
+    # 5+5+5 = 15s vs target 12 (>20%) — the first device failure.
+    inp = _target12_inputs(moments=_target12_inputs().moments + [
+        {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 7.5]]}])
+    p = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "native_audio": "keep"},
+        {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "native_audio": "keep"}]}
+    errs = _vp(p, inp)
+    assert any("off target" in e for e in errs)
+
+
+def test_repro_failure2_speed_output_mismatch():
+    # seg source span 7.5 @1.0x but output 2.5 — the second device failure.
+    inp = _target12_inputs(moments=[{"id": M1, "duration_seconds": 9.0, "useful_segments": [[0.0, 7.5]]}])
+    p = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 7.5,
+         "output_duration_seconds": 2.5, "speed": 1.0, "native_audio": "keep"}]}
+    errs = _vp(p, inp)
+    assert any("inconsistent" in e for e in errs)
+
+
+# ---- deterministic normalization: safe rounding only ----
+def test_normalize_snaps_harmless_rounding():
+    inp = _target12_inputs()
+    # 6.03 for a 6.0 span @1.0 is within the snap window -> snapped to 6.0, no model needed.
+    p = _plan12(6.03, 6.0)
+    out, notes = normalize_plan(p, inp)
+    assert out["segments"][0]["output_duration_seconds"] == 6.0
+    assert notes and "snapped" in notes[0]
+    assert not _vp(out, inp)  # now executable
+
+
+def test_normalize_does_not_touch_large_mismatch():
+    inp = _target12_inputs(moments=[{"id": M1, "duration_seconds": 9.0, "useful_segments": [[0.0, 7.5]]}])
+    p = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 7.5,
+         "output_duration_seconds": 2.5, "speed": 1.0, "native_audio": "keep"}]}
+    out, notes = normalize_plan(p, inp)
+    assert notes == []  # a 7.5->2.5 mismatch is NOT auto-corrected
+    assert out["segments"][0]["output_duration_seconds"] == 2.5
+    assert _vp(out, inp)  # still invalid -> must go to model repair
+
+
+def test_normalize_never_changes_speed_or_range():
+    inp = _target12_inputs()
+    p = _plan12(6.03, 6.0, s0={"speed": 1.0})
+    out, _ = normalize_plan(p, inp)
+    s = out["segments"][0]
+    assert s["source_start_seconds"] == 0.0 and s["source_end_seconds"] == 6.0 and s["speed"] == 1.0
+
+
+# ---- the executability-repair loop ----
+def test_valid_plan_accepted_without_repair():
+    inp = _target12_inputs()
+    eng = RealEditPlannerEngine(SeqGateway([_plan12(6.0, 6.0)]))
+    plan = eng.generate(inp)
+    assert len(plan.segments) == 2
+    assert eng.last_diagnostics["first_pass_executable"] is True
+    assert eng.last_diagnostics["model_calls"] == 1
+    assert eng.last_diagnostics["repaired"] is False
+
+
+def test_invalid_plan_repaired_successfully():
+    inp = _target12_inputs()
+    bad = _plan12(5.0, 5.0)         # 10s... actually within tol; make it clearly off:
+    bad = _plan12(2.0, 2.0)         # 4s total vs 12 (>20% low) -> invalid
+    good = _plan12(6.0, 6.0)        # 12s -> valid
+    eng = RealEditPlannerEngine(SeqGateway([bad, good]))
+    plan = eng.generate(inp)
+    assert len(plan.segments) == 2
+    assert eng.last_diagnostics["first_pass_executable"] is False
+    assert eng.last_diagnostics["executability_repairs_used"] == 1
+    assert eng.last_diagnostics["model_calls"] == 2
+    assert eng.last_diagnostics["final"] == "executable"
+
+
+def test_repair_still_invalid_raises_structured_failure():
+    inp = _target12_inputs()
+    bad = _plan12(2.0, 2.0)
+    eng = RealEditPlannerEngine(SeqGateway([bad, bad]))
+    with pytest.raises(StructuredOutputError):
+        eng.generate(inp)
+    assert eng.last_diagnostics["final"] == "invalid_after_repair"
+    assert eng.last_diagnostics["model_calls"] == 2  # one initial + one repair, bounded
+
+
+def test_repair_bounded_no_duplicate_loops():
+    inp = _target12_inputs()
+    eng = RealEditPlannerEngine(SeqGateway([_plan12(2.0, 2.0), _plan12(2.0, 2.0), _plan12(6.0, 6.0)]))
+    with pytest.raises(StructuredOutputError):
+        eng.generate(inp)
+    # exactly 1 initial + 1 repair; never consumes the 3rd scripted plan.
+    assert eng.last_diagnostics["model_calls"] == 2
+
+
+def test_repair_preserves_no_invented_moments():
+    inp = _target12_inputs()
+    bad = _plan12(6.0, 6.0, s0={"asset_id": str(uuid4())})  # invented id
+    eng = RealEditPlannerEngine(SeqGateway([bad, bad]))
+    with pytest.raises(StructuredOutputError):
+        eng.generate(inp)  # invented moment never passes
+
+
+# ---- duration accounting with dissolves (crossfade overlap) ----
+def test_total_accounts_for_crossfade_overlap():
+    segs = [
+        {"output_duration_seconds": 6.0},
+        {"output_duration_seconds": 6.0, "transition": {"type": "crossfade", "duration_seconds": 0.3}},
+    ]
+    # raw 12.0 minus 0.3 overlap = 11.7
+    assert abs(timeline_total_seconds(segs) - 11.7) < 1e-9
+    # fade_in does NOT shorten the timeline
+    segs2 = [{"output_duration_seconds": 6.0, "transition": {"type": "fade_in", "duration_seconds": 0.3}}]
+    assert abs(timeline_total_seconds(segs2) - 6.0) < 1e-9
+
+
+def test_crossfade_plan_within_tolerance_valid():
+    inp = _target12_inputs()
+    # 6.6 + 6.6 - 0.6 overlap = 12.6 (within 20% of 12) and each output == span -> executable
+    p = _plan12(6.6, 6.6,
+                s0={"source_end_seconds": 6.0, "source_start_seconds": 0.0},
+                s1={"source_end_seconds": 5.0, "source_start_seconds": 0.0,
+                    "transition": {"type": "crossfade", "duration_seconds": 0.6}})
+    # make outputs match spans exactly to isolate the total check
+    p["segments"][0]["output_duration_seconds"] = 6.0
+    p["segments"][1]["output_duration_seconds"] = 6.0
+    errs = _vp(p, inp)
+    assert not any("off target" in e for e in errs)
+
+
+# ---- native-audio + music-alignment semantics unchanged ----
+def test_native_audio_semantics_unchanged():
+    inp = _target12_inputs()
+    for na in ("keep", "duck", "mute"):
+        p = _plan12(6.0, 6.0, s0={"native_audio": na})
+        assert not any("native_audio" in e for e in _vp(p, inp))
+    bad = _plan12(6.0, 6.0, s0={"native_audio": "loud"})
+    assert any("native_audio" in e for e in _vp(bad, inp))
+
+
+def test_music_alignment_without_analysis_still_rejected():
+    inp = _target12_inputs()
+    p = _plan12(6.0, 6.0, s0={"music_alignment": {"anchor": "downbeat"}})
+    assert any("music_alignment" in e for e in _vp(p, inp))
+
+
+# ---- malformed useful_segments -> clean 422 at the endpoint (no 500) ----
+def test_endpoint_422_on_malformed_useful_segments():
+    client = _client(RealEditPlannerEngine(SeqGateway([_plan12(6.0, 6.0)])))
+    body = _req_body()
+    # dict-shaped junk that the OLD validator crashed on (KeyError -> 500)
+    body["moments"][0]["useful_segments"] = ["garbage"]
+    r = client.post("/v1/edit-plan", json=body)
+    assert r.status_code == 422, r.text
+    assert "malformed" in r.json()["detail"].lower()
+
+
+def test_endpoint_dict_useful_segments_tolerated():
+    client = _client(RealEditPlannerEngine(SeqGateway([_plan12(6.0, 6.0)])))
+    i = _target12_inputs()
+    body = {"story_id": i.story_id, "creative_intent_id": i.creative_intent_id,
+            "creative_intent": i.creative_intent, "story_guide": i.story_guide,
+            "story_coverage": i.story_coverage,
+            "moments": [dict(m) for m in i.moments], "music_plan": i.music_plan}
+    body["moments"][0]["useful_segments"] = [{"start": 0.0, "end": 6.0}]  # dict shape read defensively
+    r = client.post("/v1/edit-plan", json=body)
+    assert r.status_code == 200, r.text
+
+
+def test_endpoint_503_distinct_from_malformed_and_infeasible():
+    # model-invalid-after-repair -> 503 with the executability detail, not the generic outage text.
+    inp_bad = _plan12(2.0, 2.0)
+    client = _client(RealEditPlannerEngine(SeqGateway([inp_bad, inp_bad])))
+    r = client.post("/v1/edit-plan", json=_req_body())
+    assert r.status_code == 503
+    assert "executable" in r.json()["detail"].lower()
