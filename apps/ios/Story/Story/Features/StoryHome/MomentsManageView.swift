@@ -1,16 +1,22 @@
 import SwiftUI
 import SwiftData
+import AVKit
 
 // Moments — frozen Figma full-screen moment grid (ScreenMoments). Shows every
-// Moment in the Story as square tiles; tapping a tile offers remove-from-Story
-// (local/mechanical, StoryUseCases.removeMoment — no generation, no AI). The
-// Story's status is never changed here.
+// Moment in the Story as square tiles; TAP a tile to PREVIEW it (video -> player,
+// image -> full image), or tap the ✕ to remove-from-Story (local/mechanical,
+// StoryUseCases.removeMoment — no generation, no AI). The Story's status is never
+// changed here. R-c.1: also hosts the SHARED "+ Add photos or videos" import flow
+// (same picker + progress banner as Story Home).
 struct MomentsManageView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
 
     @State private var pendingRemove: MomentModel?
+    @State private var previewMoment: MomentModel?
+    @State private var pickerItems = false
+    @State private var importProgress: ImportProgress?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -39,25 +45,58 @@ struct MomentsManageView: View {
                 .padding(.top, 8)
 
                 if moments.isEmpty {
-                    StoryEmptyState(text: "No moments yet. Shoot one from your Story.")
+                    StoryEmptyState(text: "No moments yet. Shoot one, or add photos or videos below.")
                         .padding(.top, 40)
                 } else {
                     LazyVGrid(columns: cols, spacing: 2) {
                         ForEach(moments) { m in
-                            MomentManageTile(moment: m) { pendingRemove = m }
+                            MomentManageTile(moment: m,
+                                             onTap: { previewMoment = m },
+                                             onRemove: { pendingRemove = m })
                         }
                     }
                     .padding(.top, 18)
-                    Text("Tap the ✕ on a moment to remove it from this Story.")
+                    Text("Tap a moment to preview · tap ✕ to remove it from this Story.")
                         .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
                         .padding(.top, 14)
                 }
+
+                // R-c.1: the SAME import flow as Story Home (shared picker + progress banner).
+                Button { pickerItems = true } label: {
+                    Text("+ Add photos or videos")
+                        .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream.opacity(0.75))
+                        .frame(maxWidth: .infinity).padding(.vertical, 13)
+                        .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.14), lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 20)
+
                 Spacer(minLength: 40)
             }
             .padding(.horizontal, 20)
         }
         .storyBackground()
+        .overlay(alignment: .top) { importBanner }
         .toolbar(.hidden, for: .navigationBar)
+        .fullScreenCover(item: $previewMoment) { m in
+            MomentPreviewView(moment: m)
+        }
+        .photosPickerSheet(isPresented: $pickerItems, onProgress: { p in
+            importProgress = p.finished && p.done == 0 && p.failed == 0 ? nil : p
+            if p.finished {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    if importProgress?.finished == true { importProgress = nil }
+                }
+            }
+        }) { picked in
+            // Shared import: persist Moments, then enqueue AU for the imported videos (contextless) + drain.
+            let created = (try? useCases.addExistingMedia(to: story, relativePaths: picked)) ?? []
+            if !created.isEmpty {
+                let auQueue = AssetUnderstandingQueue(context: context)
+                auQueue.enqueueImportedVideos(created)
+                Task { await auQueue.drain() }
+            }
+        }
         .confirmationDialog("Remove this moment?",
                             isPresented: Binding(get: { pendingRemove != nil },
                                                  set: { if !$0 { pendingRemove = nil } }),
@@ -71,12 +110,31 @@ struct MomentsManageView: View {
             Text("The moment is removed from this Story. This does not delete the original from your library.")
         }
     }
+
+    // R-c.1 shared import banner (same copy/behavior as Story Home).
+    @ViewBuilder
+    private var importBanner: some View {
+        if let p = importProgress {
+            Text(StoryImportCopy.line(for: p))
+                .font(StoryTheme.body(13))
+                .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                .padding(.vertical, 10).padding(.horizontal, 18)
+                .background(StoryTheme.surfaceAlt, in: Capsule())
+                .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.12), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: importProgress)
+        }
+    }
 }
 
 private struct MomentManageTile: View {
     let moment: MomentModel
+    var onTap: () -> Void
     var onRemove: () -> Void
     @State private var thumb: UIImage?
+    private var isVideo: Bool { (moment.asset?.durationSeconds ?? 0) > 0 }
     var body: some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
@@ -86,6 +144,17 @@ private struct MomentManageTile: View {
                 else { StoryTheme.surfaceAlt }
             }
             .clipped()
+            .overlay(alignment: .center) {
+                // A play glyph marks a video tile (vs a still) and signals the tile is tappable to preview.
+                if isVideo {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.85))
+                        .shadow(color: .black.opacity(0.4), radius: 3)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
             .overlay(alignment: .topTrailing) {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
@@ -99,5 +168,67 @@ private struct MomentManageTile: View {
                 .accessibilityLabel("Remove this moment")
             }
             .task { thumb = await MomentThumbnailCache.shared.thumbnail(for: moment) }
+    }
+}
+
+// MomentPreviewView — full-screen preview of a single Moment's source media. Video -> AVPlayer (tap to
+// play/pause, autoplays once); still image (duration 0) -> full image. Read-only; never mutates the Moment.
+private struct MomentPreviewView: View {
+    let moment: MomentModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var image: UIImage?
+
+    private var isVideo: Bool { (moment.asset?.durationSeconds ?? 0) > 0 }
+    private var mediaURL: URL? {
+        guard let rel = moment.asset?.relativePath, MediaStore.shared.fileExists(relativePath: rel) else { return nil }
+        return MediaStore.shared.absoluteURL(for: rel)
+    }
+
+    var body: some View {
+        ZStack {
+            StoryTheme.ink.ignoresSafeArea()
+            content
+            VStack {
+                HStack {
+                    Button { dismiss() } label: {
+                        Text("✕").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                            .frame(width: 44, height: 44)
+                    }.buttonStyle(.plain).accessibilityLabel("Close preview")
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 8).padding(.top, 8)
+        }
+        .onDisappear { player?.pause() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let url = mediaURL {
+            if isVideo {
+                VideoPlayer(player: player)
+                    .ignoresSafeArea()
+                    .onAppear {
+                        let p = AVPlayer(url: url)
+                        player = p
+                        p.play()
+                    }
+            } else if let image {
+                Image(uiImage: image).resizable().scaledToFit().ignoresSafeArea()
+            } else {
+                Color.clear.task {
+                    image = UIImage(contentsOfFile: url.path)
+                }
+            }
+        } else {
+            VStack(spacing: 10) {
+                Text("This media isn't available.")
+                    .font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+                Text("The original file wasn't found on this device.")
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+            }
+        }
     }
 }

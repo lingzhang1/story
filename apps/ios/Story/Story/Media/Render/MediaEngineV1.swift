@@ -280,7 +280,7 @@ struct MediaEngineV1 {
                   let v = AVURLAsset(url: url).tracks(withMediaType: .video).first else {
                 throw MediaEngineError.missingMoment(segment.assetId)
             }
-            return Self.aspectFillTransform(natural: v.naturalSize, preferred: v.preferredTransform, render: renderSize)
+            return Self.aspectFitTransform(natural: v.naturalSize, preferred: v.preferredTransform, render: renderSize)
         }
 
         // AVVideoComposition.instructions MUST tile [0, total] CONTIGUOUSLY with NO gaps and NO overlapping
@@ -367,13 +367,16 @@ struct MediaEngineV1 {
                                 totalDuration: total)
     }
 
-    /// Aspect-fill center-crop transform mapping a source track into the render rect.
-    static func aspectFillTransform(natural: CGSize, preferred: CGAffineTransform, render: CGSize) -> CGAffineTransform {
+    /// Aspect-FIT (contain) transform mapping a source track fully inside the render rect — NO cropping.
+    /// The whole source frame is scaled to fit within the output and centered; any area the source doesn't
+    /// cover shows the composition background (black). This replaced the earlier aspect-FILL center-crop,
+    /// which cut off the sides/top of off-aspect footage (e.g. a person edged out of a 9:16 frame).
+    static func aspectFitTransform(natural: CGSize, preferred: CGAffineTransform, render: CGSize) -> CGAffineTransform {
         // apply the source's preferred (orientation) transform first
         let oriented = natural.applying(preferred)
         let w = abs(oriented.width == 0 ? natural.width : oriented.width)
         let h = abs(oriented.height == 0 ? natural.height : oriented.height)
-        let scale = max(render.width / w, render.height / h)
+        let scale = min(render.width / w, render.height / h)   // FIT: smallest scale that fits inside
         let tx = (render.width - w * scale) / 2.0
         let ty = (render.height - h * scale) / 2.0
         return preferred

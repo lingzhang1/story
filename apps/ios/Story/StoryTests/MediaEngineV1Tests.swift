@@ -14,14 +14,21 @@ final class MediaEngineV1Tests: XCTestCase {
         XCTAssertThrowsError(try OutputSize.render(for: "hexagon"))
     }
 
-    func testAspectFillCentersAndCovers() {
-        // a 1920x1080 landscape source into a 1080x1920 vertical frame -> scale to cover, centered
-        let t = MediaEngineV1.aspectFillTransform(natural: CGSize(width: 1920, height: 1080),
-                                                  preferred: .identity,
-                                                  render: CGSize(width: 1080, height: 1920))
-        // covering a 1080-wide frame from a 1920-wide source after height-fill: scale = max(1080/1920, 1920/1080)
-        XCTAssertGreaterThan(t.a, 1.0)   // scaled up to cover the taller frame
-        XCTAssertEqual(t.a, t.d, accuracy: 0.0001)  // uniform scale (no stretch)
+    func testAspectFitContainsWithoutCropping() {
+        // a 1920x1080 landscape source into a 1080x1920 vertical frame -> scale to FIT inside (contain),
+        // centered, NO cropping. fit scale = min(1080/1920, 1920/1080) = 0.5625 (letterboxed top/bottom).
+        let render = CGSize(width: 1080, height: 1920)
+        let natural = CGSize(width: 1920, height: 1080)
+        let t = MediaEngineV1.aspectFitTransform(natural: natural, preferred: .identity, render: render)
+        XCTAssertEqual(t.a, 0.5625, accuracy: 0.0001)   // fits the 1080-wide frame from a 1920-wide source
+        XCTAssertEqual(t.a, t.d, accuracy: 0.0001)      // uniform scale (no stretch)
+        // The whole source is contained: scaled dimensions never exceed the render rect.
+        XCTAssertLessThanOrEqual(natural.width * t.a, render.width + 0.001)
+        XCTAssertLessThanOrEqual(natural.height * t.d, render.height + 0.001)
+        // Centered: equal letterbox on top and bottom (source is wider-aspect, so it pillarboxes vertically).
+        let ty = (render.height - natural.height * t.d) / 2.0
+        XCTAssertEqual(t.ty, ty, accuracy: 0.001)
+        XCTAssertEqual(t.tx, 0, accuracy: 0.001)        // full width used -> no horizontal offset
     }
 
     func testNativeAudioCaptureGain() {
