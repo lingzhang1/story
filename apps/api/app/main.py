@@ -821,7 +821,14 @@ def create_app() -> FastAPI:
             try:
                 preview = client.preview_url(c.track_id)
             except _mp.EpidemicProviderError:
-                preview = None
+                # The Epidemic /stream (preview) endpoint can return 402 once the free-tier PREVIEW allowance
+                # is spent. The DOWNLOAD link is a separate free-tier allowance and returns the same
+                # {url, expires} shape (a direct, AVPlayer-playable MP3 — the render already uses it), so fall
+                # back to it for the audition. Still best-effort: if both fail, preview stays None.
+                try:
+                    preview = client.download_link(c.track_id)
+                except _mp.EpidemicProviderError:
+                    preview = None
             out.append({"track_id": c.track_id, "title": c.title, "score": c.score,
                         "factors": c.factors, "duration_seconds": c.duration_seconds,
                         "vocal_type": c.vocal_type, "preview_url": preview})
