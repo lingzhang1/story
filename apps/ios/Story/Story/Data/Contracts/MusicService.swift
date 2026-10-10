@@ -13,6 +13,23 @@ import Foundation
 
 // MARK: - Wire models
 
+/// Epidemic returns signed media links as an object {url, expires}, NOT a bare string. Decode defensively:
+/// accept either the object OR a plain string, and expose the url string. (A String-typed field here was the
+/// bug that made the whole /v1/music/candidates response fail to decode -> recommend() returned nil -> no music.)
+struct SignedURL: Decodable, Equatable {
+    let url: String
+    let expires: String?
+    init(from decoder: Decoder) throws {
+        if let s = try? decoder.singleValueContainer().decode(String.self) {
+            url = s; expires = nil; return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        expires = try c.decodeIfPresent(String.self, forKey: .expires)
+    }
+    enum CodingKeys: String, CodingKey { case url, expires }
+}
+
 /// A ranked candidate track (consumer-facing subset — NO BPM/energy curves exposed to the user).
 struct MusicCandidateDTO: Decodable, Equatable, Identifiable {
     let trackId: String
@@ -20,8 +37,9 @@ struct MusicCandidateDTO: Decodable, Equatable, Identifiable {
     let score: Double
     let durationSeconds: Double
     let vocalType: String?
-    let previewURL: String?
+    let previewURL: SignedURL?
     var id: String { trackId }
+    var previewURLString: String? { previewURL?.url }
     enum CodingKeys: String, CodingKey {
         case trackId = "track_id", title, score
         case durationSeconds = "duration_seconds"
@@ -43,7 +61,7 @@ struct MusicCandidatesResponseDTO: Decodable {
 
 struct MusicSoundtrackLinkDTO: Decodable {
     let trackId: String
-    let downloadURL: String
+    let downloadURL: SignedURL
     let usage: String
     let commercialExportEnabled: Bool
     enum CodingKeys: String, CodingKey {
@@ -191,7 +209,7 @@ final class MusicCandidatesService {
     /// non-commercial test use only — the server marks usage='prototyping_test', export OFF.
     func downloadSoundtrack(trackId: String) async throws -> URL {
         let link: MusicSoundtrackLinkDTO = try await postDecode("v1/music/soundtrack", body: MusicTrackRequestDTO(trackId: trackId))
-        guard let url = URL(string: link.downloadURL) else { throw MusicServiceError.badStatus(-1) }
+        guard let url = URL(string: link.downloadURL.url) else { throw MusicServiceError.badStatus(-1) }
         let (data, resp): (Data, URLResponse)
         do { (data, resp) = try await session.data(from: url) }
         catch { throw MusicServiceError.transport(error) }
