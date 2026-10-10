@@ -15,7 +15,7 @@ import os
 from director_engine import DirectorEngine, MockDirectorEngine
 from edit_engine import EditEngine, MockEditEngine
 from story_engine import MockStoryEngine, StoryEngine
-from model_gateway import BedrockModelGateway, ModelGateway
+from model_gateway import BedrockModelGateway, FallbackModelGateway, ModelGateway
 from creative_intent import (
     CreativeIntentEngine,
     MockCreativeIntentEngine,
@@ -203,6 +203,21 @@ def get_music_direction_engine() -> MusicDirectionEngine:
     return DeterministicMusicDirectionEngine()
 
 
+# Milestone R-d.2: Opus primary with a Sonnet FALLBACK on provider failure (throttling/transport). Opus 4.6
+# has a non-adjustable per-DAY token cap; when it is hit, botocore exhausts its retries and the gateway raises
+# ProviderError, which FallbackModelGateway catches and retries on Sonnet 4.6 (a far larger daily budget) so a
+# create degrades in quality rather than failing. StructuredOutputError (bad output) does NOT fall back. The
+# fallback model is config-driven (STORY_LLM_FALLBACK_MODEL); set it empty to DISABLE fallback.
+FALLBACK_MODEL = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+
+
+def _gateway_with_fallback(primary_model: str) -> ModelGateway:
+    primary = BedrockModelGateway(model_id=primary_model)
+    if not FALLBACK_MODEL or FALLBACK_MODEL == primary_model:
+        return primary
+    return FallbackModelGateway(primary, BedrockModelGateway(model_id=FALLBACK_MODEL))
+
+
 def get_edit_planner_engine() -> EditPlannerEngine:
     """Provide the production Edit Planner engine (Milestone M-d, frozen edit_plan/2).
 
@@ -216,7 +231,7 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     # (observed on device: 66.4s vs 55s target -> 503). A second trim recovers these without touching the
     # frozen prompt, EditPlan/2 contract, model, or the ±20% tolerance. Bounded: at most 2 extra Opus calls.
     repairs = int(os.environ.get("STORY_EDIT_PLANNER_REPAIR_ATTEMPTS", "2"))
-    return RealEditPlannerEngine(BedrockModelGateway(model_id=model), executability_repair_attempts=repairs)
+    return RealEditPlannerEngine(_gateway_with_fallback(model), executability_repair_attempts=repairs)
 
 
 def get_music_plan_engine() -> MusicPlanEngine:
@@ -229,7 +244,7 @@ def get_music_plan_engine() -> MusicPlanEngine:
     caller falls back to no-music creation.
     """
     model = os.environ.get("STORY_MUSIC_PLAN_MODEL", MUSIC_PLAN_MODEL)
-    return RealMusicPlanEngine(BedrockModelGateway(model_id=model))
+    return RealMusicPlanEngine(_gateway_with_fallback(model))
 
 
 def get_duration_planner_engine() -> DurationPlannerEngine:
@@ -242,4 +257,4 @@ def get_duration_planner_engine() -> DurationPlannerEngine:
     fabricates — a failure propagates so the caller falls back to manual duration selection.
     """
     model = os.environ.get("STORY_DURATION_PLANNER_MODEL", DURATION_PLANNER_MODEL)
-    return RealDurationPlannerEngine(BedrockModelGateway(model_id=model))
+    return RealDurationPlannerEngine(_gateway_with_fallback(model))

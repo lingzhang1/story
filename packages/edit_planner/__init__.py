@@ -499,6 +499,7 @@ class RealEditPlannerEngine:
             self.last_diagnostics = diag
             raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
         diag["final"] = "executable"
+        diag["used_fallback"] = bool(getattr(self._gw, "last_fallback", False))
         self.last_diagnostics = diag
         return _to_contract(plan, inputs)
 

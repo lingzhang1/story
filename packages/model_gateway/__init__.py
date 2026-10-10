@@ -198,6 +198,33 @@ class BedrockModelGateway:
 # ---------------------------------------------------------------------------
 
 
+class FallbackModelGateway:
+    """Primary model with a secondary FALLBACK on provider failure. Tries the primary gateway; if it raises
+    ProviderError (transport/throttle/timeout/auth — Bedrock throttling surfaces here after botocore's own
+    retries), it transparently retries ONCE on the fallback gateway. A StructuredOutputError (the model
+    answered but the output never validated) is NOT a reason to switch models and propagates unchanged.
+
+    Use it to keep a strong primary (Opus 4.6) while degrading gracefully to a higher-daily-quota model
+    (Sonnet 4.6) when the Opus per-day token cap is hit, instead of failing the whole create. last_fallback
+    records whether the fallback was used (for logging)."""
+
+    def __init__(self, primary: "ModelGateway", fallback: "ModelGateway"):
+        self._primary = primary
+        self._fallback = fallback
+        self.last_fallback: bool = False
+        self.last_error: str | None = None
+
+    def generate_structured(self, req: StructuredRequest) -> StructuredResult:
+        self.last_fallback = False
+        self.last_error = None
+        try:
+            return self._primary.generate_structured(req)
+        except ProviderError as e:
+            self.last_fallback = True
+            self.last_error = str(e)[:300]
+            return self._fallback.generate_structured(req)
+
+
 class FakeModelGateway:
     """Deterministic fake for unit/endpoint tests. Returns a preset payload, or
     raises a preset error, without any network call."""
@@ -237,6 +264,7 @@ __all__ = [
     "ProviderError",
     "ModelGateway",
     "BedrockModelGateway",
+    "FallbackModelGateway",
     "FakeModelGateway",
     "DEFAULT_BEDROCK_MODEL",
     "DEFAULT_AWS_REGION",

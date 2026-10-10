@@ -676,7 +676,7 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible,
                    "first_pass_executable": diag.get("first_pass_executable"),
-                   "normalized": diag.get("normalized"), "repaired": diag.get("repaired"),
+                   "normalized": diag.get("normalized"), "repaired": diag.get("repaired"), "used_fallback": diag.get("used_fallback"),
                    "model_calls": diag.get("model_calls")})
         return plan
 
