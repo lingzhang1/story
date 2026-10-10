@@ -36,7 +36,8 @@ final class MusicSelectionResolver {
         let musicPlanJSON: JSONValue
         let candidates: [MusicCandidateDTO]
         let topTrackId: String?
-        let topAnalysisJSON: JSONValue?
+        let topAnalysis: MusicAnalysisV1?     // decoded, for the renderer (no re-encode)
+        let topAnalysisJSON: JSONValue?       // raw wire JSON, for the planner request (no re-encode)
         let soundtrackRole: String
         let nativeAudioPriority: String
     }
@@ -59,7 +60,8 @@ final class MusicSelectionResolver {
 
         // 3. candidates (+ preview + top analysis). Provider off/unavailable => no music.
         let resp: MusicCandidatesResponseDTO
-        do { resp = try await candidatesService.candidates(musicPlan: planJSON, targetDurationSeconds: target) }
+        let rawTop: JSONValue?
+        do { (resp, rawTop) = try await candidatesService.candidates(musicPlan: planJSON, targetDurationSeconds: target) }
         catch { return nil }
         guard !resp.candidates.isEmpty else { return nil }
 
@@ -68,41 +70,40 @@ final class MusicSelectionResolver {
             musicPlanJSON: planJSON,
             candidates: resp.candidates,
             topTrackId: resp.topTrackId ?? resp.candidates.first?.trackId,
-            topAnalysisJSON: Self.jsonForAnalysis(resp.topMusicAnalysis),
+            topAnalysis: resp.topMusicAnalysis,
+            topAnalysisJSON: rawTop,
             soundtrackRole: strat.role,
             nativeAudioPriority: strat.priority)
     }
 
-    /// Resolve a FULL selection for a chosen track: fetch its analysis if needed, download the audio, and
-    /// package a MusicSelection. nil on any failure (caller falls back to no-music). `cachedTopAnalysisJSON`
-    /// is the top-pick analysis already returned by recommend() — passed to avoid a second call when the user
-    /// keeps the recommended track.
-    func resolveSelection(recommendation: Recommendation, trackId: String) async
+    /// Resolve a FULL selection for a chosen track: use the top-pick analysis when the chosen track IS the top
+    /// pick (no extra call, no re-encode), else fetch that track's analysis. Then download the audio and
+    /// package a MusicSelection. nil on any failure (caller falls back to no-music).
+    func resolveSelection(recommendation rec: Recommendation, trackId: String) async
         -> StoryCreationCoordinator.MusicSelection? {
-        // analysis for the chosen track (reuse the top-pick analysis when it matches; else fetch).
+        let analysis: MusicAnalysisV1
         let analysisJSON: JSONValue
-        if trackId == recommendation.topTrackId, let top = recommendation.topAnalysisJSON {
-            analysisJSON = top
+        if trackId == rec.topTrackId, let a = rec.topAnalysis, let aj = rec.topAnalysisJSON {
+            analysis = a; analysisJSON = aj
         } else {
             do {
-                let a = try await candidatesService.analysis(trackId: trackId)
-                analysisJSON = Self.jsonForAnalysis(a) ?? .object([:])
+                let both = try await candidatesService.analysisBoth(trackId: trackId)
+                analysis = both.analysis; analysisJSON = both.raw
             } catch { return nil }
         }
-        guard let analysis = Self.decodeAnalysis(analysisJSON) else { return nil }
         // download the authorized audio to a local temp file.
         let url: URL
         do { url = try await candidatesService.downloadSoundtrack(trackId: trackId) }
         catch { return nil }
-        let title = recommendation.candidates.first { $0.trackId == trackId }?.title ?? "Soundtrack"
+        let title = rec.candidates.first { $0.trackId == trackId }?.title ?? "Soundtrack"
         return StoryCreationCoordinator.MusicSelection(
-            musicPlanJSON: recommendation.musicPlanJSON,
+            musicPlanJSON: rec.musicPlanJSON,
             trackId: trackId,
             analysisJSON: analysisJSON,
             analysis: analysis,
             soundtrackURL: url,
-            soundtrackRole: recommendation.soundtrackRole,
-            nativeAudioPriority: recommendation.nativeAudioPriority,
+            soundtrackRole: rec.soundtrackRole,
+            nativeAudioPriority: rec.nativeAudioPriority,
             trackTitle: title)
     }
 
@@ -114,17 +115,6 @@ final class MusicSelectionResolver {
         return JSONValue.object(fromJSONString: s)
     }
 
-    private static func jsonForAnalysis(_ a: MusicAnalysisV1?) -> JSONValue? {
-        guard let a, let d = try? StoryContractCoding.encoder().encode(AnalysisWire(a)),
-              let s = String(data: d, encoding: .utf8) else { return nil }
-        return JSONValue.object(fromJSONString: s)
-    }
-
-    private static func decodeAnalysis(_ j: JSONValue) -> MusicAnalysisV1? {
-        guard let d = try? JSONEncoder().encode(j) else { return nil }
-        return try? StoryContractCoding.decoder().decode(MusicAnalysisV1.self, from: d)
-    }
-
     private static func audioStrategy(_ plan: JSONValue) -> (role: String, priority: String) {
         if case let .object(root) = plan, case let .object(s)? = root["audio_strategy"] {
             let role = { if case let .string(r)? = s["soundtrack_role"] { return r }; return "supportive" }()
@@ -132,23 +122,5 @@ final class MusicSelectionResolver {
             return (role, pri)
         }
         return ("supportive", "selective")
-    }
-
-    /// Re-encode the renderer's MusicAnalysisV1 (Decodable-only) back to the snake_case wire shape so it can be
-    /// threaded into the planner request as JSONValue.
-    private struct AnalysisWire: Encodable {
-        let durationSeconds: Double
-        let bpm: Double?
-        let tempoReliable: Bool
-        let beats: [Double]
-        let downbeats: [Double]
-        init(_ a: MusicAnalysisV1) {
-            durationSeconds = a.durationSeconds; bpm = a.bpm; tempoReliable = a.tempoReliable
-            beats = a.beats; downbeats = a.downbeats
-        }
-        enum CodingKeys: String, CodingKey {
-            case durationSeconds = "duration_seconds", bpm
-            case tempoReliable = "tempo_reliable", beats, downbeats
-        }
     }
 }

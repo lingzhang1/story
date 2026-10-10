@@ -148,15 +148,42 @@ final class MusicCandidatesService {
         self.session = session
     }
 
-    /// MusicPlan -> ranked candidates (+ preview urls + top-pick analysis).
-    func candidates(musicPlan: JSONValue, targetDurationSeconds: Double, limit: Int = 5) async throws -> MusicCandidatesResponseDTO {
+    /// MusicPlan -> ranked candidates (+ preview urls + top-pick analysis). Returns the typed response AND
+    /// the RAW top_music_analysis JSON subtree (so the planner gets the exact wire analysis with NO lossy
+    /// re-encode, and the renderer gets the decoded MusicAnalysisV1 — both from one source).
+    func candidates(musicPlan: JSONValue, targetDurationSeconds: Double, limit: Int = 5)
+        async throws -> (response: MusicCandidatesResponseDTO, rawTopAnalysis: JSONValue?) {
         let body = MusicCandidatesRequestDTO(musicPlan: musicPlan, targetDurationSeconds: targetDurationSeconds, limit: limit)
-        return try await postDecode("v1/music/candidates", body: body)
+        let data = try await postData("v1/music/candidates", body: body)
+        let dto: MusicCandidatesResponseDTO
+        do { dto = try StoryContractCoding.decoder().decode(MusicCandidatesResponseDTO.self, from: data) }
+        catch {
+            do { dto = try JSONDecoder().decode(MusicCandidatesResponseDTO.self, from: data) }
+            catch { throw MusicServiceError.decoding(error) }
+        }
+        // Pull the raw top_music_analysis subtree verbatim (for the planner request).
+        var rawTop: JSONValue? = nil
+        if let whole = try? JSONDecoder().decode(JSONValue.self, from: data),
+           case let .object(root) = whole, let a = root["top_music_analysis"] {
+            if case .null = a { rawTop = nil } else { rawTop = a }
+        }
+        return (dto, rawTop)
     }
 
-    /// MusicAnalysis/1 for a SPECIFIC chosen track (when the user picks a non-top candidate).
+    /// MusicAnalysis/1 for a SPECIFIC chosen track (when the user picks a non-top candidate). Returns BOTH the
+    /// decoded analysis and its raw JSON (for the planner).
+    func analysisBoth(trackId: String) async throws -> (analysis: MusicAnalysisV1, raw: JSONValue) {
+        let data = try await postData("v1/music/analysis", body: MusicTrackRequestDTO(trackId: trackId))
+        let decoded: MusicAnalysisV1
+        do { decoded = try StoryContractCoding.decoder().decode(MusicAnalysisV1.self, from: data) }
+        catch { throw MusicServiceError.decoding(error) }
+        let raw = (try? JSONDecoder().decode(JSONValue.self, from: data)) ?? .object([:])
+        return (decoded, raw)
+    }
+
+    /// MusicAnalysis/1 for a SPECIFIC chosen track (decoded only).
     func analysis(trackId: String) async throws -> MusicAnalysisV1 {
-        return try await postDecode("v1/music/analysis", body: MusicTrackRequestDTO(trackId: trackId))
+        return try await analysisBoth(trackId: trackId).analysis
     }
 
     /// Resolve an authorized download link for the selected track, then FETCH it to a transient local file.
@@ -177,7 +204,7 @@ final class MusicCandidatesService {
         return tmp
     }
 
-    private func postDecode<B: Encodable, R: Decodable>(_ path: String, body: B) async throws -> R {
+    private func postData<B: Encodable>(_ path: String, body: B) async throws -> Data {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -189,9 +216,13 @@ final class MusicCandidatesService {
         guard let http = resp as? HTTPURLResponse else { throw MusicServiceError.badStatus(-1) }
         if http.statusCode == 404 || http.statusCode == 503 { throw MusicServiceError.unavailable }
         guard http.statusCode == 200 else { throw MusicServiceError.badStatus(http.statusCode) }
+        return data
+    }
+
+    private func postDecode<B: Encodable, R: Decodable>(_ path: String, body: B) async throws -> R {
+        let data = try await postData(path, body: body)
         do { return try StoryContractCoding.decoder().decode(R.self, from: data) }
         catch {
-            // candidates/analysis use snake_case custom keys; fall back to a plain decoder if needed.
             do { return try JSONDecoder().decode(R.self, from: data) }
             catch { throw MusicServiceError.decoding(error) }
         }
