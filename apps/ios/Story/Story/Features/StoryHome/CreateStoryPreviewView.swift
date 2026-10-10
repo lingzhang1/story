@@ -45,8 +45,8 @@ struct CreateStoryPreviewView: View {
         showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection
     }
 
-    /// Open the create flow. REOPEN: existing good output -> Result (no re-render). Otherwise R-d: resolve a
-    /// music RECOMMENDATION first and show the picker; if music is unavailable, go straight to no-music Creating.
+    /// Entry from the Create button. On FIRST entry, if a good persisted output already exists, open it
+    /// directly (reopen shortcut); otherwise begin the create+picker flow.
     private func startCreate() {
         guard !isCreateFlowActive else { return }   // duplicate guard
         let decision = ReopenDecision.decide(
@@ -57,16 +57,23 @@ struct CreateStoryPreviewView: View {
         case .showResult(let outputId):
             reopenOutput = story.generatedOutputs.first { $0.id == outputId }
         case .create:
-            resolvingMusic = true
-            Task {
-                let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
-                await MainActor.run {
-                    resolvingMusic = false
-                    if let rec, rec.topTrackId != nil {
-                        musicRecommendation = rec          // -> picker sheet
-                    } else {
-                        chosenMusic = nil; showCreating = true   // provider unavailable -> honest no-music
-                    }
+            beginCreateFlow()
+        }
+    }
+
+    /// ALWAYS run the music picker + create path, bypassing the reopen shortcut. Used for a fresh create AND
+    /// for "Create a new version" (which must make a NEW output, never bounce back to the existing one). R-d:
+    /// resolve a recommendation -> picker; if music is unavailable, go straight to honest no-music Creating.
+    private func beginCreateFlow() {
+        resolvingMusic = true
+        Task {
+            let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
+            await MainActor.run {
+                resolvingMusic = false
+                if let rec, rec.topTrackId != nil {
+                    musicRecommendation = rec          // -> picker sheet
+                } else {
+                    chosenMusic = nil; showCreating = true   // provider unavailable -> honest no-music
                 }
             }
         }
@@ -95,10 +102,13 @@ struct CreateStoryPreviewView: View {
         }
     }
 
-    /// Re-create from a REOPENED Result (stale output): drop Result and re-enter the picker flow.
+    /// "Create a new version" from a REOPENED Result: drop Result and FORCE the create+picker flow (never the
+    /// reopen shortcut — otherwise it would bounce straight back to the existing output and never re-create).
     private func handleRecreate() {
         reopenOutput = nil
-        DispatchQueue.main.async { startCreate() }
+        chosenMusic = nil
+        showCreating = false
+        DispatchQueue.main.async { beginCreateFlow() }
     }
 
     /// Collapse the create flow back to Story Home in one tap.
@@ -140,9 +150,13 @@ struct CreateStoryPreviewView: View {
                         .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
                 }
 
-                // Music — frozen surface, disabled (Music Engine).
-                StoryUnavailableSection(header: { StoryEyebrow(text: "Music") },
-                    message: "Story will score your video to music. Not available yet.")
+                // Music — now AVAILABLE (R-d): Story recommends a soundtrack and you choose it in the next
+                // step. Honest copy, no track named here (that happens in the picker after you tap Create).
+                VStack(alignment: .leading, spacing: 6) {
+                    StoryEyebrow(text: "Music")
+                    Text("Story will suggest a soundtrack — you'll choose it next, or create without music.")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+                }
 
                 // Create — REAL consumer action (R-c Batch C). Enabled only when the Story is plannable
                 // (>=1 Moment with a resolvable file AND a completed MomentUnderstanding — same rule as
@@ -206,7 +220,8 @@ struct CreateStoryPreviewView: View {
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
         // renders exactly that track and self-manages its Result. Reopen -> Result directly.
         .navigationDestination(isPresented: $showCreating) {
-            StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true)
+            StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
+                              onRequestRecreate: handleRecreate)
         }
         .navigationDestination(item: $reopenOutput) { output in
             StoryResultView(story: story, output: output, onHome: goHome, onRecreate: handleRecreate)

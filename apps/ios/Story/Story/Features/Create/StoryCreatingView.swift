@@ -71,6 +71,9 @@ struct StoryCreatingView: View {
     /// resolving the recommended track itself.
     var preresolvedMusic: StoryCreationCoordinator.MusicSelection? = nil
     var musicIsPreresolved: Bool = false
+    /// R-d: when set, "Create a new version" on the just-rendered Result pops back to the preview and re-enters
+    /// the music picker flow (consistent with reopen). When nil, it re-runs no-music on this coordinator.
+    var onRequestRecreate: (() -> Void)? = nil
     /// When the render completes, hand the output UP to the parent so it can present Result in place of this
     /// screen (stack stays Home -> Preview -> Result instead of Home -> Preview -> Creating -> Result, which
     /// left the stuck "Finishing up…" screen behind when Result dismissed). When nil, this view falls back to
@@ -107,12 +110,15 @@ struct StoryCreatingView: View {
                     DispatchQueue.main.async { dismiss() }
                 },
                 onRecreate: {
-                    // Drop Result and re-run the pipeline on THIS same Creating screen (live progress again).
-                    // create() is the right entry from a COMPLETED run (retry() only resumes a .failed run);
-                    // the coordinator's isCreating defer has already cleared, so create() is accepted.
+                    // "Create a new version". Prefer routing back through the preview's music picker (so the
+                    // user can re-choose a track); fall back to a local no-music re-run when standalone.
                     completedOutput = nil
-                    didHandOffCompletion = false
-                    coordinator?.create(for: story)
+                    if let onRequestRecreate {
+                        DispatchQueue.main.async { dismiss(); onRequestRecreate() }
+                    } else {
+                        didHandOffCompletion = false
+                        coordinator?.create(for: story)
+                    }
                 })
         }
         .task {
