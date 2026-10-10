@@ -115,7 +115,6 @@ struct StoryCreatingView: View {
             // track -> download), then start MUSIC-AWARE creation; if music is unavailable (provider off,
             // plan/provider failure) fall back to the device-verified no-music path. Music never blocks.
             if coordinator == nil {
-                MusicSelectionResolver.beacon("createview_task_rd5")
                 let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
                 coordinator = coord
                 let resolver = MusicSelectionResolver(context: context)

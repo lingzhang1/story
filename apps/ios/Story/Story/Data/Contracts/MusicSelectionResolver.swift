@@ -43,11 +43,10 @@ final class MusicSelectionResolver {
     }
 
     func recommend(for story: StoryModel, guideFramingSummary: String?) async -> Recommendation? {
-        Self.beacon("recommend_start")
         let target = story.intentTargetDurationSeconds ?? 15.0
         // 1. authoritative MusicDirection (ensures/infers once; user-authored returned untouched).
         guard let direction = await directionCoordinator.ensure(for: story, guideFramingSummary: guideFramingSummary)
-        else { Self.beacon("recommend_nil_direction"); return nil }
+        else { return nil }
         let directionJSON = Self.encodeJSON(direction)
         let intentJSON = Self.encodeJSON(CreativeIntentContractDTO(from: story))
 
@@ -57,17 +56,16 @@ final class MusicSelectionResolver {
             planJSON = try await planService.plan(MusicPlanRequestDTO(
                 storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
                 targetDurationSeconds: target, storyGuide: .object([:]), storyCoverage: .object([:])))
-        } catch { Self.beacon("recommend_nil_plan"); return nil }
+        } catch { return nil }
 
         // 3. candidates (+ preview + top analysis). Provider off/unavailable => no music.
         let resp: MusicCandidatesResponseDTO
         let rawTop: JSONValue?
         do { (resp, rawTop) = try await candidatesService.candidates(musicPlan: planJSON, targetDurationSeconds: target) }
-        catch { Self.beacon("recommend_nil_candidates"); return nil }
-        guard !resp.candidates.isEmpty else { Self.beacon("recommend_nil_empty"); return nil }
+        catch { return nil }
+        guard !resp.candidates.isEmpty else { return nil }
 
         let strat = Self.audioStrategy(planJSON)
-        Self.beacon("recommend_ok_an\(resp.topMusicAnalysis != nil ? 1 : 0)_raw\(rawTop != nil ? 1 : 0)")
         return Recommendation(
             musicPlanJSON: planJSON,
             candidates: resp.candidates,
@@ -83,7 +81,6 @@ final class MusicSelectionResolver {
     /// package a MusicSelection. nil on any failure (caller falls back to no-music).
     func resolveSelection(recommendation rec: Recommendation, trackId: String) async
         -> StoryCreationCoordinator.MusicSelection? {
-        Self.beacon("resolve_start")
         let analysis: MusicAnalysisV1
         let analysisJSON: JSONValue
         if trackId == rec.topTrackId, let a = rec.topAnalysis, let aj = rec.topAnalysisJSON {
@@ -92,13 +89,12 @@ final class MusicSelectionResolver {
             do {
                 let both = try await candidatesService.analysisBoth(trackId: trackId)
                 analysis = both.analysis; analysisJSON = both.raw
-            } catch { Self.beacon("resolve_nil_analysis"); return nil }
+            } catch { return nil }
         }
         // download the authorized audio to a local temp file.
         let url: URL
         do { url = try await candidatesService.downloadSoundtrack(trackId: trackId) }
-        catch { Self.beacon("resolve_nil_download"); return nil }
-        Self.beacon("resolve_ok")
+        catch { return nil }
         let title = rec.candidates.first { $0.trackId == trackId }?.title ?? "Soundtrack"
         return StoryCreationCoordinator.MusicSelection(
             musicPlanJSON: rec.musicPlanJSON,
@@ -112,13 +108,6 @@ final class MusicSelectionResolver {
     }
 
     // MARK: - helpers
-
-    // DIAGNOSTIC (R-d): fire-and-forget GET /health?rdstage=... so the exact music-resolution stage the device
-    // reached shows in the backend access log. Temporary — remove once music is confirmed on device.
-    static func beacon(_ stage: String) {
-        guard let u = URL(string: StoryBackend.baseURL.absoluteString + "/health?rdstage=" + stage) else { return }
-        Task { _ = try? await URLSession.shared.data(from: u) }
-    }
 
     private static func encodeJSON<T: Encodable>(_ v: T) -> JSONValue {
         guard let d = try? StoryContractCoding.encoder().encode(v),
