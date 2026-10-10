@@ -32,7 +32,8 @@ final class MusicSelectionResolver {
 
     /// The MusicPlan + ranked candidates for a Story, for the selection UX. nil => music unavailable
     /// (the UX shows "create without music" only). Does NOT download anything yet.
-    struct Recommendation {
+    struct Recommendation: Identifiable {
+        let id = UUID()
         let musicPlanJSON: JSONValue
         let candidates: [MusicCandidateDTO]
         let topTrackId: String?

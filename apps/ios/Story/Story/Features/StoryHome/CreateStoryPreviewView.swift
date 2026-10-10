@@ -26,17 +26,27 @@ struct CreateStoryPreviewView: View {
     // to open the Result screen for an existing good output or start a new render.
     @State private var showCreating = false
     @State private var reopenOutput: GeneratedOutputModel?
+    // R-d music picker step. `musicRecommendation` drives the picker sheet; `resolvingMusic` shows a brief
+    // "Finding music…" state while recommend() runs; `chosenMusic` is the resolved selection (nil = no-music)
+    // handed to the Creating screen, which renders EXACTLY that track (no auto-select, no stale plan).
+    @State private var resolvingMusic = false
+    @State private var musicRecommendation: MusicSelectionResolver.Recommendation?
+    @State private var chosenMusic: StoryCreationCoordinator.MusicSelection?
+    @State private var preparingSelection = false
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
     }
+    private var musicResolver: MusicSelectionResolver { MusicSelectionResolver(context: context) }
 
     /// Duplicate-guard reflection: a create/result flow is already presented for this Story, so the Create
     /// action must not launch a second one (the coordinator also guards concurrent runs via `isCreating`).
-    private var isCreateFlowActive: Bool { showCreating || reopenOutput != nil }
+    private var isCreateFlowActive: Bool {
+        showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection
+    }
 
-    /// Open the create flow. REOPEN: if the Story already has a successful, non-stale, file-present output,
-    /// go straight to the Result screen (no re-render); otherwise start the coordinator-driven Creating screen.
+    /// Open the create flow. REOPEN: existing good output -> Result (no re-render). Otherwise R-d: resolve a
+    /// music RECOMMENDATION first and show the picker; if music is unavailable, go straight to no-music Creating.
     private func startCreate() {
         guard !isCreateFlowActive else { return }   // duplicate guard
         let decision = ReopenDecision.decide(
@@ -47,22 +57,55 @@ struct CreateStoryPreviewView: View {
         case .showResult(let outputId):
             reopenOutput = story.generatedOutputs.first { $0.id == outputId }
         case .create:
-            showCreating = true
+            resolvingMusic = true
+            Task {
+                let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
+                await MainActor.run {
+                    resolvingMusic = false
+                    if let rec, rec.topTrackId != nil {
+                        musicRecommendation = rec          // -> picker sheet
+                    } else {
+                        chosenMusic = nil; showCreating = true   // provider unavailable -> honest no-music
+                    }
+                }
+            }
         }
     }
 
-    /// Re-create from a REOPENED Result (stale output): drop Result and enter the Creating screen (child of
-    /// this preview), which runs the pipeline and self-manages its own Result.
-    private func handleRecreate() {
-        reopenOutput = nil
-        DispatchQueue.main.async { showCreating = true }
+    /// The user made a choice in the picker. Resolve the selected track into a full MusicSelection (download),
+    /// then start Creating. On .noMusic or a failed resolve, start Creating with no music (never a fake track).
+    private func handlePickerChoice(_ choice: MusicPickerView.Choice, _ rec: MusicSelectionResolver.Recommendation) {
+        musicRecommendation = nil
+        switch choice {
+        case .cancel:
+            return   // back out — no creation started
+        case .noMusic:
+            chosenMusic = nil
+            DispatchQueue.main.async { showCreating = true }
+        case .track(let trackId):
+            preparingSelection = true
+            Task {
+                let sel = await musicResolver.resolveSelection(recommendation: rec, trackId: trackId)
+                await MainActor.run {
+                    preparingSelection = false
+                    chosenMusic = sel          // nil if download/analysis failed -> honest no-music
+                    showCreating = true
+                }
+            }
+        }
     }
 
-    /// Collapse the create flow back to Story Home in one tap: clear the reopen binding and pop the preview
-    /// itself (a pushed destination of Story Home). The new-render path pops itself via Creating's onHome.
+    /// Re-create from a REOPENED Result (stale output): drop Result and re-enter the picker flow.
+    private func handleRecreate() {
+        reopenOutput = nil
+        DispatchQueue.main.async { startCreate() }
+    }
+
+    /// Collapse the create flow back to Story Home in one tap.
     private func goHome() {
         reopenOutput = nil
         showCreating = false
+        chosenMusic = nil
         dismiss()
     }
 
@@ -160,15 +203,30 @@ struct CreateStoryPreviewView: View {
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
-        // R-c Batch B: coordinator-driven routes. New render -> Creating, which OWNS its Result child and,
-        // via Result's onHome, pops BOTH itself and Result back to Story Home (fixes the stuck "Finishing up…"
-        // screen). Reopen of an existing good output -> Result directly; its onHome collapses the flow too
-        // (Result is a child of this preview, so a plain dismiss would stop at the preview, not Home).
+        // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
+        // renders exactly that track and self-manages its Result. Reopen -> Result directly.
         .navigationDestination(isPresented: $showCreating) {
-            StoryCreatingView(story: story)
+            StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true)
         }
         .navigationDestination(item: $reopenOutput) { output in
             StoryResultView(story: story, output: output, onHome: goHome, onRecreate: handleRecreate)
+        }
+        .sheet(item: $musicRecommendation) { rec in
+            MusicPickerView(recommendation: rec) { choice in
+                handlePickerChoice(choice, rec)
+            }
+        }
+        .overlay {
+            if resolvingMusic || preparingSelection {
+                ZStack {
+                    StoryTheme.ink.opacity(0.72).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView().tint(StoryTheme.cream)
+                        Text(resolvingMusic ? "Finding music for your Story…" : "Preparing your soundtrack…")
+                            .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                    }
+                }
+            }
         }
         #if DEBUG
         .sheet(isPresented: $showRenderHarness) {

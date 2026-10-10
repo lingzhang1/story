@@ -65,6 +65,12 @@ struct StoryCreatingView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
+    /// R-d: a music selection the PICKER already resolved (nil = user chose no-music / unavailable). When
+    /// `musicIsPreresolved` is true the Creating screen uses this verbatim and does NOT auto-resolve — the
+    /// rendered track is exactly what the user picked. When false (standalone/legacy entry) it falls back to
+    /// resolving the recommended track itself.
+    var preresolvedMusic: StoryCreationCoordinator.MusicSelection? = nil
+    var musicIsPreresolved: Bool = false
     /// When the render completes, hand the output UP to the parent so it can present Result in place of this
     /// screen (stack stays Home -> Preview -> Result instead of Home -> Preview -> Creating -> Result, which
     /// left the stuck "Finishing up…" screen behind when Result dismissed). When nil, this view falls back to
@@ -117,13 +123,19 @@ struct StoryCreatingView: View {
             if coordinator == nil {
                 let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
                 coordinator = coord
-                let resolver = MusicSelectionResolver(context: context)
-                var music: StoryCreationCoordinator.MusicSelection? = nil
-                if let rec = await resolver.recommend(for: story, guideFramingSummary: nil),
-                   let top = rec.topTrackId {
-                    music = await resolver.resolveSelection(recommendation: rec, trackId: top)
+                if musicIsPreresolved {
+                    // Picker already chose + resolved the track (or no-music). Render exactly that.
+                    coord.createWithMusic(for: story, music: preresolvedMusic)
+                } else {
+                    // Legacy/standalone entry: resolve the recommended track ourselves, else no-music.
+                    let resolver = MusicSelectionResolver(context: context)
+                    var music: StoryCreationCoordinator.MusicSelection? = nil
+                    if let rec = await resolver.recommend(for: story, guideFramingSummary: nil),
+                       let top = rec.topTrackId {
+                        music = await resolver.resolveSelection(recommendation: rec, trackId: top)
+                    }
+                    coord.createWithMusic(for: story, music: music)
                 }
-                coord.createWithMusic(for: story, music: music)
             }
         }
         .onChange(of: completedState) { _, newValue in
