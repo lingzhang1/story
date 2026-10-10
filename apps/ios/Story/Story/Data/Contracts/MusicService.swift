@@ -99,7 +99,7 @@ protocol MusicPlanning {
 final class MusicPlanService: MusicPlanning {
     private let baseURL: URL
     private let session: URLSession
-    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = .shared) {
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
         self.baseURL = baseURL
         self.session = session
     }
@@ -143,7 +143,7 @@ private struct MusicTrackRequestDTO: Encodable {
 final class MusicCandidatesService {
     private let baseURL: URL
     private let session: URLSession
-    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = .shared) {
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
         self.baseURL = baseURL
         self.session = session
     }

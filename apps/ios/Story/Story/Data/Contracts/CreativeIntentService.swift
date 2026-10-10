@@ -20,6 +20,18 @@ enum StoryBackend {
            let u = URL(string: s) { return u }
         return URL(string: "https://ydmju5wdps.us-east-1.awsapprunner.com")!
     }
+
+    /// A URLSession with a GENEROUS timeout for slow model-backed calls. The Edit Planner is one ~28s Opus
+    /// call, and the music flow stacks MusicPlan (~8s) + candidates + a soundtrack download + the planner on
+    /// top of App Runner cold-start latency — well past URLSession.shared's default 60s request timeout, which
+    /// surfaced on device as NSURLErrorNetworkConnectionLost (-1005). 180s request / 300s resource covers it.
+    static let longSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 180
+        cfg.timeoutIntervalForResource = 300
+        cfg.waitsForConnectivity = true
+        return URLSession(configuration: cfg)
+    }()
 }
 
 enum CreativeIntentServiceError: Error, LocalizedError {

@@ -81,7 +81,7 @@ enum EditPlannerServiceError: Error, LocalizedError {
 final class EditPlannerService: EditPlanning {
     private let baseURL: URL
     private let session: URLSession
-    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = .shared) {
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
         self.baseURL = baseURL
         self.session = session
     }
