@@ -656,8 +656,28 @@ def create_app() -> FastAPI:
             log.warning("edit_plan_malformed", extra={**base, "success": False, "reason": str(e)[:300]})
             raise HTTPException(status_code=422, detail=f"edit plan input malformed: {e}")
         except EditPlanInfeasibleError as e:
-            log.warning("edit_plan_infeasible", extra={**base, "success": False, "reason": str(e)[:300]})
-            raise HTTPException(status_code=422, detail=f"edit plan infeasible: {e}")
+            # §4 safeguard: a MODEL-declared infeasibility is NOT automatically true. The planner is allowed
+            # to OMIT redundant/less-valuable Moments, so "too many Moments for Ns" is not valid grounds to
+            # refuse. Corroborate against deterministic evidence (non-overlapping useful coverage vs target):
+            #   coverage < target  -> genuine MATERIAL infeasibility: 422, client may create a shorter Story.
+            #   coverage >= target -> material is sufficient; the model refused anyway = PLANNING DEFECT, not
+            #                         material insufficiency. Distinct 422 that must NOT route to shorter-Story.
+            ev = compute_duration_evidence(body.moments)
+            cov = ev.get("total_useful_coverage_seconds") or 0.0
+            target = (body.creative_intent or {}).get("target_duration_seconds") or 0.0
+            material_insufficient = bool(target) and cov < target
+            klass = "material_infeasible" if material_insufficient else "planning_defect_unsupported_infeasibility"
+            log.warning("edit_plan_infeasible",
+                        extra={**base, "success": False, "reason": str(e)[:300], "classification": klass,
+                               "useful_coverage_s": round(cov, 1), "target_s": target,
+                               "model_calls": (getattr(engine, "last_diagnostics", {}) or {}).get("model_calls")})
+            if material_insufficient:
+                # Genuine insufficiency — the existing shorter-Story / keep-shooting recovery is correct.
+                raise HTTPException(status_code=422, detail=f"edit plan infeasible (material): {e}")
+            # Material IS sufficient but the model refused — do not fabricate a plan, but do NOT tell the user
+            # to shorten a Story that has enough footage. Surface it as a distinct retryable planning failure.
+            raise HTTPException(status_code=503,
+                                detail="edit plan could not be produced for this Story; retry")
         except StructuredOutputError as e:
             # The model produced a schema-valid but NON-executable plan that survived bounded repair.
             # Distinct from a provider outage so clients/logs do not conflate the two. Still 503 (retryable).
@@ -665,7 +685,7 @@ def create_app() -> FastAPI:
             log.warning("edit_plan_invalid_after_repair",
                         extra={**base, "success": False, "error": str(e)[:300],
                                "model_calls": diag.get("model_calls"),
-                               "repairs_used": diag.get("executability_repairs_used")})
+                               "repairs_used": diag.get("executability_repairs_used"), "raw_feasible": diag.get("raw_feasible"), "raw_infeasible_reason": diag.get("raw_infeasible_reason"), "raw_segment_count": diag.get("raw_segment_count")})
             raise HTTPException(status_code=503,
                                 detail="edit plan could not be made executable; retry")
         except ProviderError as e:

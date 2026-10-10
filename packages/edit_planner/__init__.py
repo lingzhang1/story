@@ -274,7 +274,13 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     moments = {m["id"]: m for m in inputs.moments}
     has_analysis = inputs.music_analysis is not None
     segs = plan.get("segments", [])
-    if not segs:
+    # A model that HONESTLY declares the Story infeasible (feasible=false + a reason) is ALLOWED to return no
+    # segments — that is the "I can't cut this material to this target" answer, not a malformed plan. Only an
+    # empty plan WITHOUT a feasible=false declaration is the "no segments" bug. Checking feasibility first lets
+    # the engine's feasible=false branch surface the model's real infeasible_reason instead of a false
+    # "no segments" -> 503 (observed on crowded 21-Moment libraries at a tight target).
+    _declared_infeasible = plan.get("feasible") is False and bool((plan.get("infeasible_reason") or "").strip())
+    if not segs and not _declared_infeasible:
         errs.append("no segments")
     orders = [s.get("order") for s in segs]
     if orders != sorted(orders):
@@ -491,6 +497,9 @@ class RealEditPlannerEngine:
         if errs:
             diag["final"] = "invalid_after_repair"
             diag["final_errors"] = errs
+            diag["raw_feasible"] = plan.get("feasible")
+            diag["raw_infeasible_reason"] = (plan.get("infeasible_reason") or "")[:300]
+            diag["raw_segment_count"] = len(plan.get("segments", []))
             self.last_diagnostics = diag
             # schema-valid but NON-executable even after repair. Never pass it on.
             raise StructuredOutputError(f"EditPlan failed deterministic validation after repair: {errs}")

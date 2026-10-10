@@ -391,3 +391,79 @@ def test_endpoint_503_distinct_from_malformed_and_infeasible():
     r = client.post("/v1/edit-plan", json=_req_body())
     assert r.status_code == 503
     assert "executable" in r.json()["detail"].lower()
+
+
+def test_feasible_false_empty_segments_surfaces_infeasible_not_no_segments():
+    """R-d.2 fix: a model that honestly declares feasible=false with a reason + empty segments must raise
+    EditPlanInfeasibleError (surfacing the reason), NOT be mislabeled 'no segments' -> StructuredOutputError.
+    This was the real cause of crowded-library ('21 Moments') failures showing a false 'temporarily unavailable'."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "packages"))
+    from edit_planner import (EditPlanInputs, RealEditPlannerEngine, validate_plan,
+                              EditPlanInfeasibleError)
+    from model_gateway import FakeModelGateway, StructuredOutputError
+    inp = EditPlanInputs(story_id="x", creative_intent_id="x",
+                         creative_intent={"target_duration_seconds": 55.0}, story_guide={}, story_coverage={},
+                         moments=[{"id": "a", "duration_seconds": 5, "useful_segments": [[0, 4]]}], music_plan={})
+    plan = {"target_duration_seconds": 55.0, "segments": [], "feasible": False,
+            "infeasible_reason": "too many Moments for this length"}
+    assert validate_plan(plan, inp) == []            # no longer flagged 'no segments'
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan), executability_repair_attempts=2)
+    try:
+        eng.generate(inp)
+        assert False, "should raise infeasible"
+    except EditPlanInfeasibleError as e:
+        assert "too many Moments" in str(e)          # the real reason is surfaced
+    except StructuredOutputError:
+        assert False, "regressed: feasible=false mislabeled as no-segments"
+
+
+def test_empty_segments_without_feasible_false_still_fails():
+    """A truly empty plan (no feasible=false declaration) is STILL a 'no segments' error — the fix is narrow."""
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "packages"))
+    from edit_planner import EditPlanInputs, validate_plan
+    inp = EditPlanInputs(story_id="x", creative_intent_id="x",
+                         creative_intent={"target_duration_seconds": 55.0}, story_guide={}, story_coverage={},
+                         moments=[{"id": "a", "duration_seconds": 5, "useful_segments": [[0, 4]]}], music_plan={})
+    assert "no segments" in validate_plan({"target_duration_seconds": 55.0, "segments": []}, inp)
+
+
+def _infeasible_engine(reason="too many Moments for 55s"):
+    from edit_planner import EditPlanInfeasibleError
+    class E:
+        last_diagnostics = {"model_calls": 3}
+        def generate(self, inputs): raise EditPlanInfeasibleError(reason)
+    return E()
+
+
+def test_endpoint_material_insufficient_maps_422():
+    """coverage < target -> genuine material infeasibility -> 422 (shorter-Story recovery is appropriate)."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from app.deps import get_edit_planner_engine
+    app = create_app(); app.dependency_overrides[get_edit_planner_engine] = lambda: _infeasible_engine()
+    c = TestClient(app)
+    body = {"story_id": "00000000-0000-0000-0000-000000000001",
+            "creative_intent_id": "00000000-0000-0000-0000-000000000002",
+            "creative_intent": {"target_duration_seconds": 55.0},
+            "moments": [{"id": "m1", "duration_seconds": 10, "useful_segments": [[0, 8]]}]}  # 8s << 55s
+    r = c.post("/v1/edit-plan", json=body)
+    assert r.status_code == 422 and "material" in r.json()["detail"]
+
+
+def test_endpoint_sufficient_material_but_model_refused_maps_503_not_shorter():
+    """coverage >= target but model declared infeasible = PLANNING DEFECT -> 503 (NOT a 422 shorter-Story)."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from app.deps import get_edit_planner_engine
+    app = create_app(); app.dependency_overrides[get_edit_planner_engine] = lambda: _infeasible_engine()
+    c = TestClient(app)
+    # 21 short Moments, ~5s useful each = ~105s coverage >> 55s target: material is plenty.
+    moms = [{"id": f"m{i}", "duration_seconds": 7, "useful_segments": [[0, 5]]} for i in range(21)]
+    body = {"story_id": "00000000-0000-0000-0000-000000000001",
+            "creative_intent_id": "00000000-0000-0000-0000-000000000002",
+            "creative_intent": {"target_duration_seconds": 55.0}, "moments": moms}
+    r = c.post("/v1/edit-plan", json=body)
+    assert r.status_code == 503          # NOT 422 -> client won't be told to shorten a Story with ample footage
+    assert "material" not in r.json()["detail"]
