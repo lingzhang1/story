@@ -29,15 +29,18 @@ from contracts.schemas.ai_contracts import (
 )
 from model_gateway import ModelGateway, StructuredOutputError, StructuredRequest
 
-PROMPT_VERSION = "edit_plan/3"  # R-c executability correction (v2 preserved for reproducibility)
+PROMPT_VERSION = "edit_plan/4"  # Editorial Timing significance-weighting amendment (v2/v3 preserved for reproducibility)
 TASK = "edit_plan.generate"
 MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
 DURATION_TOLERANCE = 0.20  # ±20% hard feasibility tolerance (frozen)
 
-# v3 adds an explicit EXECUTABILITY INVARIANTS section to the frozen v2 creative body (owner-approved,
-# narrowly scoped). The previous frozen prompt stays on disk at prompts/edit_plan/2/system.md for
-# reproducibility; switch _PROMPT_PATH back to "2" to reproduce the pre-R-c behavior exactly.
-_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "edit_plan" / "3" / "system.md"
+# v4 adds ONE "SIGNIFICANCE-WEIGHTED SCREEN TIME" paragraph to the frozen v3 body (which is v2's creative
+# body + the EXECUTABILITY INVARIANTS section). Owner-approved via the Editorial Timing Quality Gate: it
+# allocates screen time by narrative significance (payoff holds longer; routine footage brief or dropped),
+# changing NO duration discipline, native-audio policy, music-alignment, repair behavior, model, or the
+# EditPlan/2 schema. The previous frozen prompts stay on disk at prompts/edit_plan/2/system.md and
+# prompts/edit_plan/3/system.md; switch _PROMPT_PATH back to "3" (pre-amendment) or "2" (pre-R-c) to reproduce.
+_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "edit_plan" / "4" / "system.md"
 
 TRANSITION = ["cut", "crossfade", "fade_in", "fade_out", "dip_to_black"]
 NATIVE = ["keep", "duck", "mute"]

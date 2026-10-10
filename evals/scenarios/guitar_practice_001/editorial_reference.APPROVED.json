@@ -1,0 +1,33 @@
+{
+  "scenario": "guitar_practice_001",
+  "status": "owner-approved",
+  "approved_at": "2026-10-09T20:40:00-07:00",
+  "frozen_before_scoring": true,
+  "provenance": {
+    "annotations_in_dir": "none (only the six .mov files + .DS_Store existed)",
+    "source_ground_truth": "AVFoundation probe of the real media (Phase A)",
+    "au_evidence": "frozen AU pipeline Sonnet 4.6 / 24 frames / au_frames1 / au_prompt1, saved evals/results/au_guitar_practice_001_audit.json (Phase B)",
+    "production_moment_understanding": "NOT accessible (on-device SwiftData, no export); fresh AU used"
+  },
+  "notes": {
+    "no_fixed_minimums": "Durations below are editorial CANDIDATES, not model instructions or scoring thresholds.",
+    "final_song_evidence": "AU: continuous 39.3s useful span, 'complete sustained performance take from start to apparent phrase end; usable as a full continuous performance'. NOT asserted to be a complete musical composition without further evidence.",
+    "au_utility_tags": "final_song=useful_elsewhere, practice clips=strong_elsewhere. Per owner: NOT an AU defect and NOT an absolute cross-Moment ranking; narrative significance is the Edit Planner's job vs CreativeIntent/Guide/Coverage."
+  },
+  "moments": {
+    "string_first_touch":          {"dur_s": 7.4,  "role": "opening / first contact with strings", "importance": "medium", "include": "yes (valuable opener)", "continuous_playback_matters": false, "candidate_duration_s": "1.5-2 (brief)", "native_audio": "low", "ambiguity": null},
+    "guitar_overview":             {"dur_s": 5.1,  "role": "establishing shot of instrument", "importance": "low", "include": "optional", "continuous_playback_matters": false, "candidate_duration_s": "1-1.5 or omit", "native_audio": "low", "ambiguity": null},
+    "first_practicing_a_song":     {"dur_s": 29.7, "role": "early-practice evidence", "importance": "medium-high", "include": "yes", "continuous_playback_matters": "somewhat", "candidate_duration_s": "3-5", "native_audio": "medium", "ambiguity": null},
+    "first_song_but_not_familar":  {"dur_s": 41.2, "role": "earlier, less-fluent attempt (the 'struggle' beat)", "importance": "medium", "include": "yes (subject to footage)", "continuous_playback_matters": "somewhat", "candidate_duration_s": "3-5", "native_audio": "medium", "ambiguity": "fluency stage inferred from AU; verify against footage during scoring"},
+    "familar_with_song":           {"dur_s": 18.1, "role": "intermediate fluency progress", "importance": "medium", "include": "optional", "continuous_playback_matters": false, "candidate_duration_s": "2-3 or omit", "native_audio": "low-medium", "ambiguity": null},
+    "final_song":                  {"dur_s": 39.3, "role": "PRIMARY narrative payoff (full-progression intent)", "importance": "highest", "include": "mandatory for full-progression; brief excerpt acceptable for teaser", "continuous_playback_matters": true, "candidate_duration_s": "15-25 continuous for a 60s Story (CANDIDATE, not a minimum); more only if the Story warrants; do NOT require the whole 39.3s unless intent warrants", "native_audio": "essential (the performance IS the moment)", "ambiguity": "whether a complete musical phrase/composition is captured is not established beyond 'sustained performance take'"}
+  },
+  "qualitative_measures": [
+    "narrative-payoff preservation (does the finale read as the payoff, not routine b-roll)",
+    "continuous-performance preservation (is the selected finale passage a coherent continuous stretch, not fragments)",
+    "significance-weighted allocation (time spent tracks narrative role, not even spread)",
+    "no forced arc / no forced long holds everywhere",
+    "native-audio continuity on the performance",
+    "temporal coherence and executability"
+  ]
+}
