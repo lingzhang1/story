@@ -69,6 +69,11 @@ from edit_planner import (
     EditPlanInfeasibleError,
     MalformedPlanError,
 )
+from duration_planner import (
+    DurationPlannerEngine,
+    DurationPlannerInputs,
+    compute_duration_evidence,
+)
 from music_plan import MusicPlanEngine, MusicPlanInputs
 import music_provider as _mp
 from story_coverage_v2 import (
@@ -95,6 +100,7 @@ from app.deps import (
     get_music_direction_engine,
     get_edit_planner_engine,
     get_music_plan_engine,
+    get_duration_planner_engine,
 )
 from app.store import InMemoryStoryStore
 
@@ -171,6 +177,20 @@ class EditPlanRequest(BaseModel):
     music_asset_id: str | None = Field(default=None)
     music_plan_id: UUID | None = Field(default=None)
     music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
+
+
+class DurationRecommendationRequest(BaseModel):
+    """POST /v1/duration-recommendation body (Milestone R-d.2). Recommends a target duration from the Story's
+    intent + material. Deterministic evidence is computed locally from moments[]; one Opus call adds the
+    scope-aware recommendation. The user owns the final choice — this never sets the Story's duration. If an
+    explicit CreativeIntent duration already exists the client preselects it and need not call this."""
+
+    model_config = ConfigDict(extra="forbid")
+    creative_intent: dict = Field(..., description="resolved CreativeIntent (may or may not carry target_duration_seconds)")
+    moments: list[dict] = Field(..., description="completed MomentUnderstanding[], each with id/duration_seconds/useful_segments")
+    story_guide: dict = Field(default_factory=dict)
+    story_coverage: dict = Field(default_factory=dict)
+    requested_scope: str | None = Field(default=None, description="'highlights' | 'complete' | None")
 
 
 class MusicPlanRequest(BaseModel):
@@ -698,6 +718,52 @@ def create_app() -> FastAPI:
                         "native_audio_priority": plan.audio_strategy.native_audio_priority,
                         "model_calls": diag.get("model_calls")})
         return plan
+
+    @app.post("/v1/duration-recommendation", status_code=200)
+    def duration_recommendation(
+        body: DurationRecommendationRequest,
+        engine: DurationPlannerEngine = Depends(get_duration_planner_engine),
+    ):
+        """Recommend a target duration (Milestone R-d.2, frozen duration_recommendation/1). Deterministic
+        evidence (useful-segment union, longest continuous span, feasible band) is computed LOCALLY; one Opus
+        call adds the scope-aware recommendation. Returns {evidence, recommendation}. On model/provider failure
+        the endpoint STILL returns 200 with the deterministic evidence and recommendation=null, so the client
+        falls back to manual duration selection rather than failing creation. There is NO universal default."""
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "duration_recommendation", "correlation_id": correlation_id,
+                "task": "duration.recommend", "prompt_version": "duration_recommendation/1"}
+        evidence = compute_duration_evidence(body.moments)
+        explicit = None
+        ci = body.creative_intent or {}
+        if isinstance(ci.get("target_duration_seconds"), (int, float)):
+            explicit = float(ci["target_duration_seconds"])
+        if evidence.get("zero_usable_material"):
+            log.info("duration_recommendation_no_material", extra={**base, "success": True, "zero_material": True})
+            return {"evidence": evidence, "recommendation": None, "explicit_target_seconds": explicit,
+                    "note": "no usable material; keep shooting"}
+        recommendation = None
+        error = None
+        try:
+            recommendation = engine.recommend(DurationPlannerInputs(
+                creative_intent=ci, evidence=evidence,
+                story_guide=body.story_guide, story_coverage=body.story_coverage,
+                requested_scope=body.requested_scope))
+        except (StructuredOutputError, ProviderError) as e:
+            error = str(e)[:300]
+            log.warning("duration_recommendation_unavailable", extra={**base, "success": False, "error": error})
+        diag = getattr(engine, "last_diagnostics", {}) or {}
+        log.info("duration_recommendation_done",
+                 extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                        "success": recommendation is not None,
+                        "n_moments": evidence.get("n_moments"),
+                        "feasible_ceiling_s": evidence.get("feasible_band_seconds", [0, 0])[1],
+                        "longest_continuous_s": evidence.get("longest_continuous_span_seconds"),
+                        "recommended": recommendation.get("recommended_range_seconds") if recommendation else None,
+                        "model_calls": diag.get("model_calls")})
+        return {"evidence": evidence, "recommendation": recommendation,
+                "explicit_target_seconds": explicit,
+                "note": None if recommendation else "recommendation unavailable; choose a duration manually"}
 
     @app.post("/v1/music/candidates", status_code=200)
     def music_candidates(body: MusicCandidatesRequest):

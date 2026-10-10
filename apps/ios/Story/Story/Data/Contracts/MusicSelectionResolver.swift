@@ -44,7 +44,10 @@ final class MusicSelectionResolver {
     }
 
     func recommend(for story: StoryModel, guideFramingSummary: String?) async -> Recommendation? {
-        let target = story.intentTargetDurationSeconds ?? 15.0
+        // R-d.2: the Story target is authoritative and chosen upstream (explicit intent or accepted
+        // recommendation). Without one, do NOT invent 15s — skip music (the create flow asks for a duration
+        // first); a nil target here means "no duration chosen yet", handled by the caller as manual selection.
+        guard let target = story.intentTargetDurationSeconds else { return nil }
         // 1. authoritative MusicDirection (ensures/infers once; user-authored returned untouched).
         guard let direction = await directionCoordinator.ensure(for: story, guideFramingSummary: guideFramingSummary)
         else { return nil }

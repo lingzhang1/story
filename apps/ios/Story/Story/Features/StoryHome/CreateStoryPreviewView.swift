@@ -33,16 +33,23 @@ struct CreateStoryPreviewView: View {
     @State private var musicRecommendation: MusicSelectionResolver.Recommendation?
     @State private var chosenMusic: StoryCreationCoordinator.MusicSelection?
     @State private var preparingSelection = false
+    // R-d.2 duration intelligence: recommendation-first duration step BEFORE music. `durationRec` drives
+    // the duration sheet; `recommendingDuration` shows a brief "Sizing your Story…" state; `durationNoMaterial`
+    // triggers a keep-shooting alert. The accepted value writes story.intentTargetDurationSeconds (authoritative).
+    @State private var recommendingDuration = false
+    @State private var durationRec: DurationRecommendation?
+    @State private var durationNoMaterial = false
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
     }
     private var musicResolver: MusicSelectionResolver { MusicSelectionResolver(context: context) }
+    private var durationService: DurationService { DurationService() }
 
     /// Duplicate-guard reflection: a create/result flow is already presented for this Story, so the Create
     /// action must not launch a second one (the coordinator also guards concurrent runs via `isCreating`).
     private var isCreateFlowActive: Bool {
-        showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection
+        showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection || recommendingDuration || durationRec != nil
     }
 
     /// Entry from the Create button. On FIRST entry, if a good persisted output already exists, open it
@@ -64,7 +71,49 @@ struct CreateStoryPreviewView: View {
     /// ALWAYS run the music picker + create path, bypassing the reopen shortcut. Used for a fresh create AND
     /// for "Create a new version" (which must make a NEW output, never bounce back to the existing one). R-d:
     /// resolve a recommendation -> picker; if music is unavailable, go straight to honest no-music Creating.
+    /// R-d.2: FIRST ensure a Story duration is chosen. If the CreativeIntent already carries an explicit
+    /// target it is preserved and we proceed; otherwise we fetch a recommendation and present it (recommendation
+    /// -first, no mandatory picker) so the user accepts/overrides before anything downstream runs.
     private func beginCreateFlow() {
+        if story.intentTargetDurationSeconds != nil {
+            beginMusicFlow()                        // explicit duration precedence — skip the duration step
+            return
+        }
+        promptDuration()
+    }
+
+    /// Always show the duration step (recommendation-first), regardless of an already-chosen target. Used by
+    /// "Create a new version" so a re-create lets the user rechoose the length — the natural moment to change it.
+    private func promptDuration() {
+        recommendingDuration = true
+        Task {
+            let payload = EditPlanRequestBuilder.momentsPayload(for: story, context: context)
+            let rec: DurationRecommendation? = await {
+                guard let p = payload else { return nil }
+                return await durationService.recommend(creativeIntent: p.creativeIntent, moments: p.moments)
+            }()
+            await MainActor.run {
+                recommendingDuration = false
+                if payload == nil {
+                    durationNoMaterial = true        // nothing usable -> "keep shooting"
+                } else {
+                    durationRec = rec ?? .init(fallbackEvidenceFor: payload!)   // nil rec -> manual-only sheet
+                }
+            }
+        }
+    }
+
+    /// User accepted a duration (recommended / highlights / custom). Persist it as the Story's authoritative
+    /// target, then continue into the music + create flow. Never silently overrides an existing explicit target.
+    private func acceptDuration(_ seconds: Double) {
+        durationRec = nil
+        story.intentTargetDurationSeconds = (seconds * 10).rounded() / 10
+        try? context.save()
+        beginMusicFlow()
+    }
+
+    /// The music + create path (unchanged R-d behavior), reached once a duration exists.
+    private func beginMusicFlow() {
         resolvingMusic = true
         Task {
             let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
@@ -108,7 +157,9 @@ struct CreateStoryPreviewView: View {
         reopenOutput = nil
         chosenMusic = nil
         showCreating = false
-        DispatchQueue.main.async { beginCreateFlow() }
+        // "Create a new version" is the natural moment to rechoose the length, so re-offer the duration step
+        // (recommendation-first) even though this Story already has a target — rather than silently reusing it.
+        DispatchQueue.main.async { promptDuration() }
     }
 
     /// Collapse the create flow back to Story Home in one tap.
@@ -231,13 +282,23 @@ struct CreateStoryPreviewView: View {
                 handlePickerChoice(choice, rec)
             }
         }
+        .sheet(item: $durationRec) { rec in
+            DurationChoiceView(rec: rec, onAccept: { acceptDuration($0) }, onCancel: { durationRec = nil })
+                .presentationDetents([.medium, .large])
+        }
+        .alert("Keep shooting", isPresented: $durationNoMaterial) {
+            Button("OK", role: .cancel) { durationNoMaterial = false }
+        } message: {
+            Text("There isn't enough usable footage yet to build a Story. Capture a few more Moments and try again.")
+        }
         .overlay {
-            if resolvingMusic || preparingSelection {
+            if resolvingMusic || preparingSelection || recommendingDuration {
                 ZStack {
                     StoryTheme.ink.opacity(0.72).ignoresSafeArea()
                     VStack(spacing: 14) {
                         ProgressView().tint(StoryTheme.cream)
-                        Text(resolvingMusic ? "Finding music for your Story…" : "Preparing your soundtrack…")
+                        Text(recommendingDuration ? "Sizing your Story…"
+                             : (resolvingMusic ? "Finding music for your Story…" : "Preparing your soundtrack…"))
                             .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.7))
                     }
                 }

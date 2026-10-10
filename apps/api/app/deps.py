@@ -68,6 +68,11 @@ from music_plan import (
     MusicPlanEngine,
     RealMusicPlanEngine,
 )
+from duration_planner import (
+    MODEL_ID as DURATION_PLANNER_MODEL,
+    DurationPlannerEngine,
+    RealDurationPlannerEngine,
+)
 
 
 def get_story_engine() -> StoryEngine:
@@ -206,7 +211,12 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     to the frozen us.anthropic.claude-opus-4-6-v1. Music inputs are optional (no-music planning supported).
     """
     model = os.environ.get("STORY_EDIT_PLANNER_MODEL", EDIT_PLANNER_MODEL)
-    return RealEditPlannerEngine(BedrockModelGateway(model_id=model))
+    # R-d.2 reliability: 2 bounded executability-repair attempts (was 1). v4's significance weighting can
+    # overshoot the ±20% tolerance on a long-payoff Story; a single repair did not always pull it back
+    # (observed on device: 66.4s vs 55s target -> 503). A second trim recovers these without touching the
+    # frozen prompt, EditPlan/2 contract, model, or the ±20% tolerance. Bounded: at most 2 extra Opus calls.
+    repairs = int(os.environ.get("STORY_EDIT_PLANNER_REPAIR_ATTEMPTS", "2"))
+    return RealEditPlannerEngine(BedrockModelGateway(model_id=model), executability_repair_attempts=repairs)
 
 
 def get_music_plan_engine() -> MusicPlanEngine:
@@ -220,3 +230,16 @@ def get_music_plan_engine() -> MusicPlanEngine:
     """
     model = os.environ.get("STORY_MUSIC_PLAN_MODEL", MUSIC_PLAN_MODEL)
     return RealMusicPlanEngine(BedrockModelGateway(model_id=model))
+
+
+def get_duration_planner_engine() -> DurationPlannerEngine:
+    """Provide the production Duration Planner engine (Milestone R-d.2, frozen duration_recommendation/1).
+
+    One Opus 4.6 call via the generic ModelGateway + the frozen prompt. RECOMMENDS a target duration from
+    CreativeIntent + StoryGuide + StoryCoverage/2 + deterministic material evidence; it does NOT select cuts
+    (Edit Planner v4) or render (Media Engine), and the user owns the final choice. Model is config-driven
+    (STORY_DURATION_PLANNER_MODEL) but defaults to the validated us.anthropic.claude-opus-4-6-v1. Never
+    fabricates — a failure propagates so the caller falls back to manual duration selection.
+    """
+    model = os.environ.get("STORY_DURATION_PLANNER_MODEL", DURATION_PLANNER_MODEL)
+    return RealDurationPlannerEngine(BedrockModelGateway(model_id=model))

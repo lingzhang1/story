@@ -170,12 +170,49 @@ enum EditPlanRequestBuilder {
 
     enum BuildError: Error, LocalizedError {
         case noUsableMoments
+        case missingTarget
         var errorDescription: String? {
             switch self {
             case .noUsableMoments:
                 return "No Moments with both a local video file and a completed analysis — nothing to plan."
+            case .missingTarget:
+                return "No Story duration chosen — pick a duration before creating."
             }
         }
+    }
+
+    /// Milestone R-d.2 — the SAME moments[] (id/duration_seconds/useful_segments/summary) + CreativeIntent
+    /// payload the Edit Planner receives, exposed so the Duration Planner recommends against identical
+    /// evidence. Returns nil when there is no usable material (caller shows "keep shooting"). Does NOT invent
+    /// a target: creative_intent carries the Story's EXPLICIT target_duration_seconds only when one is set.
+    static func momentsPayload(for story: StoryModel, context: ModelContext)
+        -> (moments: [JSONValue], creativeIntent: JSONValue)? {
+        let media = MomentResolver.resolve(moments: story.moments)
+        let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
+        let momentIds = Set(story.moments.map { $0.id })
+        let allMUs = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []
+        let muByMoment = Dictionary(uniqueKeysWithValues:
+            allMUs.filter { momentIds.contains($0.momentId) }.map { ($0.momentId, $0) })
+        var moments: [JSONValue] = []
+        for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let media = mediaById[m.id], let mu = muByMoment[m.id] else { continue }
+            let dur = media.durationSeconds > 0 ? media.durationSeconds : (m.asset?.durationSeconds ?? 0)
+            let understanding = JSONValue.object(fromJSONString: mu.understandingJSON)
+            moments.append(.object([
+                "id": .string(m.id.uuidString),
+                "duration_seconds": .number(dur),
+                "useful_segments": .array(usefulSegmentPairs(from: understanding, duration: dur)),
+                "summary": understandingSummary(understanding),
+            ]))
+        }
+        guard !moments.isEmpty else { return nil }
+        // CreativeIntent WITHOUT inventing a target — carry one ONLY if the Story already has it set.
+        var intent = creativeIntentPayload(story: story, target: story.intentTargetDurationSeconds ?? 0)
+        if story.intentTargetDurationSeconds == nil, case var .object(obj) = intent {
+            obj["target_duration_seconds"] = .null          // no explicit target => omit, never default
+            intent = .object(obj)
+        }
+        return (moments, intent)
     }
 
     static func build(story: StoryModel,
@@ -220,9 +257,12 @@ enum EditPlanRequestBuilder {
 
         guard !included.isEmpty else { throw BuildError.noUsableMoments }
 
-        let target = targetSeconds
-            ?? story.intentTargetDurationSeconds
-            ?? min(15.0, max(5.0, Double(included.count) * 3.0))
+        // R-d.2: the Story target is AUTHORITATIVE and must be chosen upstream (explicit CreativeIntent or an
+        // accepted Duration recommendation). NO blind numeric fallback on the normal path — an unset target is a
+        // precondition failure the create flow surfaces as manual selection, never a silent 15s.
+        guard let target = targetSeconds ?? story.intentTargetDurationSeconds else {
+            throw BuildError.missingTarget
+        }
 
         let intent = creativeIntentPayload(story: story, target: target)
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 // StoryCreatingView — R-c Batch B, production "Creating your Story..." screen (frozen Figma Screen10Creating).
 //
@@ -81,6 +82,12 @@ struct StoryCreatingView: View {
     var onCompleted: ((GeneratedOutputModel) -> Void)? = nil
 
     @State private var coordinator: StoryCreationCoordinator?
+    // R-d.2 keep-alive: creating a Story runs a long foreground pipeline (Opus planning + AVAssetExportSession),
+    // both of which iOS SUSPENDS when the screen locks/darkens — killing the request (-1005) and the export
+    // ("Operation Interrupted"). Disabling the idle timer stops auto-lock mid-create; a background task buys a
+    // grace window if the user locks manually. Neither is a true background render, but both stop the common
+    // "screen went dark -> I couldn't finish your Story" failure.
+    @State private var keepAliveTask: UIBackgroundTaskIdentifier = .invalid
     /// Set when the coordinator reaches .completed — drives navigation to the Result screen (fallback path only).
     @State private var completedOutput: GeneratedOutputModel?
     /// Guard so the completion hand-off fires exactly once.
@@ -122,6 +129,7 @@ struct StoryCreatingView: View {
                 })
         }
         .task {
+            beginKeepAlive()
             // Build the real coordinator once and start the pipeline. Prod planner = EditPlannerService,
             // prod renderer = MediaEngineV1 (device-gated). R-d: resolve a soundtrack FIRST (recommend top
             // track -> download), then start MUSIC-AWARE creation; if music is unavailable (provider off,
@@ -154,6 +162,27 @@ struct StoryCreatingView: View {
                 // Standalone fallback: push Result from here.
                 completedOutput = output
             }
+        }
+        .onDisappear { endKeepAlive() }
+    }
+
+    /// Keep the app awake and alive during the long create pipeline. Disable auto-lock (the main cause of a
+    /// suspended-mid-render failure) and open a background task so a manual lock gets a grace window instead of
+    /// an instant kill. Best-effort — a failure here never blocks creation.
+    private func beginKeepAlive() {
+        UIApplication.shared.isIdleTimerDisabled = true
+        if keepAliveTask == .invalid {
+            keepAliveTask = UIApplication.shared.beginBackgroundTask(withName: "story-create") {
+                endKeepAlive()   // expiration handler — release cleanly if iOS reclaims the time
+            }
+        }
+    }
+
+    private func endKeepAlive() {
+        UIApplication.shared.isIdleTimerDisabled = false
+        if keepAliveTask != .invalid {
+            UIApplication.shared.endBackgroundTask(keepAliveTask)
+            keepAliveTask = .invalid
         }
     }
 

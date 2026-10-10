@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import AVFoundation
 
 // MusicPickerView — R-d final picker (frozen Figma ScreenTMBMusic "Recommended for your Story").
 //
@@ -141,6 +142,11 @@ struct MusicPickerView: View {
     private func startPreview(_ track: MusicCandidateDTO) {
         guard let s = track.previewURLString, let url = URL(string: s) else { return }
         stopPreview()
+        // Route preview audio through the .playback category so it is audible even with the hardware mute
+        // switch ON (the default ambient category is silenced by the mute switch — the usual cause of a
+        // preview that "won't play"). Best-effort: a session failure must not crash the picker.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
         let p = AVPlayer(url: url)   // Epidemic previews are signed HLS (.m3u8); AVPlayer handles streaming.
         player = p
         playingTrackId = track.trackId
@@ -151,6 +157,8 @@ struct MusicPickerView: View {
         player?.pause()
         player = nil
         playingTrackId = nil
+        // Release the audio session so it does not keep other audio ducked after previewing.
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     // MARK: - consumer copy (NO BPM / beats / analysis)
