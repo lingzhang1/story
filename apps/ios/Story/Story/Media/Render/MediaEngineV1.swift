@@ -352,12 +352,26 @@ struct MediaEngineV1 {
         var soundtrackTrack: AVMutableCompositionTrack? = nil
         if let sURL = inputs.soundtrackURL, FileManager.default.fileExists(atPath: sURL.path) {
             let sAsset = AVURLAsset(url: sURL)
+            // A freshly-downloaded temp MP3 is NOT yet indexed by AVFoundation: synchronous
+            // `tracks(withMediaType:)` returns an EMPTY array on iOS 16+, so `.first` is nil and the soundtrack
+            // is silently dropped (the observed 'no music' bug — video + native audio worked because those
+            // assets were already loaded). Force the 'tracks' key to load (bounded wait) before reading it.
+            let sem = DispatchSemaphore(value: 0)
+            sAsset.loadValuesAsynchronously(forKeys: ["tracks", "duration"]) { sem.signal() }
+            _ = sem.wait(timeout: .now() + 10)
             if let sTrack = sAsset.tracks(withMediaType: .audio).first,
                let mTrack = composition.addMutableTrack(withMediaType: .audio,
                                                         preferredTrackID: kCMPersistentTrackID_Invalid) {
                 let avail = CMTime(seconds: min(sAsset.duration.seconds, total.seconds), preferredTimescale: 600)
-                try? mTrack.insertTimeRange(CMTimeRange(start: .zero, duration: avail), of: sTrack, at: .zero)
-                soundtrackTrack = mTrack
+                do {
+                    try mTrack.insertTimeRange(CMTimeRange(start: .zero, duration: avail), of: sTrack, at: .zero)
+                    soundtrackTrack = mTrack
+                } catch {
+                    // surface WHY the soundtrack failed to insert instead of a silent no-music render
+                    StoryCreativeRefinement.lastMusicNote += " | soundtrack insert FAILED: \(error)"
+                }
+            } else {
+                StoryCreativeRefinement.lastMusicNote += " | soundtrack asset had NO audio track after load (file bad?)"
             }
         }
         // segmentRanges keeps the old (segment, timeline-range) shape the audio mix + duration-verify expect.
