@@ -442,10 +442,15 @@ class RealEditPlannerEngine:
          is ALWAYS authoritative; the model never self-certifies.
     `last_diagnostics` records what happened for the reliability measurement / server logs."""
 
-    def __init__(self, gateway: ModelGateway, *, max_tokens: int = 2600, executability_repair_attempts: int = 1):
+    def __init__(self, gateway: ModelGateway, *, max_tokens: int = 8192, executability_repair_attempts: int = 1,
+                 max_tokens_ceiling: int = 16384):
         self._gw = gateway
         self._system = _load_system()
         self._max_tokens = max_tokens
+        # Hard ceiling for the on-truncation escalation (see _call). A 24-Moment plan overflowed the old 2600
+        # cap (proven: stop_reason=max_tokens, output_tokens=2600); 8192 fits a full ~17-segment plan with
+        # headroom, and we escalate once up to this ceiling if a plan still truncates.
+        self._max_tokens_ceiling = max(max_tokens, max_tokens_ceiling)
         self._exec_repairs = max(0, executability_repair_attempts)
         self.last_diagnostics: dict[str, Any] = {}
 
@@ -459,20 +464,32 @@ class RealEditPlannerEngine:
         }
 
         def _call(user_content: str) -> dict:
-            req = StructuredRequest(
-                task=TASK, schema=SCHEMA, prompt_version=PROMPT_VERSION, system=self._system,
-                user_content=user_content, max_repair_attempts=2,
-                max_tokens=self._max_tokens, temperature=0.0)
-            result = self._gw.generate_structured(req)  # raises StructuredOutputError/ProviderError
-            diag["model_calls"] += 1
-            u = result.usage
-            if u:
-                diag["input_tokens"] += (u.input_tokens or 0)
-                diag["output_tokens"] += (u.output_tokens or 0)
-                diag["last_output_tokens"] = u.output_tokens or 0
-            # stop_reason='max_tokens' means THIS call's output was truncated at the ceiling — the prime
-            # suspect when a 24-Moment plan comes back with an empty segments[] despite feasible=true.
-            diag["last_stop_reason"] = result.stop_reason
+            # Escalate the output cap on truncation: if the model stops at max_tokens (a truncated, usually
+            # empty plan), retry ONCE at the ceiling before giving up. Proven root cause of the 24-Moment
+            # 'no segments' 503. The retry is bounded (one escalation) so a genuinely runaway plan still fails
+            # fast rather than looping.
+            caps = [self._max_tokens]
+            if self._max_tokens_ceiling > self._max_tokens:
+                caps.append(self._max_tokens_ceiling)
+            result = None
+            for cap in caps:
+                req = StructuredRequest(
+                    task=TASK, schema=SCHEMA, prompt_version=PROMPT_VERSION, system=self._system,
+                    user_content=user_content, max_repair_attempts=2,
+                    max_tokens=cap, temperature=0.0)
+                result = self._gw.generate_structured(req)  # raises StructuredOutputError/ProviderError
+                diag["model_calls"] += 1
+                u = result.usage
+                if u:
+                    diag["input_tokens"] += (u.input_tokens or 0)
+                    diag["output_tokens"] += (u.output_tokens or 0)
+                    diag["last_output_tokens"] = u.output_tokens or 0
+                diag["last_stop_reason"] = result.stop_reason
+                diag["last_max_tokens_used"] = cap
+                if result.stop_reason != "max_tokens":
+                    break   # not truncated — accept this result
+                diag["truncation_escalations"] = diag.get("truncation_escalations", 0) + 1
+                # else: truncated — loop retries at the higher cap (if any left)
             return result.data
 
         # 1-3: initial generation, safe normalization, executability validation.

@@ -231,7 +231,13 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     # (observed on device: 66.4s vs 55s target -> 503). A second trim recovers these without touching the
     # frozen prompt, EditPlan/2 contract, model, or the ±20% tolerance. Bounded: at most 2 extra Opus calls.
     repairs = int(os.environ.get("STORY_EDIT_PLANNER_REPAIR_ATTEMPTS", "2"))
-    return RealEditPlannerEngine(_gateway_with_fallback(model), executability_repair_attempts=repairs)
+    # Output cap for the plan JSON. The old 2600 truncated a 24-Moment plan (proven: stop_reason=max_tokens,
+    # output_tokens=2600 -> empty segments[] -> 503). 8192 fits a full ~17-segment plan; on a still-truncated
+    # plan the engine escalates ONCE to the ceiling (16384). Both env-tunable without a redeploy.
+    max_tokens = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS", "8192"))
+    ceiling = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS_CEILING", "16384"))
+    return RealEditPlannerEngine(_gateway_with_fallback(model), executability_repair_attempts=repairs,
+                                 max_tokens=max_tokens, max_tokens_ceiling=ceiling)
 
 
 def get_music_plan_engine() -> MusicPlanEngine:

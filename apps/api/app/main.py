@@ -705,6 +705,8 @@ def create_app() -> FastAPI:
                                "last_stop_reason": diag.get("last_stop_reason"),
                                "last_output_tokens": diag.get("last_output_tokens"),
                                "max_tokens": diag.get("max_tokens"),
+                               "last_max_tokens_used": diag.get("last_max_tokens_used"),
+                               "truncation_escalations": diag.get("truncation_escalations", 0),
                                "input_tokens": diag.get("input_tokens"),
                                # INPUT SIZE: moment count + the serialized request payload bytes.
                                "n_moments": len(body.moments),
@@ -720,7 +722,9 @@ def create_app() -> FastAPI:
                    "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible,
                    "first_pass_executable": diag.get("first_pass_executable"),
                    "normalized": diag.get("normalized"), "repaired": diag.get("repaired"), "used_fallback": diag.get("used_fallback"),
-                   "model_calls": diag.get("model_calls")})
+                   "model_calls": diag.get("model_calls"),
+                   "truncation_escalations": diag.get("truncation_escalations", 0),
+                   "last_max_tokens_used": diag.get("last_max_tokens_used")})
         return plan
 
     @app.post("/v1/music-plan", response_model=MusicPlanContract, status_code=200)

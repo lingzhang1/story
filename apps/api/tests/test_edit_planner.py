@@ -467,3 +467,44 @@ def test_endpoint_sufficient_material_but_model_refused_maps_503_not_shorter():
     r = c.post("/v1/edit-plan", json=body)
     assert r.status_code == 503          # NOT 422 -> client won't be told to shorten a Story with ample footage
     assert "material" not in r.json()["detail"]
+
+
+# ---- truncation escalation: stop_reason=max_tokens -> retry at the higher cap, then succeed ----
+class _TruncThenOkGateway:
+    """First call returns a truncated EMPTY plan (stop_reason=max_tokens); the escalated retry returns a
+    valid plan. Records the max_tokens each call was issued with so we can assert the escalation happened."""
+    def __init__(self, good_plan):
+        self.good = good_plan
+        self.caps_seen = []
+        self.n = 0
+
+    def generate_structured(self, req):
+        import json as _j
+        self.caps_seen.append(req.max_tokens)
+        self.n += 1
+        if self.n == 1:
+            # truncated: feasible but empty segments, stopped at the cap
+            return StructuredResult(data={"target_duration_seconds": 12.0, "feasible": True, "segments": []},
+                                    usage=Usage(100, req.max_tokens, 100 + req.max_tokens),
+                                    attempts=1, model="fake", provider="fake", stop_reason="max_tokens")
+        return StructuredResult(data=_j.loads(_j.dumps(self.good)), usage=Usage(100, 300, 400),
+                                attempts=1, model="fake", provider="fake", stop_reason="end_turn")
+
+
+def test_truncation_escalates_max_tokens_and_recovers():
+    gw = _TruncThenOkGateway(_plan12(6.0, 6.0))
+    eng = RealEditPlannerEngine(gw, max_tokens=2600, max_tokens_ceiling=16384)
+    plan = eng.generate(_target12_inputs())
+    assert len(plan.segments) == 2                      # recovered a valid plan
+    assert gw.caps_seen[0] == 2600                       # first try at base cap
+    assert gw.caps_seen[1] == 16384                      # escalated retry at the ceiling
+    assert eng.last_diagnostics.get("truncation_escalations", 0) >= 1
+
+
+def test_no_escalation_when_not_truncated():
+    # a clean first result must NOT trigger a second (escalated) call
+    gw = _TruncThenOkGateway(_plan12(6.0, 6.0)); gw.n = 1  # force "already past the truncation branch"
+    gw2 = SeqGateway([_plan12(6.0, 6.0)])
+    eng = RealEditPlannerEngine(gw2, max_tokens=8192, max_tokens_ceiling=16384)
+    eng.generate(_target12_inputs())
+    assert gw2.calls == 1                                # exactly one call, no escalation
