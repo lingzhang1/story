@@ -55,12 +55,20 @@ final class MusicSelectionResolver {
         let directionJSON = Self.encodeJSON(direction)
         let intentJSON = Self.encodeJSON(CreativeIntentContractDTO(from: story))
 
+        // Load the Story's persisted StoryGuide + Coverage (snake_case wire JSON) and PASS THEM to MusicPlan.
+        // Previously these were empty objects, so MusicPlan judged native-audio priority from a possibly-thin
+        // CreativeIntent alone — the native-audio-disappearance root cause. The Guide/Coverage carry the
+        // Story's actual narrative + what-it-became, which the frozen music_plan/1 prompt uses to decide
+        // whether native audio (a performance, meaningful ambience) must be preserved. No prompt/contract change.
+        let guideJSON = loadGuideJSON(for: story.id)
+        let coverageJSON = loadCoverageJSON(for: story.id)
+
         // 2. MusicPlan (frozen music_plan/1). 404/503 => no music.
         let planJSON: JSONValue
         do {
             planJSON = try await planService.plan(MusicPlanRequestDTO(
                 storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
-                targetDurationSeconds: target, storyGuide: .object([:]), storyCoverage: .object([:])))
+                targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON))
         } catch { return nil }
 
         // 3. candidates (+ preview + top analysis). Provider off/unavailable => no music.
@@ -145,6 +153,27 @@ final class MusicSelectionResolver {
     }
 
     // MARK: - helpers
+
+    /// Load the Story's persisted StoryGuide wire JSON (story_guide/1) as a JSONValue, or an empty object when
+    /// none exists yet. Fetched from SwiftData by storyId (same pattern as StoryGuideCoordinator).
+    private func loadGuideJSON(for storyId: UUID) -> JSONValue {
+        var desc = FetchDescriptor<StoryGuideModel>(predicate: #Predicate { $0.storyId == storyId })
+        desc.fetchLimit = 1
+        if let json = (try? context.fetch(desc))?.first?.guideJSON, !json.isEmpty {
+            return JSONValue.object(fromJSONString: json)
+        }
+        return .object([:])
+    }
+
+    /// Load the Story's persisted StoryCoverage wire JSON (story_coverage/*) as a JSONValue, or an empty object.
+    private func loadCoverageJSON(for storyId: UUID) -> JSONValue {
+        var desc = FetchDescriptor<StoryCoverageModel>(predicate: #Predicate { $0.storyId == storyId })
+        desc.fetchLimit = 1
+        if let json = (try? context.fetch(desc))?.first?.coverageJSON, !json.isEmpty {
+            return JSONValue.object(fromJSONString: json)
+        }
+        return .object([:])
+    }
 
     private static func encodeJSON<T: Encodable>(_ v: T) -> JSONValue {
         guard let d = try? StoryContractCoding.encoder().encode(v),
