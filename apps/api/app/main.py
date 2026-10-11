@@ -70,6 +70,14 @@ from edit_planner import (
     EditPlanInfeasibleError,
     MalformedPlanError,
 )
+import edit_planner as _edit_planner_mod
+
+
+def _edit_planner_prompt_version() -> str:
+    """The edit-plan prompt version actually in effect (reflects STORY_EDIT_PLAN_VERSION). Logged on each
+    plan so a device render can PROVE which prompt (edit_plan/4 vs the v5 candidate) produced it."""
+    return getattr(_edit_planner_mod, "PROMPT_VERSION", "edit_plan/?")
+
 from duration_planner import (
     DurationPlannerEngine,
     DurationPlannerInputs,
@@ -721,6 +729,7 @@ def create_app() -> FastAPI:
         log.info("edit_plan_generated",
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "segment_count": len(plan.segments), "feasible": plan.feasible,
+                   "prompt_version": _edit_planner_prompt_version(),
                    "first_pass_executable": diag.get("first_pass_executable"),
                    "normalized": diag.get("normalized"), "repaired": diag.get("repaired"), "used_fallback": diag.get("used_fallback"),
                    "model_calls": diag.get("model_calls"),
