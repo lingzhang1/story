@@ -272,6 +272,13 @@ class EpidemicClient:
         _, body = self._call(f"/v0/tracks/{track_id}/download", {"format": "mp3", "quality": quality})
         return body
 
+    def waveform_for_track(self, track_id: str) -> dict | None:
+        """Provider-agnostic hook used by the music endpoints to source an energy_curve waveform by track id.
+        The REST (production) path intentionally returns None here — its MusicAnalysis/1 is driven by the
+        dedicated /beats + /highlights endpoints, and energy_curve stays empty exactly as before this change.
+        (The separate waveform(waveform_url) method above is unchanged and still used by evals.)"""
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Provider selector — REST (production) vs MCP (internal testing). ADDITIVE.

@@ -27,6 +27,7 @@ class _FakeClient:
     def highlights(self, track_id, duration=15): return {"start": 10000, "end": 25000}
     def metadata(self, track_id): return {"length": 62, "bpm": 90, "vocalType": "NONE"}
     def download_link(self, track_id, *, quality="normal"): return f"https://dl.example/{track_id}.mp3?sig=abc"
+    def waveform_for_track(self, track_id): return None
 
 
 @pytest.fixture

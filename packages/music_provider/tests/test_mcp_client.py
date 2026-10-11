@@ -175,3 +175,100 @@ def test_parse_sse_extracts_json_rpc_envelope():
     body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n"
     env = EpidemicMCPClient._parse_sse(body)
     assert env["result"]["ok"] is True
+
+
+# ----------------------------- energy_curve / waveform ---------------------------
+import io
+import urllib.error
+
+# a real BBC-format waveform payload shape (signed int8 samples), matching the live Epidemic format
+_WAVEFORM_JSON = {
+    "version": 2, "channels": 1, "sample_rate": 48000, "bits": 8, "samples_per_pixel": 256,
+    "length": 8, "data": [0, 40, -80, 120, -124, 126, 10, -10, 60, -60, 100, -100, 5, -5, 30, -30],
+}
+
+
+class _Resp(io.BytesIO):
+    """Minimal urlopen() context-manager stand-in."""
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _wf_client(monkeypatch, urlopen_impl, *, cache_url="https://cdn/wf.json", tid="tid"):
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    c = EpidemicMCPClient(key="epidemic_live_fake")
+    c._wf_cache[tid] = cache_url
+    monkeypatch.setattr("music_provider.mcp_client.urllib.request.urlopen", urlopen_impl)
+    return c
+
+
+def test_waveform_valid_feeds_energy_curve(monkeypatch):
+    def urlopen(req, timeout=None):
+        return _Resp(json.dumps(_WAVEFORM_JSON).encode())
+    c = _wf_client(monkeypatch, urlopen)
+    wf = c.waveform_for_track("tid")
+    assert isinstance(wf, dict) and wf["data"]
+    # end to end: it produces a bounded 0..1 energy_curve through the frozen normalizer
+    an = mp.to_music_analysis_v1(duration_seconds=120.0, raw_bpm=100, raw_beats=[], raw_highlights={},
+                                 waveform=wf, vocal_type="NONE")
+    assert an.energy_curve and all(0.0 <= x <= 1.0 for x in an.energy_curve)
+
+
+def test_waveform_uncached_track_returns_none(monkeypatch):
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    c = EpidemicMCPClient(key="epidemic_live_fake")  # no cache entry
+    assert c.waveform_for_track("never-searched") is None
+
+
+def test_waveform_empty_body_returns_none(monkeypatch):
+    c = _wf_client(monkeypatch, lambda req, timeout=None: _Resp(b""))
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_malformed_json_returns_none(monkeypatch):
+    c = _wf_client(monkeypatch, lambda req, timeout=None: _Resp(b"{not json"))
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_wrong_shape_returns_none(monkeypatch):
+    # valid JSON but not the BBC waveform shape (no non-empty data list)
+    c = _wf_client(monkeypatch, lambda req, timeout=None: _Resp(json.dumps({"data": []}).encode()))
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_expired_url_returns_none(monkeypatch):
+    def urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url if hasattr(req, "full_url") else "u", 403, "Forbidden", {}, None)
+    c = _wf_client(monkeypatch, urlopen)
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_timeout_returns_none(monkeypatch):
+    def urlopen(req, timeout=None):
+        raise TimeoutError("read timed out")
+    c = _wf_client(monkeypatch, urlopen)
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_oversize_body_returns_none(monkeypatch):
+    big = b"x" * (EpidemicMCPClient._WAVEFORM_MAX_BYTES + 10)
+    c = _wf_client(monkeypatch, lambda req, timeout=None: _Resp(big))
+    assert c.waveform_for_track("tid") is None
+
+
+def test_waveform_does_not_invent_beats_or_highlights(monkeypatch):
+    """energy_curve populated, but beats/downbeats/highlight stay honestly empty — NOT derived from bpm."""
+    c = _wf_client(monkeypatch, lambda req, timeout=None: _Resp(json.dumps(_WAVEFORM_JSON).encode()))
+    wf = c.waveform_for_track("tid")
+    an = mp.to_music_analysis_v1(duration_seconds=120.0, raw_bpm=128, raw_beats=c.beats("tid"),
+                                 raw_highlights=c.highlights("tid"), waveform=wf, vocal_type="NONE")
+    assert an.energy_curve                      # present
+    assert an.beats == [] and an.downbeats == []  # NOT invented from bpm=128
+    assert an.highlight_window is None
+
+
+def test_rest_waveform_for_track_returns_none(monkeypatch):
+    """REST adapter preserves prior behavior: energy_curve stays empty (waveform None)."""
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    rest = mp.EpidemicClient(key="epidemic_live_fake")
+    assert rest.waveform_for_track("tid") is None

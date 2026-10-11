@@ -843,7 +843,7 @@ def create_app() -> FastAPI:
                     raw_bpm=top.bpm,
                     raw_beats=client.beats(top.track_id),
                     raw_highlights=client.highlights(top.track_id),
-                    waveform=None,
+                    waveform=client.waveform_for_track(top.track_id),
                     vocal_type=top.vocal_type,
                 ).model_dump(mode="json")
             except _mp.EpidemicProviderError as e:
@@ -868,7 +868,7 @@ def create_app() -> FastAPI:
                 raw_bpm=meta.get("bpm"),
                 raw_beats=client.beats(body.track_id),
                 raw_highlights=client.highlights(body.track_id),
-                waveform=None,
+                waveform=client.waveform_for_track(body.track_id),
                 vocal_type=meta.get("vocalType"),
             )
         except _mp.EpidemicAuthError:

@@ -140,6 +140,7 @@ def test_music_candidates_endpoint_ranks_when_enabled(monkeypatch):
         def beats(self, track_id): return [{"start": 0}, {"start": 500}]
         def highlights(self, track_id, duration=15): return {"start": 5000, "end": 20000}
         def metadata(self, track_id): return {"length": 90, "bpm": 70, "vocalType": "NONE"}
+        def waveform_for_track(self, track_id): return None
     monkeypatch.setattr(mp, "EpidemicClient", _FakeClient)
     client = TestClient(create_app())
     r = client.post("/v1/music/candidates", json={

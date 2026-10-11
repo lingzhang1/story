@@ -64,6 +64,8 @@ class EpidemicMCPClient:
         # lqmp3 preview urls arrive inline in search results; cache per instance so preview_url is a
         # no-op lookup (no second round-trip, no 402). Per-instance to avoid cross-request leakage.
         self._lq_cache: dict[str, str | None] = {}
+        # waveformUrl also arrives inline in search; cache it so waveform() needs no extra MCP round-trip.
+        self._wf_cache: dict[str, str | None] = {}
 
     # ---- MCP transport (JSON-RPC over HTTP, SSE-framed responses) ----------
     def _post(self, msg: dict, *, notif: bool = False) -> tuple[int, str | None, str]:
@@ -173,6 +175,7 @@ class EpidemicMCPClient:
             "vocalType": cls._vocal_type(rec),
             # carried alongside (not in the REST shape) so preview_url needs no second round-trip
             "_lqmp3Url": af.get("lqmp3Url"),
+            "_waveformUrl": af.get("waveformUrl"),
         }
 
     # ---- surface parity with EpidemicClient --------------------------------
@@ -191,6 +194,7 @@ class EpidemicMCPClient:
             rec = n.get("recording") if isinstance(n, dict) else None
             if rec and rec.get("id"):
                 self._lq_cache[rec["id"]] = (rec.get("audioFile") or {}).get("lqmp3Url")
+                self._wf_cache[rec["id"]] = (rec.get("audioFile") or {}).get("waveformUrl")
                 tracks.append(self._to_track(rec))
         return tracks
 
@@ -235,6 +239,38 @@ class EpidemicMCPClient:
     def highlights(self, track_id: str, duration: int = 15):
         # No highlight-window tool on the MCP server; empty -> normalize_highlight returns None (graceful).
         return {}
+
+    # bound the waveform fetch: Epidemic waveform JSON is ~14 KB (BBC format, 3202 int8 samples);
+    # 1 MB is a generous ceiling that still refuses a pathological/wrong body.
+    _WAVEFORM_MAX_BYTES = 1_048_576
+    _WAVEFORM_TIMEOUT_S = 8
+
+    def waveform_for_track(self, track_id: str) -> dict | None:
+        """Fetch + parse the track's BBC-format waveform JSON for energy_curve. Returns the parsed dict
+        (``{"data": [...], ...}``) on success, or ``None`` on ANY failure (unknown track, expired/forbidden
+        signed URL, timeout, empty body, oversize body, malformed JSON). The caller feeds it to
+        to_music_analysis_v1(waveform=...); a None simply yields an empty energy_curve — never an error, and
+        NEVER an invented value. The payload is used transiently to compute a coarse envelope and is NOT
+        persisted or mirrored (Business MCP terms)."""
+        url = getattr(self, "_wf_cache", {}).get(track_id)
+        if not url:
+            return None
+        try:
+            req = urllib.request.Request(url, method="GET")
+            req.add_header("accept", "application/json")
+            with urllib.request.urlopen(req, timeout=self._WAVEFORM_TIMEOUT_S) as r:
+                raw = r.read(self._WAVEFORM_MAX_BYTES + 1)
+            if not raw or len(raw) > self._WAVEFORM_MAX_BYTES:
+                return None  # empty, or implausibly large -> treat as unavailable
+            doc = json.loads(raw.decode("utf-8", "strict"))
+            # must be the BBC waveform shape normalize_energy expects: a dict with a non-empty `data` list
+            if not isinstance(doc, dict) or not isinstance(doc.get("data"), list) or not doc["data"]:
+                return None
+            return doc
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
+                json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            # expired/forbidden URL (403/410), DNS/connect/read timeout, malformed body -> graceful None
+            return None
 
 
 def _exp_from_signed(url: str) -> float | None:
