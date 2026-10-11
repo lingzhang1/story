@@ -225,6 +225,16 @@ class MusicTrackRequest(BaseModel):
     duration_seconds: float | None = Field(default=None, gt=0.0, description="optional hint when metadata lacks length")
 
 
+class MusicSearchRequest(BaseModel):
+    """POST /v1/music/search body — user-driven free-text catalog search with pagination. PROTOTYPING-ONLY.
+    Distinct from /v1/music/candidates (MusicPlan-driven ranked recommendation): this is 'let me browse'."""
+
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., min_length=1, max_length=200, description="free-text search term")
+    page_size: int = Field(default=10, ge=1, le=20)
+    cursor: str | None = Field(default=None, description="opaque next-page cursor from a prior response; None = first page")
+
+
 class StoryCoverageV2Request(BaseModel):
     """POST /v1/story-coverage/v2 body — the FROZEN Guide-relative Coverage. CreativeIntent + the
     persisted frozen StoryGuide + completed MomentUnderstanding[] + pending_count -> StoryCoverage/2
@@ -852,6 +862,48 @@ def create_app() -> FastAPI:
         log.info("music_candidates_ranked", extra={**base, "n": len(ranked)})
         return {"candidates": out, "top_track_id": ranked[0].track_id if ranked else None,
                 "top_music_analysis": top_analysis}
+
+    @app.post("/v1/music/search", status_code=200)
+    def music_search(body: MusicSearchRequest):
+        """PROTOTYPING-ONLY: user-driven free-text catalog search with cursor pagination. Returns candidate
+        rows (same shape as /v1/music/candidates, incl. a preview url) plus a next_cursor for load-more.
+        Unlike /candidates this does NOT rank by a MusicPlan or compute a top analysis — it is a browse
+        surface. Flag-gated 404 when prototyping is off."""
+        if not _mp.prototyping_enabled():
+            raise HTTPException(status_code=404, detail="not found")
+        base = {"operation": "music_search", "correlation_id": str(uuid4()), "mode": "prototyping"}
+        try:
+            client = _mp.get_music_client()
+        except _mp.EpidemicAuthError:
+            raise HTTPException(status_code=503, detail="music provider auth unavailable")
+        if not hasattr(client, "search_page"):
+            # defensive: a provider without pagination support — should not happen (both implement it)
+            raise HTTPException(status_code=503, detail="music search unavailable")
+        try:
+            raw, next_cursor = client.search_page(body.query, page_size=body.page_size, cursor=body.cursor)
+        except _mp.EpidemicProviderError as e:
+            log.warning("music_search_provider_error", extra={**base, "error": str(e)[:200]})
+            raise HTTPException(status_code=503, detail="music provider temporarily unavailable")
+        out = []
+        for t in raw:
+            tid = t.get("id")
+            if not tid:
+                continue
+            preview = None
+            try:
+                preview = client.preview_url(tid)
+            except _mp.EpidemicProviderError:
+                preview = None
+            out.append({
+                "track_id": tid,
+                "title": t.get("title", ""),
+                "score": 0.0,  # search results are unranked (no MusicPlan); kept for DTO parity
+                "duration_seconds": float(t.get("length") or 0.0),
+                "vocal_type": t.get("vocalType"),
+                "preview_url": preview,
+            })
+        log.info("music_search_page", extra={**base, "n": len(out), "has_more": next_cursor is not None})
+        return {"candidates": out, "next_cursor": next_cursor}
 
     @app.post("/v1/music/analysis", status_code=200)
     def music_analysis(body: MusicTrackRequest):

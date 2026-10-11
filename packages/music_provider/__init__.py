@@ -246,6 +246,21 @@ class EpidemicClient:
         _, body = self._call("/v0/tracks/search", p)
         return body.get("tracks") or body.get("items") or body.get("data") or []
 
+    def search_page(self, term: str, *, page_size: int = 10, cursor: str | None = None):
+        """Paginated free-text search, offset-based (the Partner REST API has no opaque cursor). ``cursor`` is a
+        stringified integer offset ('0' / None for the first page); ``next_cursor`` is the next offset as a
+        string, or None when the page came back short (no further results). Mirrors the MCP client's
+        (tracks, next_cursor) shape so the endpoint is provider-agnostic."""
+        try:
+            offset = int(cursor) if cursor else 0
+        except (TypeError, ValueError):
+            offset = 0
+        p: dict[str, Any] = {"term": term, "limit": page_size, "offset": offset}
+        _, body = self._call("/v0/tracks/search", p)
+        tracks = body.get("tracks") or body.get("items") or body.get("data") or []
+        next_cursor = str(offset + page_size) if len(tracks) >= page_size else None
+        return tracks, next_cursor
+
     def metadata(self, track_id: str):
         _, body = self._call("/v0/tracks/metadata", {"trackId": track_id})
         arr = body if isinstance(body, list) else body.get("tracks")

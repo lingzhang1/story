@@ -15,9 +15,6 @@ struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
-    #if DEBUG
-    @State private var showRenderHarness = false
-    #endif
 
     // R-c Batch B: coordinator-driven create/result navigation. The visible Create
     // button is still an intentional disabled state (Batch C flips availability on
@@ -230,24 +227,6 @@ struct CreateStoryPreviewView: View {
                 .padding(.top, 4)
 
                 #if DEBUG
-                // R-b Case G: reachable entry to the Media Engine V1 render test harness. Visible in ANY
-                // DEBUG build (every Xcode build-and-run) — NOT gated on aiDebug — so there is no launch
-                // argument to set. #if DEBUG keeps it out of Release / consumer flow entirely.
-                Divider().overlay(StoryTheme.gold.opacity(0.25))
-                Button {
-                    showRenderHarness = true
-                } label: {
-                    HStack {
-                        Text("▶ Render Test (dev) · Media Engine V1")
-                        Spacer()
-                    }
-                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.ink)
-                    .padding(.vertical, 12).padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity)
-                    .background(StoryTheme.gold, in: RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-
                 if AppMode.current.showsDiagnostics {
                     StoryEyebrow(text: "DEBUG · dev mock output")
                     Button("Generate mock output (dev only)") {
@@ -304,11 +283,6 @@ struct CreateStoryPreviewView: View {
                 }
             }
         }
-        #if DEBUG
-        .sheet(isPresented: $showRenderHarness) {
-            RenderTestHarnessView(story: story)
-        }
-        #endif
     }
 
     private func thumb(_ m: MomentModel) -> some View {

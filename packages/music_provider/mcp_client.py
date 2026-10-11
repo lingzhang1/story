@@ -198,6 +198,28 @@ class EpidemicMCPClient:
                 tracks.append(self._to_track(rec))
         return tracks
 
+    def search_page(self, term: str, *, page_size: int = 10, cursor: str | None = None):
+        """Paginated free-text catalog search. Returns (tracks, next_cursor). ``cursor`` is the opaque
+        ``pageInfo.endCursor`` from a previous page (None for the first page); ``next_cursor`` is None when
+        there is no further page. Caches lqmp3/waveform urls for every returned track (so preview_url and
+        waveform_for_track work on browsed results, not just recommended ones)."""
+        args: dict[str, Any] = {"query": {"term": term}, "first": int(page_size)}
+        if cursor:
+            args["after"] = cursor
+        data = self._tool("SearchRecordings", args)
+        recs = ((data or {}).get("recordings")) or {}
+        nodes = recs.get("nodes") or []
+        tracks = []
+        for n in nodes:
+            rec = n.get("recording") if isinstance(n, dict) else None
+            if rec and rec.get("id"):
+                self._lq_cache[rec["id"]] = (rec.get("audioFile") or {}).get("lqmp3Url")
+                self._wf_cache[rec["id"]] = (rec.get("audioFile") or {}).get("waveformUrl")
+                tracks.append(self._to_track(rec))
+        page = recs.get("pageInfo") or {}
+        next_cursor = page.get("endCursor") if page.get("hasNextPage") else None
+        return tracks, next_cursor
+
     def preview_url(self, track_id: str):
         url = getattr(self, "_lq_cache", {}).get(track_id)
         if not url:

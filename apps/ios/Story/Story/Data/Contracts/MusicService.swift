@@ -59,6 +59,16 @@ struct MusicCandidatesResponseDTO: Decodable {
     }
 }
 
+/// A page of free-text search results. `nextCursor` is nil when there are no further pages (stop load-more).
+struct MusicSearchResponseDTO: Decodable {
+    let candidates: [MusicCandidateDTO]
+    let nextCursor: String?
+    enum CodingKeys: String, CodingKey {
+        case candidates
+        case nextCursor = "next_cursor"
+    }
+}
+
 struct MusicSoundtrackLinkDTO: Decodable {
     let trackId: String
     let downloadURL: SignedURL
@@ -158,6 +168,17 @@ private struct MusicTrackRequestDTO: Encodable {
     enum CodingKeys: String, CodingKey { case trackId = "track_id" }
 }
 
+private struct MusicSearchRequestDTO: Encodable {
+    let query: String
+    let pageSize: Int
+    let cursor: String?
+    enum CodingKeys: String, CodingKey {
+        case query
+        case pageSize = "page_size"
+        case cursor
+    }
+}
+
 final class MusicCandidatesService {
     private let baseURL: URL
     private let session: URLSession
@@ -186,6 +207,18 @@ final class MusicCandidatesService {
             if case .null = a { rawTop = nil } else { rawTop = a }
         }
         return (dto, rawTop)
+    }
+
+    /// Free-text catalog search with cursor pagination (for the picker's search bar + load-more). Returns a
+    /// page of candidates and the next cursor (nil = no more pages). Throws .unavailable on 404/503.
+    func searchPage(query: String, pageSize: Int = 10, cursor: String? = nil) async throws -> MusicSearchResponseDTO {
+        let body = MusicSearchRequestDTO(query: query, pageSize: pageSize, cursor: cursor)
+        let data = try await postData("v1/music/search", body: body)
+        do { return try StoryContractCoding.decoder().decode(MusicSearchResponseDTO.self, from: data) }
+        catch {
+            do { return try JSONDecoder().decode(MusicSearchResponseDTO.self, from: data) }
+            catch { throw MusicServiceError.decoding(error) }
+        }
     }
 
     /// MusicAnalysis/1 for a SPECIFIC chosen track (when the user picks a non-top candidate). Returns BOTH the

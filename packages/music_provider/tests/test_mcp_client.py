@@ -272,3 +272,52 @@ def test_rest_waveform_for_track_returns_none(monkeypatch):
     monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
     rest = mp.EpidemicClient(key="epidemic_live_fake")
     assert rest.waveform_for_track("tid") is None
+
+
+# ----------------------------- paginated search ---------------------------
+def test_mcp_search_page_returns_tracks_and_cursor(monkeypatch):
+    def fake_tool(name, args, _id=2):
+        assert name == "SearchRecordings"
+        assert args["query"]["term"] == "ambient"
+        assert args["first"] == 2
+        assert args.get("after") is None  # first page
+        return {"recordings": {"nodes": [{"recording": _REC}],
+                               "pageInfo": {"hasNextPage": True, "endCursor": "CUR2"}}}
+    c = _client(monkeypatch, fake_tool)
+    tracks, nxt = c.search_page("ambient", page_size=2)
+    assert len(tracks) == 1 and tracks[0]["id"] == _REC["id"]
+    assert nxt == "CUR2"
+    # preview + waveform caches populated from the page
+    assert c._lq_cache[_REC["id"]] == _REC["audioFile"]["lqmp3Url"]
+
+
+def test_mcp_search_page_passes_cursor_and_ends(monkeypatch):
+    def fake_tool(name, args, _id=2):
+        assert args["after"] == "CUR2"
+        return {"recordings": {"nodes": [{"recording": _REC}],
+                               "pageInfo": {"hasNextPage": False, "endCursor": "CUR3"}}}
+    c = _client(monkeypatch, fake_tool)
+    tracks, nxt = c.search_page("ambient", page_size=2, cursor="CUR2")
+    assert nxt is None  # hasNextPage False -> no further cursor
+
+
+def test_rest_search_page_offset_cursor(monkeypatch):
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    rest = mp.EpidemicClient(key="epidemic_live_fake")
+    calls = {}
+    def fake_call(path, params=None, *, external_url=None):
+        calls.update(params or {})
+        # return a full page (== page_size) so a next cursor is produced
+        return 200, {"tracks": [{"id": f"t{i}", "title": f"T{i}", "length": 60} for i in range(params["limit"])]}
+    monkeypatch.setattr(rest, "_call", fake_call)
+    tracks, nxt = rest.search_page("guitar", page_size=3, cursor="6")
+    assert calls["offset"] == 6 and calls["limit"] == 3
+    assert len(tracks) == 3 and nxt == "9"  # 6 + 3
+
+
+def test_rest_search_page_short_page_ends(monkeypatch):
+    monkeypatch.setenv(mp.FLAG_ENV, "prototyping")
+    rest = mp.EpidemicClient(key="epidemic_live_fake")
+    monkeypatch.setattr(rest, "_call", lambda *a, **k: (200, {"tracks": [{"id": "t0", "title": "T", "length": 60}]}))
+    tracks, nxt = rest.search_page("guitar", page_size=5)
+    assert len(tracks) == 1 and nxt is None  # short page -> no more

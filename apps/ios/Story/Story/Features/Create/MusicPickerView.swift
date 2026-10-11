@@ -26,6 +26,19 @@ struct MusicPickerView: View {
     @State private var player: AVPlayer?
     @State private var playingTrackId: String?
 
+    // Free-text search + load-more pagination (overlays the recommended list when a query is active).
+    @State private var searchText: String = ""
+    @State private var searchResults: [MusicCandidateDTO] = []
+    @State private var searchCursor: String? = nil
+    @State private var searching: Bool = false
+    @State private var loadingMore: Bool = false
+    @State private var searchError: String? = nil
+    @State private var searchTask: Task<Void, Never>? = nil
+    private let music = MusicCandidatesService()
+
+    /// True while the user is actively searching (non-empty query). Drives list switch recommended <-> results.
+    private var isSearchActive: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
+
     init(recommendation: MusicSelectionResolver.Recommendation, onChoose: @escaping (Choice) -> Void) {
         self.recommendation = recommendation
         self.onChoose = onChoose
@@ -38,13 +51,18 @@ struct MusicPickerView: View {
             StoryTheme.ink.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
+                searchBar
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("Each track shapes a different edit — Story cuts the moments and pacing to fit.")
-                            .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.36))
-                            .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 14).padding(.bottom, 6)
-                        ForEach(recommendation.candidates) { track in
-                            trackRow(track)
+                        if isSearchActive {
+                            searchResultsList
+                        } else {
+                            Text("Each track shapes a different edit — Story cuts the moments and pacing to fit.")
+                                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.36))
+                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 14).padding(.bottom, 6)
+                            ForEach(recommendation.candidates) { track in
+                                trackRow(track)
+                            }
                         }
                     }
                 }
@@ -53,7 +71,118 @@ struct MusicPickerView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
-        .onDisappear { stopPreview() }
+        .onDisappear { searchTask?.cancel(); stopPreview() }
+    }
+
+    // MARK: - search bar + results
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(StoryTheme.cream.opacity(0.4))
+            TextField("", text: $searchText, prompt: Text("Search all music")
+                        .foregroundColor(StoryTheme.cream.opacity(0.35)))
+                .foregroundStyle(StoryTheme.cream)
+                .font(StoryTheme.body(15))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .onSubmit { runSearch(reset: true) }
+                .onChange(of: searchText) { _, _ in scheduleSearch() }
+            if !searchText.isEmpty {
+                Button { clearSearch() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(StoryTheme.cream.opacity(0.4))
+                }.buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(StoryTheme.cream.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 12)
+    }
+
+    @ViewBuilder private var searchResultsList: some View {
+        if searching && searchResults.isEmpty {
+            HStack { Spacer(); ProgressView().tint(StoryTheme.cream); Spacer() }
+                .padding(.top, 28)
+        } else if let err = searchError, searchResults.isEmpty {
+            Text(err).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 20)
+        } else if searchResults.isEmpty {
+            Text("No tracks match “\(searchText)”.")
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 20)
+        } else {
+            Text("Results").font(StoryTheme.body(10)).tracking(1.3)
+                .foregroundStyle(StoryTheme.cream.opacity(0.22))
+                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 14).padding(.bottom, 4)
+            ForEach(searchResults) { track in trackRow(track) }
+            if searchCursor != nil {
+                Button { loadMore() } label: {
+                    HStack {
+                        Spacer()
+                        if loadingMore { ProgressView().tint(StoryTheme.cream) }
+                        else { Text("Load more").font(StoryTheme.body(14, .semibold)).foregroundStyle(StoryTheme.gold) }
+                        Spacer()
+                    }.padding(.vertical, 14)
+                }.buttonStyle(.plain).disabled(loadingMore)
+            }
+        }
+    }
+
+    // Debounce typing: cancel the in-flight schedule and re-run after a short pause.
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { searchResults = []; searchCursor = nil; searchError = nil; return }
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            if Task.isCancelled { return }
+            runSearch(reset: true)
+        }
+    }
+
+    private func runSearch(reset: Bool) {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return }
+        searching = true; searchError = nil
+        if reset { searchResults = []; searchCursor = nil }
+        Task {
+            do {
+                let page = try await music.searchPage(query: q, pageSize: 12, cursor: nil)
+                await MainActor.run {
+                    searchResults = page.candidates
+                    searchCursor = page.nextCursor
+                    searching = false
+                }
+            } catch {
+                await MainActor.run {
+                    searching = false
+                    searchError = (error as? MusicServiceError)?.errorDescription ?? "Search unavailable."
+                }
+            }
+        }
+    }
+
+    private func loadMore() {
+        guard let cursor = searchCursor, !loadingMore else { return }
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        loadingMore = true
+        Task {
+            do {
+                let page = try await music.searchPage(query: q, pageSize: 12, cursor: cursor)
+                await MainActor.run {
+                    searchResults.append(contentsOf: page.candidates)
+                    searchCursor = page.nextCursor
+                    loadingMore = false
+                }
+            } catch {
+                await MainActor.run { loadingMore = false }
+            }
+        }
+    }
+
+    private func clearSearch() {
+        searchTask?.cancel()
+        searchText = ""; searchResults = []; searchCursor = nil; searchError = nil; searching = false
     }
 
     private var header: some View {

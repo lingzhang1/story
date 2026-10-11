@@ -28,6 +28,12 @@ class _FakeClient:
     def metadata(self, track_id): return {"length": 62, "bpm": 90, "vocalType": "NONE"}
     def download_link(self, track_id, *, quality="normal"): return f"https://dl.example/{track_id}.mp3?sig=abc"
     def waveform_for_track(self, track_id): return None
+    def search_page(self, term, *, page_size=10, cursor=None):
+        # two fixed pages: cursor None -> page1 (full, has more); cursor 'p2' -> page2 (short, ends)
+        if cursor is None:
+            return ([{"id": f"s{i}", "title": f"Search {i}", "length": 50 + i, "vocalType": "NONE"}
+                     for i in range(page_size)], "p2")
+        return ([{"id": "s_last", "title": "Last", "length": 70, "vocalType": "LEAD"}], None)
 
 
 @pytest.fixture
@@ -63,6 +69,30 @@ def test_analysis_for_chosen_track(proto_client):
     a = r.json()
     assert a["duration_seconds"] == 62.0
     assert "tempo_reliable" in a
+
+
+def test_search_page1_has_more_and_previews(proto_client):
+    r = proto_client.post("/v1/music/search", json={"query": "mountain", "page_size": 4})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert len(b["candidates"]) == 4
+    assert b["next_cursor"] == "p2"          # more pages available
+    assert all(c["preview_url"].startswith("https://preview.example/") for c in b["candidates"])
+    assert all(c["score"] == 0.0 for c in b["candidates"])  # search results unranked
+
+
+def test_search_page2_ends(proto_client):
+    r = proto_client.post("/v1/music/search", json={"query": "mountain", "page_size": 4, "cursor": "p2"})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["next_cursor"] is None          # last page
+    assert b["candidates"][0]["track_id"] == "s_last"
+
+
+def test_search_404_when_flag_off(monkeypatch):
+    monkeypatch.setattr(main_mod._mp, "prototyping_enabled", lambda: False)
+    c = TestClient(create_app())
+    assert c.post("/v1/music/search", json={"query": "x"}).status_code == 404
 
 
 def test_soundtrack_link_is_prototyping_and_export_off(proto_client):
