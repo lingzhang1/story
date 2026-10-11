@@ -16,6 +16,7 @@ OPTIONALLY a selected MusicAsset + MusicAnalysis. Music is OPTIONAL — no-music
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -40,7 +41,17 @@ DURATION_TOLERANCE = 0.20  # ±20% hard feasibility tolerance (frozen)
 # changing NO duration discipline, native-audio policy, music-alignment, repair behavior, model, or the
 # EditPlan/2 schema. The previous frozen prompts stay on disk at prompts/edit_plan/2/system.md and
 # prompts/edit_plan/3/system.md; switch _PROMPT_PATH back to "3" (pre-amendment) or "2" (pre-R-c) to reproduce.
-_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "edit_plan" / "4" / "system.md"
+#
+# v5 (Native-Audio Preservation Gate) is an EXPERIMENT, OFF by default. It changes ONLY the native-audio clause
+# (preserve-by-default; duck/mute needs an editorial reason; no fixed category list) — no schema change. It is
+# selected by env STORY_EDIT_PLAN_VERSION=5 so v4 remains the production default and is NEVER edited in place.
+# Any value other than a directory that exists under prompts/edit_plan/ falls back to "4".
+_EDIT_PLAN_VERSION = os.environ.get("STORY_EDIT_PLAN_VERSION", "4").strip() or "4"
+_PROMPT_BASE = Path(__file__).resolve().parent.parent.parent / "prompts" / "edit_plan"
+if not (_PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md").is_file():
+    _EDIT_PLAN_VERSION = "4"
+PROMPT_VERSION = f"edit_plan/{_EDIT_PLAN_VERSION}"
+_PROMPT_PATH = _PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md"
 
 TRANSITION = ["cut", "crossfade", "fade_in", "fade_out", "dip_to_black"]
 NATIVE = ["keep", "duck", "mute"]
