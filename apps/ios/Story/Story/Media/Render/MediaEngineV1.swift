@@ -525,13 +525,29 @@ extension MediaEngineV1 {
             StoryCreativeRefinement.lastMusicNote = "NO soundtrack URL at render (pendingMusic path produced none)"
             MediaEngineV1.beacon("no-soundtrack-url")
         }
-        let built = try buildComposition(inputs)
+        let built: BuiltComposition
+        do {
+            built = try buildComposition(inputs)
+        } catch {
+            MediaEngineV1.beacon("buildComposition THREW: \(String(describing: error).prefix(120))")
+            throw error
+        }
         MediaEngineV1.beacon("built soundtrackTrack=\(built.soundtrackTrack != nil ? "YES" : "NO") note=\(StoryCreativeRefinement.lastMusicNote.suffix(80))")
+        // Append the per-segment native_audio histogram + role/priority: these three numbers decide whether
+        // native audio is AUDIBLE in the final mix (keep=1.0, duck=0.25, mute=0.0; soundtrack full under
+        // duck/mute when role=continuous). Surfaced on-screen so a silent-native render names its own cause.
+        var naCounts: [String: Int] = [:]
+        for s in inputs.plan.segments { naCounts[s.nativeAudio, default: 0] += 1 }
+        let naHist = naCounts.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }.joined(separator: " ")
+        StoryCreativeRefinement.lastMusicNote +=
+            " | native_audio[\(naHist)] role=\(inputs.soundtrackRole) priority=\(inputs.nativeAudioPriority)"
+        MediaEngineV1.beacon("audio-mix native_audio[\(naHist)] role=\(inputs.soundtrackRole) priority=\(inputs.nativeAudioPriority)")
         let mix = buildAudioMix(inputs, composition: built.composition,
                                 segmentRanges: built.segmentRanges, soundtrackTrack: built.soundtrackTrack)
 
         guard let export = AVAssetExportSession(asset: built.composition,
                                                 presetName: AVAssetExportPresetHighestQuality) else {
+            MediaEngineV1.beacon("export SESSION NIL (could not create) segs=\(built.segmentRanges.count) music=\(built.soundtrackTrack != nil) size=\(Int(built.videoComposition.renderSize.width))x\(Int(built.videoComposition.renderSize.height))")
             throw MediaEngineError.exportFailed("could not create export session")
         }
         let out = RenderOutputStore.shared.newOutput()

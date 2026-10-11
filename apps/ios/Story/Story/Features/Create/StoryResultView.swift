@@ -198,6 +198,23 @@ struct StoryResultView: View {
                 .font(StoryTheme.body(12))
                 .foregroundStyle(StoryTheme.cream.opacity(0.3))
 
+            #if DEBUG
+            // Audio diagnostics from the LAST render, shown HERE on the completed screen (not just the
+            // pre-render preview) so "why does the final video have no native audio" is answerable where the
+            // user actually ends up. lastMusicNote carries soundtrack role/priority + whether the file reached
+            // the renderer; lastOutcomeNotes only populates when the V2-b refinement flag is on.
+            if !StoryCreativeRefinement.lastMusicNote.isEmpty {
+                Text("🎵 \(StoryCreativeRefinement.lastMusicNote)")
+                    .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            if !StoryCreativeRefinement.lastOutcomeNotes.isEmpty {
+                Text("✂️ " + StoryCreativeRefinement.lastOutcomeNotes.joined(separator: " · "))
+                    .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            #endif
+
             if isStale {
                 // Stale: surface WHY a new version is worth making, but the action below is the same.
                 Text("Your moments changed since this was made.")
