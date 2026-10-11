@@ -248,17 +248,6 @@ struct CreateStoryPreviewView: View {
                         Text("mock outputs: \(story.generatedOutputs.count)")
                             .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
                     }
-                    // Music + refinement diagnostics from the last render (why music / why no change).
-                    if !StoryCreativeRefinement.lastMusicNote.isEmpty {
-                        Text("🎵 \(StoryCreativeRefinement.lastMusicNote)")
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !StoryCreativeRefinement.lastOutcomeNotes.isEmpty {
-                        Text("✂️ " + StoryCreativeRefinement.lastOutcomeNotes.joined(separator: " · "))
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    }
                 }
                 #endif
 
