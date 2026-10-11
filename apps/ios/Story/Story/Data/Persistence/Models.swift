@@ -29,6 +29,30 @@ enum MomentSource: String, Codable {
     case cameraImport = "camera_import"
 }
 
+/// User-facing sound treatment for a Story. Wire values are snake_case to match the request DTOs.
+/// immersive  = favor natural sound + environmental atmosphere.
+/// balanced   = intelligently combine meaningful native audio with music (the resolution default).
+/// music_led  = soundtrack leads, but important native sound is NOT auto-destroyed (NOT music-only).
+enum SoundPreference: String, Codable, CaseIterable {
+    case immersive
+    case balanced
+    case musicLed = "music_led"
+
+    /// Advisory inference from CreativeIntent tone/theme/feeling text. Returns nil when nothing clearly signals
+    /// a treatment (caller then leaves inferred nil and effective resolves to balanced). NEVER returns a forced
+    /// value — a thin/neutral intent yields nil, not balanced, so "inferred" stays honest.
+    static func infer(theme: String, tone: String, desiredFeeling: [String], styleTags: [String]) -> SoundPreference? {
+        let hay = ([theme, tone] + desiredFeeling + styleTags).joined(separator: " ").lowercased()
+        let immersiveHits = ["immersive","ambient","atmosphere","natural sound","environment","documentary",
+                             "being there","wind","ambience","field recording","nature"]
+        let musicHits = ["music video","music-forward","music forward","montage","hype","edm","beat drop",
+                         "set to the music","music led","music-led","soundtrack-driven","stylized recap"]
+        if musicHits.contains(where: hay.contains) { return .musicLed }
+        if immersiveHits.contains(where: hay.contains) { return .immersive }
+        return nil
+    }
+}
+
 @Model
 final class StoryModel {
     @Attribute(.unique) var id: UUID
@@ -51,6 +75,14 @@ final class StoryModel {
     var intentPace: String?
     var intentTargetDurationSeconds: Double?
 
+    // Sound preference (immersive | balanced | music_led). Additive migration — optional + defaulted so existing
+    // Stories stay valid. TWO fields by design: the user's EXPLICIT choice is authoritative and must survive
+    // relaunch / regeneration / repeated Create flows; the INFERRED recommendation is advisory and recomputable.
+    // An explicit choice is NEVER overwritten by inference. effectiveSoundPreference resolves explicit ?? inferred
+    // ?? balanced (the fallback is NOT a forced selection — it is only the resolution default).
+    var soundPreferenceExplicit: String?    // set only when the user picks; nil = not chosen
+    var soundPreferenceInferred: String?     // recommendation from CreativeIntent; may be recomputed
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -65,6 +97,16 @@ final class StoryModel {
         get { StoryStatus(rawValue: statusRaw) ?? .active }
         set { statusRaw = newValue.rawValue }
     }
+
+    /// Resolved sound preference the pipeline should use: the user's EXPLICIT choice wins; else the INFERRED
+    /// recommendation; else balanced. The fallback is a resolution default, not a forced user selection.
+    var effectiveSoundPreference: SoundPreference {
+        SoundPreference(rawValue: soundPreferenceExplicit ?? "")
+            ?? SoundPreference(rawValue: soundPreferenceInferred ?? "")
+            ?? .balanced
+    }
+    /// True when the user has explicitly chosen (so the UI shows a user selection, not just a recommendation).
+    var hasExplicitSoundPreference: Bool { SoundPreference(rawValue: soundPreferenceExplicit ?? "") != nil }
 
     init(
         id: UUID = UUID(),

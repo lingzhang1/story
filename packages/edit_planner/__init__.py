@@ -42,14 +42,17 @@ DURATION_TOLERANCE = 0.20  # ±20% hard feasibility tolerance (frozen)
 # EditPlan/2 schema. The previous frozen prompts stay on disk at prompts/edit_plan/2/system.md and
 # prompts/edit_plan/3/system.md; switch _PROMPT_PATH back to "3" (pre-amendment) or "2" (pre-R-c) to reproduce.
 #
-# v5 (Native-Audio Preservation Gate) is an EXPERIMENT, OFF by default. It changes ONLY the native-audio clause
-# (preserve-by-default; duck/mute needs an editorial reason; no fixed category list) — no schema change. It is
-# selected by env STORY_EDIT_PLAN_VERSION=5 so v4 remains the production default and is NEVER edited in place.
-# Any value other than a directory that exists under prompts/edit_plan/ falls back to "4".
-_EDIT_PLAN_VERSION = os.environ.get("STORY_EDIT_PLAN_VERSION", "4").strip() or "4"
+# v5 (Native-Audio Preservation amendment) is OWNER-ACCEPTED on physical device (TMB keep15/duck6/mute0, mix
+# confirmed by listening on build b6c0237) and FROZEN as the approved DEVELOPMENT default. It changes ONLY the
+# native-audio clause (preserve-by-default; duck/mute needs an editorial reason; no fixed category list) — no
+# schema change. v4 is PRESERVED verbatim on disk and remains reachable (STORY_EDIT_PLAN_VERSION=4), so a
+# production surface that has NOT yet approved v5 can still pin v4. Dev-default != production approval.
+# Any value other than a directory that exists under prompts/edit_plan/ falls back to the default.
+_EDIT_PLAN_DEFAULT = "5"
+_EDIT_PLAN_VERSION = os.environ.get("STORY_EDIT_PLAN_VERSION", _EDIT_PLAN_DEFAULT).strip() or _EDIT_PLAN_DEFAULT
 _PROMPT_BASE = Path(__file__).resolve().parent.parent.parent / "prompts" / "edit_plan"
 if not (_PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md").is_file():
-    _EDIT_PLAN_VERSION = "4"
+    _EDIT_PLAN_VERSION = _EDIT_PLAN_DEFAULT
 PROMPT_VERSION = f"edit_plan/{_EDIT_PLAN_VERSION}"
 _PROMPT_PATH = _PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md"
 
