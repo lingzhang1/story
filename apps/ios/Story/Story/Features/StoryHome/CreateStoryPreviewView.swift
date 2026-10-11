@@ -269,7 +269,8 @@ struct CreateStoryPreviewView: View {
             StoryResultView(story: story, output: output, onHome: goHome, onRecreate: handleRecreate)
         }
         .sheet(item: $musicRecommendation) { rec in
-            MusicPickerView(recommendation: rec) { choice in
+            MusicPickerView(recommendation: rec, resolver: musicResolver,
+                            targetDurationSeconds: story.intentTargetDurationSeconds ?? 0) { choice in
                 handlePickerChoice(choice, rec)
             }
         }

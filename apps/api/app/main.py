@@ -216,6 +216,7 @@ class MusicCandidatesRequest(BaseModel):
     music_plan: dict = Field(..., description="MusicPlan/1 (character + audio_strategy drive the query)")
     target_duration_seconds: float = Field(..., gt=0.0)
     limit: int = Field(default=5, ge=1, le=10)
+    cursor: str | None = Field(default=None, description="opaque next-page cursor; None = page 1 (also carries the top-pick analysis)")
 
 
 class MusicTrackRequest(BaseModel):
@@ -829,8 +830,12 @@ def create_app() -> FastAPI:
         term = " ".join(char.get("mood_tags", []) or ["music"])
         strat = (body.music_plan or {}).get("audio_strategy", {})
         vocal = "NONE" if strat.get("native_audio_priority") in ("important", "selective") else None
+        is_page1 = body.cursor is None
         try:
-            raw = client.search(term, vocal_type=vocal, limit=body.limit)
+            if hasattr(client, "search_page"):
+                raw, next_cursor = client.search_page(term, page_size=body.limit, cursor=body.cursor)
+            else:
+                raw, next_cursor = client.search(term, vocal_type=vocal, limit=body.limit), None
         except _mp.EpidemicProviderError as e:
             log.warning("music_candidates_provider_error", extra={**base, "error": str(e)[:200]})
             raise HTTPException(status_code=503, detail="music provider temporarily unavailable")
@@ -859,10 +864,11 @@ def create_app() -> FastAPI:
             out.append({"track_id": c.track_id, "title": c.title, "score": c.score,
                         "factors": c.factors, "duration_seconds": c.duration_seconds,
                         "vocal_type": c.vocal_type, "preview_url": preview})
-        # Compute MusicAnalysis/1 for the TOP pick only (the Edit Planner needs it; computing it for every
-        # candidate would be wasteful). Normalized through the frozen music_analysis/1 path. Best-effort.
+        # Compute MusicAnalysis/1 for the TOP pick only, and ONLY on page 1 — the Edit Planner consumes the
+        # page-1 top pick; later pages are browse-only, and a selected track gets its analysis via
+        # /v1/music/analysis when chosen. Normalized through the frozen music_analysis/1 path. Best-effort.
         top_analysis = None
-        if ranked:
+        if is_page1 and ranked:
             top = ranked[0]
             try:
                 top_analysis = _mp.to_music_analysis_v1(
@@ -876,9 +882,10 @@ def create_app() -> FastAPI:
             except _mp.EpidemicProviderError as e:
                 log.warning("music_candidates_analysis_error", extra={**base, "error": str(e)[:200]})
                 top_analysis = None
-        log.info("music_candidates_ranked", extra={**base, "n": len(ranked)})
-        return {"candidates": out, "top_track_id": ranked[0].track_id if ranked else None,
-                "top_music_analysis": top_analysis}
+        log.info("music_candidates_ranked", extra={**base, "n": len(ranked), "page1": is_page1,
+                                                   "has_more": next_cursor is not None})
+        return {"candidates": out, "top_track_id": ranked[0].track_id if (is_page1 and ranked) else None,
+                "top_music_analysis": top_analysis, "next_cursor": next_cursor}
 
     @app.post("/v1/music/search", status_code=200)
     def music_search(body: MusicSearchRequest):

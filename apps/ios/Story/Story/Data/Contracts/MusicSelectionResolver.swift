@@ -41,6 +41,7 @@ final class MusicSelectionResolver {
         let topAnalysisJSON: JSONValue?       // raw wire JSON, for the planner request (no re-encode)
         let soundtrackRole: String
         let nativeAudioPriority: String
+        let nextCursor: String?               // page the recommendations ("Next page"); nil = no further page
     }
 
     func recommend(for story: StoryModel, guideFramingSummary: String?) async -> Recommendation? {
@@ -77,7 +78,30 @@ final class MusicSelectionResolver {
             topAnalysis: resp.topMusicAnalysis,
             topAnalysisJSON: rawTop,
             soundtrackRole: strat.role,
-            nativeAudioPriority: strat.priority)
+            nativeAudioPriority: strat.priority,
+            nextCursor: resp.nextCursor)
+    }
+
+    /// Fetch the NEXT page of recommendations for the same Story (same MusicPlan), returning a fresh set of
+    /// candidate tracks and the following cursor. Reuses the current recommendation's MusicPlan + strategy; the
+    /// top-pick analysis is page-1 only (nil here), since a chosen non-top track resolves its own analysis.
+    /// Returns nil on failure (caller keeps the current page). `targetDurationSeconds` must match page 1.
+    func nextPage(from rec: Recommendation, targetDurationSeconds: Double) async -> Recommendation? {
+        guard let cursor = rec.nextCursor else { return nil }
+        let resp: MusicCandidatesResponseDTO
+        do {
+            (resp, _) = try await candidatesService.candidates(
+                musicPlan: rec.musicPlanJSON, targetDurationSeconds: targetDurationSeconds, cursor: cursor)
+        } catch { return nil }
+        guard !resp.candidates.isEmpty else { return nil }
+        return Recommendation(
+            musicPlanJSON: rec.musicPlanJSON,
+            candidates: resp.candidates,
+            topTrackId: resp.topTrackId,               // nil on later pages (no AI "Story's pick")
+            topAnalysis: nil, topAnalysisJSON: nil,     // analysis is page-1 only
+            soundtrackRole: rec.soundtrackRole,
+            nativeAudioPriority: rec.nativeAudioPriority,
+            nextCursor: resp.nextCursor)
     }
 
     /// Resolve a FULL selection for a chosen track: use the top-pick analysis when the chosen track IS the top

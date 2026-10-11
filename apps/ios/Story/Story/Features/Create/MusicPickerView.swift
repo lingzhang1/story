@@ -36,12 +36,27 @@ struct MusicPickerView: View {
     @State private var searchTask: Task<Void, Never>? = nil
     private let music = MusicCandidatesService()
 
+    // "Next page" over the RECOMMENDATIONS: each page replaces the list with a different ranked set for the
+    // same Story. Page 1 is the injected recommendation; later pages are fetched via the resolver.
+    @State private var pages: [MusicSelectionResolver.Recommendation]
+    @State private var pageIndex: Int = 0
+    @State private var loadingPage: Bool = false
+    private let resolver: MusicSelectionResolver?
+    private let targetDurationSeconds: Double
+    /// The recommendation currently shown (the active page).
+    private var currentRec: MusicSelectionResolver.Recommendation { pages[pageIndex] }
+
     /// True while the user is actively searching (non-empty query). Drives list switch recommended <-> results.
     private var isSearchActive: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    init(recommendation: MusicSelectionResolver.Recommendation, onChoose: @escaping (Choice) -> Void) {
+    init(recommendation: MusicSelectionResolver.Recommendation,
+         resolver: MusicSelectionResolver? = nil, targetDurationSeconds: Double = 0,
+         onChoose: @escaping (Choice) -> Void) {
         self.recommendation = recommendation
+        self.resolver = resolver
+        self.targetDurationSeconds = targetDurationSeconds
         self.onChoose = onChoose
+        _pages = State(initialValue: [recommendation])
         // Default to the AI-recommended top track.
         _pendingTrackId = State(initialValue: recommendation.topTrackId ?? recommendation.candidates.first?.trackId ?? "")
     }
@@ -60,9 +75,10 @@ struct MusicPickerView: View {
                             Text("Each track shapes a different edit — Story cuts the moments and pacing to fit.")
                                 .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.36))
                                 .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 14).padding(.bottom, 6)
-                            ForEach(recommendation.candidates) { track in
+                            ForEach(currentRec.candidates) { track in
                                 trackRow(track)
                             }
+                            pager
                         }
                     }
                 }
@@ -72,6 +88,49 @@ struct MusicPickerView: View {
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
         .onDisappear { searchTask?.cancel(); stopPreview() }
+    }
+
+    // MARK: - recommendation pager (Next page = different options)
+
+    @ViewBuilder private var pager: some View {
+        if resolver != nil {
+            HStack(spacing: 12) {
+                if pageIndex > 0 {
+                    Button { stopPreview(); pageIndex -= 1 } label: {
+                        Text("‹ Back").font(StoryTheme.body(14, .semibold)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                    }.buttonStyle(.plain)
+                }
+                Spacer()
+                Text("Page \(pageIndex + 1)").font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
+                Spacer()
+                // Next is available if we're not on the last-known page, or the current page has a cursor to fetch.
+                if pageIndex < pages.count - 1 || currentRec.nextCursor != nil {
+                    Button { goNextPage() } label: {
+                        if loadingPage { ProgressView().tint(StoryTheme.gold) }
+                        else { Text("Next page ›").font(StoryTheme.body(14, .semibold)).foregroundStyle(StoryTheme.gold) }
+                    }.buttonStyle(.plain).disabled(loadingPage)
+                }
+            }
+            .padding(.horizontal, StoryTheme.screenPadding).padding(.vertical, 16)
+        }
+    }
+
+    private func goNextPage() {
+        stopPreview()
+        // already fetched this next page -> just advance
+        if pageIndex < pages.count - 1 { pageIndex += 1; return }
+        guard let resolver, currentRec.nextCursor != nil, !loadingPage else { return }
+        loadingPage = true
+        Task {
+            let next = await resolver.nextPage(from: currentRec, targetDurationSeconds: targetDurationSeconds)
+            await MainActor.run {
+                loadingPage = false
+                if let next, !next.candidates.isEmpty {
+                    pages.append(next)
+                    pageIndex += 1
+                }
+            }
+        }
     }
 
     // MARK: - search bar + results
@@ -232,7 +291,7 @@ struct MusicPickerView: View {
                     if selected {
                         Text("Story's pick").font(StoryTheme.displayItalic(13))
                             .foregroundStyle(StoryTheme.cream.opacity(0.45)).padding(.top, 6)
-                            .opacity(track.trackId == recommendation.topTrackId ? 1 : 0)
+                            .opacity(track.trackId == currentRec.topTrackId ? 1 : 0)
                     }
                 }
                 if selected {

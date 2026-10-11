@@ -64,10 +64,12 @@ struct MusicCandidatesResponseDTO: Decodable {
     let candidates: [MusicCandidateDTO]
     let topTrackId: String?
     let topMusicAnalysis: MusicAnalysisV1?   // reuses the MediaEngine Decodable (extra fields ignored)
+    let nextCursor: String?                  // page the recommendations (nil = no further page)
     enum CodingKeys: String, CodingKey {
         case candidates
         case topTrackId = "top_track_id"
         case topMusicAnalysis = "top_music_analysis"
+        case nextCursor = "next_cursor"
     }
 }
 
@@ -168,10 +170,12 @@ struct MusicCandidatesRequestDTO: Encodable {
     let musicPlan: JSONValue
     let targetDurationSeconds: Double
     let limit: Int
+    let cursor: String?
     enum CodingKeys: String, CodingKey {
         case musicPlan = "music_plan"
         case targetDurationSeconds = "target_duration_seconds"
         case limit
+        case cursor
     }
 }
 
@@ -202,9 +206,9 @@ final class MusicCandidatesService {
     /// MusicPlan -> ranked candidates (+ preview urls + top-pick analysis). Returns the typed response AND
     /// the RAW top_music_analysis JSON subtree (so the planner gets the exact wire analysis with NO lossy
     /// re-encode, and the renderer gets the decoded MusicAnalysisV1 — both from one source).
-    func candidates(musicPlan: JSONValue, targetDurationSeconds: Double, limit: Int = 5)
+    func candidates(musicPlan: JSONValue, targetDurationSeconds: Double, limit: Int = 5, cursor: String? = nil)
         async throws -> (response: MusicCandidatesResponseDTO, rawTopAnalysis: JSONValue?) {
-        let body = MusicCandidatesRequestDTO(musicPlan: musicPlan, targetDurationSeconds: targetDurationSeconds, limit: limit)
+        let body = MusicCandidatesRequestDTO(musicPlan: musicPlan, targetDurationSeconds: targetDurationSeconds, limit: limit, cursor: cursor)
         let data = try await postData("v1/music/candidates", body: body)
         let dto: MusicCandidatesResponseDTO
         do { dto = try StoryContractCoding.decoder().decode(MusicCandidatesResponseDTO.self, from: data) }

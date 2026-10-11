@@ -29,11 +29,26 @@ class _FakeClient:
     def download_link(self, track_id, *, quality="normal"): return f"https://dl.example/{track_id}.mp3?sig=abc"
     def waveform_for_track(self, track_id): return None
     def search_page(self, term, *, page_size=10, cursor=None):
-        # two fixed pages: cursor None -> page1 (full, has more); cursor 'p2' -> page2 (short, ends)
+        # /v1/music/search tests use query 'mountain' -> paged s0.. / s_last.
+        # /v1/music/candidates builds the term from mood_tags (e.g. 'cinematic emotional') -> t1/t2 page 1,
+        #   then a second page of different tracks when a cursor is supplied.
+        if "mountain" in term:
+            if cursor is None:
+                return ([{"id": f"s{i}", "title": f"Search {i}", "length": 50 + i, "vocalType": "NONE"}
+                         for i in range(page_size)], "p2")
+            return ([{"id": "s_last", "title": "Last", "length": 70, "vocalType": "LEAD"}], None)
+        # candidates path
         if cursor is None:
-            return ([{"id": f"s{i}", "title": f"Search {i}", "length": 50 + i, "vocalType": "NONE"}
-                     for i in range(page_size)], "p2")
-        return ([{"id": "s_last", "title": "Last", "length": 70, "vocalType": "LEAD"}], None)
+            return ([
+                {"id": "t1", "title": "Alpine Journey", "length": 62, "bpm": 90,
+                 "moods": ["cinematic", "emotional"], "vocalType": "NONE"},
+                {"id": "t2", "title": "Into the Mountains", "length": 58, "bpm": 120,
+                 "moods": ["epic"], "vocalType": "NONE"},
+            ], "cand_p2")
+        return ([
+            {"id": "t3", "title": "Second Page Track", "length": 60, "bpm": 100,
+             "moods": ["cinematic"], "vocalType": "NONE"},
+        ], None)
 
 
 @pytest.fixture
@@ -69,6 +84,26 @@ def test_analysis_for_chosen_track(proto_client):
     a = r.json()
     assert a["duration_seconds"] == 62.0
     assert "tempo_reliable" in a
+
+
+def test_candidates_next_page_returns_different_options(proto_client):
+    plan = _plan()
+    r1 = proto_client.post("/v1/music/candidates",
+                           json={"music_plan": plan, "target_duration_seconds": 60.0, "limit": 5})
+    assert r1.status_code == 200, r1.text
+    b1 = r1.json()
+    assert b1["next_cursor"] == "cand_p2"                 # page 1 offers a next page
+    assert b1["top_music_analysis"] is not None            # page 1 carries the top-pick analysis
+    assert {c["track_id"] for c in b1["candidates"]} == {"t1", "t2"}
+    r2 = proto_client.post("/v1/music/candidates",
+                           json={"music_plan": plan, "target_duration_seconds": 60.0, "limit": 5,
+                                 "cursor": b1["next_cursor"]})
+    assert r2.status_code == 200, r2.text
+    b2 = r2.json()
+    assert {c["track_id"] for c in b2["candidates"]} == {"t3"}   # DIFFERENT tracks on page 2
+    assert b2["top_music_analysis"] is None                      # analysis is page-1 only
+    assert b2["top_track_id"] is None
+    assert b2["next_cursor"] is None
 
 
 def test_search_page1_has_more_and_previews(proto_client):
