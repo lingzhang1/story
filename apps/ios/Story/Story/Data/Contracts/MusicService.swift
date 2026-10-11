@@ -18,14 +18,26 @@ import Foundation
 /// bug that made the whole /v1/music/candidates response fail to decode -> recommend() returned nil -> no music.)
 struct SignedURL: Decodable, Equatable {
     let url: String
-    let expires: String?
+    let expires: String?   // normalized to a string; the wire value may be a string OR a number (epoch secs)
     init(from decoder: Decoder) throws {
         if let s = try? decoder.singleValueContainer().decode(String.self) {
             url = s; expires = nil; return
         }
         let c = try decoder.container(keyedBy: CodingKeys.self)
         url = try c.decode(String.self, forKey: .url)
-        expires = try c.decodeIfPresent(String.self, forKey: .expires)
+        // `expires` may be a String (REST) or a NUMBER (MCP returns the epoch float, e.g. 1791704146.0).
+        // Decode either and normalize to a string, so a numeric expiry never fails the whole decode ->
+        // resolveSelection(nil) -> no music (the observed bug).
+        // `expires` may be a String (REST) or a NUMBER (MCP returns the epoch float, e.g. 1791704146.0).
+        // Decode either and normalize to a string, so a numeric expiry never fails the whole decode ->
+        // resolveSelection(nil) -> no music (the observed bug). Flatten the double-optionals explicitly.
+        let sExp: String? = (try? c.decodeIfPresent(String.self, forKey: .expires)).flatMap { $0 }
+        if let sExp {
+            expires = sExp
+        } else {
+            let dExp: Double? = (try? c.decodeIfPresent(Double.self, forKey: .expires)).flatMap { $0 }
+            expires = dExp.map { String($0) }
+        }
     }
     enum CodingKeys: String, CodingKey { case url, expires }
 }

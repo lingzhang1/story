@@ -568,10 +568,13 @@ extension MediaEngineV1 {
                                 durationSeconds: dur, renderSize: built.videoComposition.renderSize)
         case .cancelled:
             cleanupPartial()
+            MediaEngineV1.beacon("export CANCELLED (shouldCancel fired)")
             throw MediaEngineError.exportFailed("cancelled")
         default:
             cleanupPartial()
-            throw MediaEngineError.exportFailed(export.error?.localizedDescription ?? "export failed")
+            let err = export.error
+            MediaEngineV1.beacon("export FAILED status=\(export.status.rawValue) err=\(err.map { String(describing: $0) } ?? "nil") segs=\(built.segmentRanges.count) music=\(built.soundtrackTrack != nil)")
+            throw MediaEngineError.exportFailed(err?.localizedDescription ?? "export failed")
         }
     }
 }
