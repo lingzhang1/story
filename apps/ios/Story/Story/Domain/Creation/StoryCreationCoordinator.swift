@@ -310,10 +310,21 @@ final class StoryCreationCoordinator {
 
         // ---- rendering: real renderer with progress + cancel flag (music seam threaded) ----
         state = .rendering(progress: 0)
+        let effectiveSoundtrack = pendingMusic?.soundtrackURL ?? soundtrackURL
+        // Music diagnostic breadcrumb: why does the final video have (or lack) music? Records whether a
+        // soundtrack URL reached the renderer and whether that local file actually has bytes — so a silent
+        // output is diagnosable on device (StoryCreativeRefinement.lastMusicNote) instead of guessed.
+        if let u = effectiveSoundtrack {
+            let sz = (try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? nil
+            StoryCreativeRefinement.lastMusicNote =
+                "soundtrack URL present: \(u.lastPathComponent); file bytes=\(sz.map(String.init) ?? "MISSING/unreadable"); role=\(pendingMusic?.soundtrackRole ?? "-") priority=\(pendingMusic?.nativeAudioPriority ?? "-")"
+        } else {
+            StoryCreativeRefinement.lastMusicNote = "NO soundtrack URL reached the renderer (pendingMusic=\(pendingMusic == nil ? "nil" : "set")) -> no-music render"
+        }
         let inputs = MediaEngineInputs(
             plan: plan,
             resolveMomentURL: resolver,
-            soundtrackURL: pendingMusic?.soundtrackURL ?? soundtrackURL,   // R-d: resolved local audio; else nil (no-music)
+            soundtrackURL: effectiveSoundtrack,                            // R-d: resolved local audio; else nil (no-music)
             musicAnalysis: pendingMusic?.analysis ?? musicAnalysis,         // R-d: selected-track analysis; else nil
             soundtrackRole: pendingMusic?.soundtrackRole ?? "supportive",
             nativeAudioPriority: pendingMusic?.nativeAudioPriority ?? "selective")

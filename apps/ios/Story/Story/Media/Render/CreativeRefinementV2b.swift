@@ -12,6 +12,9 @@ enum StoryCreativeRefinement {
     /// Diagnostic breadcrumb from the last refine() call (validation notes / no-op reasons) — for the device
     /// report, never a user-facing surface.
     static var lastOutcomeNotes: [String] = []
+    /// Diagnostic breadcrumb: the soundtrack state at the last render (URL present? file bytes?). Explains a
+    /// silent/no-music output on device without guessing.
+    static var lastMusicNote: String = ""
 }
 
 // CreativeRefinementV2b — Creative Editing V2-b, architecture B: a DETERMINISTIC refinement stage that runs
