@@ -89,17 +89,26 @@ final class MusicSelectionResolver {
         let analysisJSON: JSONValue
         if trackId == rec.topTrackId, let a = rec.topAnalysis, let aj = rec.topAnalysisJSON {
             analysis = a; analysisJSON = aj
+            MediaEngineV1.beacon("resolve: top-reuse ok track=\(trackId.prefix(8))")
         } else {
+            MediaEngineV1.beacon("resolve: fetch-analysis (top=\(rec.topTrackId?.prefix(8) ?? "nil") hasA=\(rec.topAnalysis != nil) hasAJ=\(rec.topAnalysisJSON != nil))")
             do {
                 let both = try await candidatesService.analysisBoth(trackId: trackId)
                 analysis = both.analysis; analysisJSON = both.raw
-            } catch { return nil }
+            } catch {
+                MediaEngineV1.beacon("resolve: analysis FAILED \(error)")
+                return nil
+            }
         }
         // download the authorized audio to a local temp file.
         let url: URL
         do { url = try await candidatesService.downloadSoundtrack(trackId: trackId) }
-        catch { return nil }
+        catch {
+            MediaEngineV1.beacon("resolve: download FAILED \(error)")
+            return nil
+        }
         let title = rec.candidates.first { $0.trackId == trackId }?.title ?? "Soundtrack"
+        MediaEngineV1.beacon("resolve: OK url=\(url.lastPathComponent)")
         return StoryCreationCoordinator.MusicSelection(
             musicPlanJSON: rec.musicPlanJSON,
             trackId: trackId,

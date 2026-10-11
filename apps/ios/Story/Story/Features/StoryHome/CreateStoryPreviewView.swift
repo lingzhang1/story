@@ -142,6 +142,7 @@ struct CreateStoryPreviewView: View {
                 await MainActor.run {
                     preparingSelection = false
                     chosenMusic = sel          // nil if download/analysis failed -> honest no-music
+                    MediaEngineV1.beacon("picker: chose track=\(trackId.prefix(8)) resolved=\(sel == nil ? "NIL" : "ok")")
                     showCreating = true
                 }
             }
