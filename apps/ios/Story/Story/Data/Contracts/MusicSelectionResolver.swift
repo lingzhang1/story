@@ -55,6 +55,14 @@ final class MusicSelectionResolver {
         let directionJSON = Self.encodeJSON(direction)
         let intentJSON = Self.encodeJSON(CreativeIntentContractDTO(from: story))
 
+        // Ensure the Story has a StoryGuide BEFORE asking MusicPlan. An older/imported Story (e.g. TMB) may
+        // have reached music WITHOUT a persisted Guide — then MusicPlan judged native audio from a thin intent
+        // and returned low/continuous, drowning meaningful ambience. ensureGuide is generate-once-if-absent
+        // (migration-safe); it returns the existing Guide untouched when present. Fire-and-forget on failure
+        // (Story stays valid; we then just pass whatever Guide/Coverage exist).
+        let guideCoord = StoryGuideCoordinator(context: context)
+        _ = await guideCoord.ensureGuide(for: story)
+
         // Load the Story's persisted StoryGuide + Coverage (snake_case wire JSON) and PASS THEM to MusicPlan.
         // Previously these were empty objects, so MusicPlan judged native-audio priority from a possibly-thin
         // CreativeIntent alone — the native-audio-disappearance root cause. The Guide/Coverage carry the
