@@ -15,6 +15,12 @@ enum StoryCreativeRefinement {
     /// Diagnostic breadcrumb: the soundtrack state at the last render (URL present? file bytes?). Explains a
     /// silent/no-music output on device without guessing.
     static var lastMusicNote: String = ""
+    /// TEMPORARY DEBUG build identifier so the device UI proves WHICH source the installed app was built from
+    /// (must include the StoryGuide input-wiring fixes a4c6aa5 + 4391b42). Bump on each verification rebuild.
+    static let buildIdentifier: String = "b6c0237-guidewire+ensure"
+    /// Diagnostic breadcrumb: exactly what the MusicPlan request carried + what it returned, captured in the
+    /// SINGLE resolver construction path. Proves (not assumes) the Guide reached MusicPlan. No media, no creds.
+    static var lastMusicPlanInput: String = ""
 }
 
 // CreativeRefinementV2b — Creative Editing V2-b, architecture B: a DETERMINISTIC refinement stage that runs

@@ -61,7 +61,7 @@ final class MusicSelectionResolver {
         // (migration-safe); it returns the existing Guide untouched when present. Fire-and-forget on failure
         // (Story stays valid; we then just pass whatever Guide/Coverage exist).
         let guideCoord = StoryGuideCoordinator(context: context)
-        _ = await guideCoord.ensureGuide(for: story)
+        let ensuredGuide = await guideCoord.ensureGuide(for: story)
 
         // Load the Story's persisted StoryGuide + Coverage (snake_case wire JSON) and PASS THEM to MusicPlan.
         // Previously these were empty objects, so MusicPlan judged native-audio priority from a possibly-thin
@@ -71,13 +71,22 @@ final class MusicSelectionResolver {
         let guideJSON = loadGuideJSON(for: story.id)
         let coverageJSON = loadCoverageJSON(for: story.id)
 
+        // DEBUG verification: prove (not assume) what the SINGLE MusicPlan request path carried. No media/creds.
+        let guideDims = Self.dimensionCount(guideJSON)
+        let guidePresent = Self.isNonEmptyObject(guideJSON)
+        let covPresent = Self.isNonEmptyObject(coverageJSON)
+
         // 2. MusicPlan (frozen music_plan/1). 404/503 => no music.
         let planJSON: JSONValue
         do {
             planJSON = try await planService.plan(MusicPlanRequestDTO(
                 storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
                 targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON))
-        } catch { return nil }
+        } catch {
+            StoryCreativeRefinement.lastMusicPlanInput =
+                "build=\(StoryCreativeRefinement.buildIdentifier) ensureGuide=\(ensuredGuide != nil ? "ok" : "nil") guide=\(guidePresent ? "yes(\(guideDims)dims)" : "EMPTY") coverage=\(covPresent ? "yes" : "EMPTY") -> MusicPlan ERROR"
+            return nil
+        }
 
         // 3. candidates (+ preview + top analysis). Provider off/unavailable => no music.
         let resp: MusicCandidatesResponseDTO
@@ -87,6 +96,8 @@ final class MusicSelectionResolver {
         guard !resp.candidates.isEmpty else { return nil }
 
         let strat = Self.audioStrategy(planJSON)
+        StoryCreativeRefinement.lastMusicPlanInput =
+            "build=\(StoryCreativeRefinement.buildIdentifier) ensureGuide=\(ensuredGuide != nil ? "ok" : "nil") guide=\(guidePresent ? "yes(\(guideDims)dims)" : "EMPTY") coverage=\(covPresent ? "yes" : "EMPTY") -> role=\(strat.role) priority=\(strat.priority)"
         return Recommendation(
             musicPlanJSON: planJSON,
             candidates: resp.candidates,
@@ -161,6 +172,18 @@ final class MusicSelectionResolver {
     }
 
     // MARK: - helpers
+
+    /// True when the JSONValue is an object with at least one key (i.e. a real Guide/Coverage was passed).
+    private static func isNonEmptyObject(_ v: JSONValue) -> Bool {
+        if case let .object(d) = v { return !d.isEmpty }
+        return false
+    }
+
+    /// Count StoryGuide dimensions (story_guide/1 carries a "dimensions" array). 0 when absent/empty.
+    private static func dimensionCount(_ v: JSONValue) -> Int {
+        if case let .object(d) = v, case let .array(a)? = d["dimensions"] { return a.count }
+        return 0
+    }
 
     /// Load the Story's persisted StoryGuide wire JSON (story_guide/1) as a JSONValue, or an empty object when
     /// none exists yet. Fetched from SwiftData by storyId (same pattern as StoryGuideCoordinator).

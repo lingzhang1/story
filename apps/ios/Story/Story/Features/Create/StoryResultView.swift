@@ -203,6 +203,14 @@ struct StoryResultView: View {
             // pre-render preview) so "why does the final video have no native audio" is answerable where the
             // user actually ends up. lastMusicNote carries soundtrack role/priority + whether the file reached
             // the renderer; lastOutcomeNotes only populates when the V2-b refinement flag is on.
+            Text("🧪 build \(StoryCreativeRefinement.buildIdentifier)")
+                .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.gold.opacity(0.6))
+                .textSelection(.enabled)
+            if !StoryCreativeRefinement.lastMusicPlanInput.isEmpty {
+                Text("🧭 \(StoryCreativeRefinement.lastMusicPlanInput)")
+                    .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
             if !StoryCreativeRefinement.lastMusicNote.isEmpty {
                 Text("🎵 \(StoryCreativeRefinement.lastMusicNote)")
                     .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.35))
