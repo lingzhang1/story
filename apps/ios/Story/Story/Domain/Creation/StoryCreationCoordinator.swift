@@ -262,7 +262,7 @@ final class StoryCreationCoordinator {
 
         // ---- planning: call the Edit Planner; typed failures -> failed; NEVER fabricate a montage ----
         state = .planning
-        let plan: EditPlanV2
+        var plan: EditPlanV2
         do {
             plan = try await planner.plan(build.request)
         } catch EditPlannerServiceError.unavailable {
@@ -287,6 +287,26 @@ final class StoryCreationCoordinator {
             return finishFailed(.invalidPlan(reason))
         }
         if cancelRequested { return finishCancelled() }
+
+        // ---- creative refinement (V2-b, architecture B): DETERMINISTIC, opt-in, OFF by default ----
+        // Runs AFTER the frozen Edit Planner v4 + validation, BEFORE rendering. Proposes conservative
+        // source in/out nudges toward motion-settle / audio-onset points, then re-validates; on ANY failure
+        // (or when disabled) the ORIGINAL executable plan is used unchanged. Narrative selection, order,
+        // output durations, speed, transitions and music alignment are all preserved. A straight cut remains
+        // a valid result. Gate: StoryCreativeRefinement.enabled (default false until device-accepted).
+        if StoryCreativeRefinement.enabled {
+            let sourceDur: (String) -> Double? = { aid in
+                build.includedMedia.first { $0.momentId.uuidString.lowercased() == aid.lowercased() }?.durationSeconds
+            }
+            let outcome = CreativeRefinementV2b.refine(
+                plan: plan, enabled: true, resolveURL: resolver,
+                actionTimestamps: build.auActionTimestamps,     // AU event starts/ends per asset ([] when absent)
+                sourceDuration: sourceDur,
+                usefulRanges: build.auUsefulRanges,             // AU useful_segments per asset ([] when absent)
+                evidenceProvider: AVFoundationEvidence.sample)
+            StoryCreativeRefinement.lastOutcomeNotes = outcome.validationNotes
+            plan = outcome.plan                                 // refined OR original (safe either way)
+        }
 
         // ---- rendering: real renderer with progress + cancel flag (music seam threaded) ----
         state = .rendering(progress: 0)

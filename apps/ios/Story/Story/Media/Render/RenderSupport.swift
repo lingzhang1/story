@@ -166,6 +166,34 @@ enum EditPlanRequestBuilder {
                 return DurationFeasibility.MomentMaterial(durationSeconds: dur, usefulSegments: spans)
             }
         }
+
+        /// Creative Editing V2-b: per-asset AU useful ranges, keyed by lowercased Moment id (== EditSegment
+        /// asset_id). Parsed from the SAME request.moments the planner saw, so the refinement stage's hard
+        /// bounds match what the plan was built against. Empty list for a Moment with no parsable segments.
+        var auUsefulRanges: [String: [(Double, Double)]] {
+            var out: [String: [(Double, Double)]] = [:]
+            for mv in request.moments {
+                guard case let .object(m) = mv,
+                      case let .string(id)? = m["id"] else { continue }
+                var spans: [(Double, Double)] = []
+                if case let .array(segs)? = m["useful_segments"] {
+                    for s in segs {
+                        if case let .array(pair) = s, pair.count == 2,
+                           case let .number(a) = pair[0], case let .number(b) = pair[1], b > a {
+                            spans.append((a, b))
+                        }
+                    }
+                }
+                out[id.lowercased()] = spans
+            }
+            return out
+        }
+
+        /// Creative Editing V2-b: per-asset AU action timestamps. The plan request does not carry AU events
+        /// (only useful_segments + summary), so this is empty today — the refinement stage then relies on
+        /// motion/audio evidence + useful-range bounds, which is intentionally conservative. Threading real
+        /// AU event times here is a bounded follow-up if device review shows it would help.
+        var auActionTimestamps: [String: [Double]] { [:] }
     }
 
     enum BuildError: Error, LocalizedError {
