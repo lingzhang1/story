@@ -130,6 +130,9 @@ struct MediaEngineInputs {
     /// MusicPlan.audio_strategy — drives soundtrack treatment (does NOT come from the model as a curve).
     let soundtrackRole: String          // continuous | supportive | sparse
     let nativeAudioPriority: String     // low | selective | important
+    /// Set by render() AFTER awaiting the soundtrack asset's tracks load, so buildComposition's synchronous
+    /// tracks() read returns the real audio track (a freshly-downloaded temp MP3 is otherwise empty on iOS 16+).
+    var preloadedSoundtrackAsset: AVURLAsset? = nil
 }
 
 enum MediaEngineError: Error {
@@ -195,6 +198,17 @@ struct BuiltComposition {
 }
 
 struct MediaEngineV1 {
+    /// Fire-and-forget diagnostic beacon: GET /health?music=<note>. Lands in the App Runner ACCESS log so the
+    /// no-music investigation can read the device-side music state server-side (no console/dev-mode needed).
+    /// Best-effort, non-blocking — never affects the render.
+    static func beacon(_ note: String) {
+        var comps = URLComponents(url: StoryBackend.baseURL.appendingPathComponent("health"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "music", value: String(note.prefix(180)))]
+        guard let url = comps?.url else { return }
+        URLSession.shared.dataTask(with: url).resume()
+    }
+
     /// Build the AVMutableComposition + video composition from the plan. (Export is a separate call so a unit
     /// test can assert composition timing without running AVAssetExportSession.)
     func buildComposition(_ inputs: MediaEngineInputs) throws -> BuiltComposition {
@@ -350,15 +364,11 @@ struct MediaEngineV1 {
 
         // optional soundtrack (a LOCAL licensed test file; never Free-tier Epidemic export)
         var soundtrackTrack: AVMutableCompositionTrack? = nil
-        if let sURL = inputs.soundtrackURL, FileManager.default.fileExists(atPath: sURL.path) {
-            let sAsset = AVURLAsset(url: sURL)
-            // A freshly-downloaded temp MP3 is NOT yet indexed by AVFoundation: synchronous
-            // `tracks(withMediaType:)` returns an EMPTY array on iOS 16+, so `.first` is nil and the soundtrack
-            // is silently dropped (the observed 'no music' bug — video + native audio worked because those
-            // assets were already loaded). Force the 'tracks' key to load (bounded wait) before reading it.
-            let sem = DispatchSemaphore(value: 0)
-            sAsset.loadValuesAsynchronously(forKeys: ["tracks", "duration"]) { sem.signal() }
-            _ = sem.wait(timeout: .now() + 10)
+        // Use the asset PRE-LOADED asynchronously by render() (see renderSoundtrackAsset). A freshly-downloaded
+        // temp MP3 is not indexed yet, so a sync tracks() read here returns empty on iOS 16+ (the 'no music'
+        // bug); loading it with await in render() BEFORE this sync builder makes tracks() return the real track
+        // without a blocking semaphore (which risked the AVFoundation 'Result accumulator timeout' stall).
+        if let sAsset = inputs.preloadedSoundtrackAsset {
             if let sTrack = sAsset.tracks(withMediaType: .audio).first,
                let mTrack = composition.addMutableTrack(withMediaType: .audio,
                                                         preferredTrackID: kCMPersistentTrackID_Invalid) {
@@ -367,11 +377,10 @@ struct MediaEngineV1 {
                     try mTrack.insertTimeRange(CMTimeRange(start: .zero, duration: avail), of: sTrack, at: .zero)
                     soundtrackTrack = mTrack
                 } catch {
-                    // surface WHY the soundtrack failed to insert instead of a silent no-music render
                     StoryCreativeRefinement.lastMusicNote += " | soundtrack insert FAILED: \(error)"
                 }
             } else {
-                StoryCreativeRefinement.lastMusicNote += " | soundtrack asset had NO audio track after load (file bad?)"
+                StoryCreativeRefinement.lastMusicNote += " | preloaded soundtrack had NO audio track (file bad?)"
             }
         }
         // segmentRanges keeps the old (segment, timeline-range) shape the audio mix + duration-verify expect.
@@ -499,7 +508,25 @@ extension MediaEngineV1 {
     func render(_ inputs: MediaEngineInputs,
                 progress: ((Float) -> Void)? = nil,
                 shouldCancel: (() -> Bool)? = nil) async throws -> RenderResult {
+        // Pre-load the soundtrack's tracks ASYNCHRONOUSLY (not a blocking semaphore inside the sync builder —
+        // that risked the AVFoundation 'Result accumulator timeout' stall). After this await, the synchronous
+        // tracks() read in buildComposition returns the real audio track for a freshly-downloaded temp MP3.
+        var inputs = inputs
+        if let sURL = inputs.soundtrackURL, FileManager.default.fileExists(atPath: sURL.path) {
+            let sAsset = AVURLAsset(url: sURL)
+            _ = try? await sAsset.loadTracks(withMediaType: .audio)
+            _ = try? await sAsset.load(.duration)
+            inputs.preloadedSoundtrackAsset = sAsset
+            let sz = (try? FileManager.default.attributesOfItem(atPath: sURL.path)[.size] as? Int) ?? nil
+            StoryCreativeRefinement.lastMusicNote =
+                "soundtrack preloaded: \(sURL.lastPathComponent) bytes=\(sz.map(String.init) ?? "?") dur=\(String(format: "%.1f", sAsset.duration.seconds))s role=\(inputs.soundtrackRole) priority=\(inputs.nativeAudioPriority)"
+            MediaEngineV1.beacon("preload bytes=\(sz.map(String.init) ?? "nil") dur=\(String(format: "%.1f", sAsset.duration.seconds)) ntracks=\(sAsset.tracks(withMediaType: .audio).count)")
+        } else {
+            StoryCreativeRefinement.lastMusicNote = "NO soundtrack URL at render (pendingMusic path produced none)"
+            MediaEngineV1.beacon("no-soundtrack-url")
+        }
         let built = try buildComposition(inputs)
+        MediaEngineV1.beacon("built soundtrackTrack=\(built.soundtrackTrack != nil ? "YES" : "NO") note=\(StoryCreativeRefinement.lastMusicNote.suffix(80))")
         let mix = buildAudioMix(inputs, composition: built.composition,
                                 segmentRanges: built.segmentRanges, soundtrackTrack: built.soundtrackTrack)
 
