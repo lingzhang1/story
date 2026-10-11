@@ -73,6 +73,27 @@ export class StoryApiStack extends cdk.Stack {
       })
     );
 
+    // Read-only access to the Epidemic Sound API-key secrets the music
+    // provider loads at runtime (packages/music_provider). Two secrets, both
+    // least-privilege (GetSecretValue only, on these exact names):
+    //   - story-epidemic-key   : Partner REST API key (PRODUCTION music path)
+    //   - epidemic-mcp-api-key : Business-subscription MCP key (INTERNAL-TESTING
+    //                            path, enabled by STORY_MUSIC_PROVIDER=mcp)
+    // Secrets Manager appends a random 6-char suffix to each ARN, so the
+    // resource is matched by name + '-??????' rather than a hard-coded suffix.
+    // Scoped to these two names only — NOT a wildcard over all secrets.
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "EpidemicKeyRead",
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:story-epidemic-key-??????`,
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:epidemic-mcp-api-key-??????`,
+        ],
+      })
+    );
+
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
       serviceName: `story-${environment}-api`,

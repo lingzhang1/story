@@ -60,6 +60,19 @@ describe("StoryApiStack (Milestone A)", () => {
     });
   });
 
+  test("instance role grants least-privilege read on BOTH Epidemic secrets (REST + MCP), name-scoped", () => {
+    const policies = template.findResources("AWS::IAM::Policy");
+    const blob = JSON.stringify(Object.values(policies));
+    // the EpidemicKeyRead statement exists with the read-only action
+    expect(blob).toContain("EpidemicKeyRead");
+    expect(blob).toContain("secretsmanager:GetSecretValue");
+    // scoped to BOTH named secrets (name + 6-char suffix wildcard), nothing broader
+    expect(blob).toContain(":secret:story-epidemic-key-??????");
+    expect(blob).toContain(":secret:epidemic-mcp-api-key-??????");
+    // must NOT grant a wildcard over all secrets
+    expect(blob).not.toContain(":secret:*");
+  });
+
   test("provisions ZERO forbidden resource types", () => {
     const forbidden = [
       "AWS::DynamoDB::Table",
