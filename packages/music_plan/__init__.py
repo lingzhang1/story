@@ -123,6 +123,7 @@ class MusicPlanInputs:
     target_duration_seconds: float
     story_guide: dict = field(default_factory=dict)
     story_coverage: dict = field(default_factory=dict)
+    sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
 
 
 @runtime_checkable
@@ -139,13 +140,36 @@ def _build_user(inputs: MusicPlanInputs) -> str:
         "story_coverage": inputs.story_coverage,
         "target_duration_seconds": inputs.target_duration_seconds,
     }
+    if inputs.sound_preference:
+        payload["sound_preference"] = inputs.sound_preference
+    pref_line = _sound_pref_directive(inputs.sound_preference)
     return (
         "Plan the SOUNDTRACK SHAPE (MusicPlan) for THIS Story from the material below. MusicDirection is the "
         "authoritative intended feel. Scale the energy arc to the Story's scope — do NOT mechanically produce "
-        "a quiet->build->climax. Respect native audio.\n\nINPUT:\n"
+        "a quiet->build->climax. Respect native audio.\n"
+        + pref_line
+        + "\nINPUT:\n"
         + json.dumps(payload, indent=2)
         + "\n\nReturn ONLY the MusicPlan via the tool."
     )
+
+
+def _sound_pref_directive(pref: str | None) -> str:
+    """One-line directive mapping the user's sound preference onto audio_strategy (role/priority). Advisory
+    REQUEST context — the frozen music_plan/1 prompt already decides role/priority; this biases it. Empty when
+    no preference (model infers from intent/guide as before). music_led is NOT music-only: important native
+    audio is preserved."""
+    if pref == "immersive":
+        return ("SOUND PREFERENCE = immersive: the user wants natural sound and environmental atmosphere to lead. "
+                "Set native_audio_priority=important and keep soundtrack_role supportive or sparse.")
+    if pref == "balanced":
+        return ("SOUND PREFERENCE = balanced: intelligently combine meaningful native audio with music. "
+                "Prefer native_audio_priority=selective and soundtrack_role=supportive.")
+    if pref == "music_led":
+        return ("SOUND PREFERENCE = music_led: let the soundtrack lead (soundtrack_role=continuous is fine), but "
+                "this is NOT music-only — do NOT drop IMPORTANT native audio; keep native_audio_priority at least low "
+                "and preserve a genuine performance/speech if present.")
+    return ""
 
 
 def _to_contract(data: dict, inputs: MusicPlanInputs, *, model_id: str) -> MusicPlanContract:

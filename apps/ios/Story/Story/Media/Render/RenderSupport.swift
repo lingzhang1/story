@@ -304,7 +304,8 @@ enum EditPlanRequestBuilder {
             outputFormat: outputFormat,
             musicPlan: musicPlan,                       // R-d: present => music-aware planning; nil => no-music parity
             musicAssetId: musicAssetId,
-            musicAnalysis: musicAnalysis)
+            musicAnalysis: musicAnalysis,
+            soundPreference: story.effectiveSoundPreference.rawValue)   // immersive|balanced|music_led → native_audio bias
 
         return Build(request: req, includedMedia: included, excludedMomentIds: excluded)
     }

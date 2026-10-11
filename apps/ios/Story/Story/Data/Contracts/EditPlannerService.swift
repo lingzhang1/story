@@ -30,6 +30,7 @@ struct EditPlanRequestDTO: Encodable {
     var musicPlan: JSONValue? = nil        // frozen music_plan/1
     var musicAssetId: String? = nil        // selected Epidemic track id
     var musicAnalysis: JSONValue? = nil    // frozen music_analysis/1 for the selected track
+    var soundPreference: String? = nil     // immersive|balanced|music_led; nil omitted (no-music parity preserved)
 
     enum CodingKeys: String, CodingKey {
         case storyId = "story_id"
@@ -42,6 +43,7 @@ struct EditPlanRequestDTO: Encodable {
         case musicPlan = "music_plan"
         case musicAssetId = "music_asset_id"
         case musicAnalysis = "music_analysis"
+        case soundPreference = "sound_preference"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -57,6 +59,7 @@ struct EditPlanRequestDTO: Encodable {
         if let musicPlan { try c.encode(musicPlan, forKey: .musicPlan) }
         if let musicAssetId { try c.encode(musicAssetId, forKey: .musicAssetId) }
         if let musicAnalysis { try c.encode(musicAnalysis, forKey: .musicAnalysis) }
+        if let soundPreference { try c.encode(soundPreference, forKey: .soundPreference) }
     }
 }
 

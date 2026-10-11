@@ -109,6 +109,16 @@ struct CreateStoryPreviewView: View {
         beginMusicFlow()
     }
 
+    /// Customize Your Story accept: persist BOTH the chosen duration AND the user's EXPLICIT sound preference
+    /// (authoritative — survives relaunch/regeneration), then continue the unchanged music flow.
+    private func acceptCustomize(seconds: Double, sound: SoundPreference) {
+        durationRec = nil
+        story.intentTargetDurationSeconds = (seconds * 10).rounded() / 10
+        story.soundPreferenceExplicit = sound.rawValue   // explicit choice; never overwritten by inference
+        try? context.save()
+        beginMusicFlow()
+    }
+
     /// The music + create path (unchanged R-d behavior), reached once a duration exists.
     private func beginMusicFlow() {
         resolvingMusic = true
@@ -275,8 +285,14 @@ struct CreateStoryPreviewView: View {
             }
         }
         .sheet(item: $durationRec) { rec in
-            DurationChoiceView(rec: rec, onAccept: { acceptDuration($0) }, onCancel: { durationRec = nil })
-                .presentationDetents([.medium, .large])
+            CustomizeYourStoryView(
+                rec: rec,
+                inferredSound: SoundPreference.infer(theme: story.intentTheme, tone: story.intentTone,
+                    desiredFeeling: story.intentDesiredFeeling, styleTags: story.intentStyleTags),
+                initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
+                onCreate: { seconds, sound in acceptCustomize(seconds: seconds, sound: sound) },
+                onCancel: { durationRec = nil })
+                .presentationDetents([.large])
         }
         .alert("Keep shooting", isPresented: $durationNoMaterial) {
             Button("OK", role: .cancel) { durationNoMaterial = false }

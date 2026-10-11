@@ -186,6 +186,8 @@ class EditPlanRequest(BaseModel):
     music_asset_id: str | None = Field(default=None)
     music_plan_id: UUID | None = Field(default=None)
     music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
+    sound_preference: str | None = Field(
+        default=None, description="effective user sound preference: immersive|balanced|music_led (None = infer)")
 
 
 class DurationRecommendationRequest(BaseModel):
@@ -215,6 +217,8 @@ class MusicPlanRequest(BaseModel):
     target_duration_seconds: float = Field(..., gt=0.0)
     story_guide: dict = Field(default_factory=dict)
     story_coverage: dict = Field(default_factory=dict)
+    sound_preference: str | None = Field(
+        default=None, description="effective user sound preference: immersive|balanced|music_led (None = infer)")
 
 
 class MusicCandidatesRequest(BaseModel):
@@ -667,7 +671,7 @@ def create_app() -> FastAPI:
             story_coverage=body.story_coverage, moments=body.moments, music_plan=body.music_plan,
             output_format=body.output_format, music_asset_id=body.music_asset_id,
             music_plan_id=str(body.music_plan_id) if body.music_plan_id else None,
-            music_analysis=body.music_analysis)
+            music_analysis=body.music_analysis, sound_preference=body.sound_preference)
         try:
             plan = engine.generate(inputs)
         except MalformedPlanError as e:
@@ -758,6 +762,7 @@ def create_app() -> FastAPI:
             target_duration_seconds=body.target_duration_seconds,
             story_guide=body.story_guide,
             story_coverage=body.story_coverage,
+            sound_preference=body.sound_preference,
         )
         try:
             plan = engine.generate(inputs)

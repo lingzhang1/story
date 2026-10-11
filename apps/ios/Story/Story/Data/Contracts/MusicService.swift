@@ -105,6 +105,7 @@ struct MusicPlanRequestDTO: Encodable {
     let targetDurationSeconds: Double
     let storyGuide: JSONValue
     let storyCoverage: JSONValue
+    var soundPreference: String? = nil      // immersive|balanced|music_led; nil = infer (omitted from wire)
     enum CodingKeys: String, CodingKey {
         case storyId = "story_id"
         case creativeIntent = "creative_intent"
@@ -112,6 +113,7 @@ struct MusicPlanRequestDTO: Encodable {
         case targetDurationSeconds = "target_duration_seconds"
         case storyGuide = "story_guide"
         case storyCoverage = "story_coverage"
+        case soundPreference = "sound_preference"
     }
 }
 

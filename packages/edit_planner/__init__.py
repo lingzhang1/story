@@ -277,6 +277,7 @@ class EditPlanInputs:
     music_asset_id: str | None = None
     music_plan_id: str | None = None
     music_analysis: dict | None = None  # frozen music_analysis/1 shape; None => no-music planning
+    sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
 
 
 # ---------------------------------------------------------------------------
@@ -367,9 +368,28 @@ def _build_user(inputs: EditPlanInputs) -> str:
     }
     if inputs.music_analysis is not None:
         payload["music_analysis"] = inputs.music_analysis
+    if inputs.sound_preference:
+        payload["sound_preference"] = inputs.sound_preference
     return ("Plan the EditPlan for THIS Story from the material below. Use only the given Moment ids and their "
-            "real/useful ranges. Plan to the Story target duration. Respect native audio.\n\nINPUT:\n"
+            "real/useful ranges. Plan to the Story target duration. Respect native audio.\n"
+            + _edit_sound_pref_directive(inputs.sound_preference)
+            + "\nINPUT:\n"
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
+
+
+def _edit_sound_pref_directive(pref: str | None) -> str:
+    """One-line native_audio bias from the user's sound preference. Advisory REQUEST context; the frozen
+    edit_plan/5 clause already defaults to keep. music_led is NOT music-only."""
+    if pref == "immersive":
+        return ("SOUND PREFERENCE = immersive: strongly prefer native_audio=keep for usable environmental sound, "
+                "speech and atmosphere; duck/mute only for a clear editorial reason.")
+    if pref == "balanced":
+        return ("SOUND PREFERENCE = balanced: keep meaningful native audio and let music support it; duck minor "
+                "sound, mute only noise/unusable audio.")
+    if pref == "music_led":
+        return ("SOUND PREFERENCE = music_led: the soundtrack leads, so duck is a reasonable default — BUT this is "
+                "NOT music-only: still keep genuinely important native audio (a performance, intelligible speech).")
+    return ""
 
 
 def _build_repair(inputs: EditPlanInputs, bad_plan: dict, errs: list[str]) -> str:

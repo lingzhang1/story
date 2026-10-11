@@ -71,6 +71,14 @@ final class MusicSelectionResolver {
         let guideJSON = loadGuideJSON(for: story.id)
         let coverageJSON = loadCoverageJSON(for: story.id)
 
+        // Sound preference: refresh the INFERRED recommendation (advisory) WITHOUT touching the user's EXPLICIT
+        // choice, then pass the EFFECTIVE preference (explicit ?? inferred ?? balanced) to MusicPlan.
+        if let inferred = SoundPreference.infer(theme: story.intentTheme, tone: story.intentTone,
+                                                desiredFeeling: story.intentDesiredFeeling, styleTags: story.intentStyleTags) {
+            if story.soundPreferenceInferred != inferred.rawValue { story.soundPreferenceInferred = inferred.rawValue }
+        }
+        let effectivePref = story.effectiveSoundPreference.rawValue
+
         // DEBUG verification: prove (not assume) what the SINGLE MusicPlan request path carried. No media/creds.
         let guideDims = Self.dimensionCount(guideJSON)
         let guidePresent = Self.isNonEmptyObject(guideJSON)
@@ -81,7 +89,8 @@ final class MusicSelectionResolver {
         do {
             planJSON = try await planService.plan(MusicPlanRequestDTO(
                 storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
-                targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON))
+                targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON,
+                soundPreference: effectivePref))
         } catch {
             StoryCreativeRefinement.lastMusicPlanInput =
                 "build=\(StoryCreativeRefinement.buildIdentifier) ensureGuide=\(ensuredGuide != nil ? "ok" : "nil") guide=\(guidePresent ? "yes(\(guideDims)dims)" : "EMPTY") coverage=\(covPresent ? "yes" : "EMPTY") -> MusicPlan ERROR"
