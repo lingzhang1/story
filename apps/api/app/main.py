@@ -795,7 +795,7 @@ def create_app() -> FastAPI:
         correlation_id = str(uuid4())
         base = {"operation": "music_candidates", "correlation_id": correlation_id, "mode": "prototyping"}
         try:
-            client = _mp.EpidemicClient()
+            client = _mp.get_music_client()
         except _mp.EpidemicAuthError:
             raise HTTPException(status_code=503, detail="music provider auth unavailable")
         char = (body.music_plan or {}).get("character", {})
@@ -861,7 +861,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         base = {"operation": "music_analysis", "correlation_id": str(uuid4()), "mode": "prototyping"}
         try:
-            client = _mp.EpidemicClient()
+            client = _mp.get_music_client()
             meta = client.metadata(body.track_id)
             analysis = _mp.to_music_analysis_v1(
                 duration_seconds=float(meta.get("length") or body.duration_seconds or 1.0),
@@ -889,7 +889,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         base = {"operation": "music_soundtrack", "correlation_id": str(uuid4()), "mode": "prototyping"}
         try:
-            client = _mp.EpidemicClient()
+            client = _mp.get_music_client()
             link = client.download_link(body.track_id, quality="normal")
         except _mp.EpidemicAuthError:
             raise HTTPException(status_code=503, detail="music provider auth unavailable")

@@ -273,9 +273,28 @@ class EpidemicClient:
         return body
 
 
+# ---------------------------------------------------------------------------
+# Provider selector — REST (production) vs MCP (internal testing). ADDITIVE.
+# ---------------------------------------------------------------------------
+def get_music_client(key: str | None = None, *, secret_id: str | None = None):
+    """Return the active music provider client, honoring the feature flag.
+
+    STORY_MUSIC_PROVIDER=mcp selects the Epidemic MCP (Beta) client (business-subscription key in
+    'epidemic-mcp-api-key'), used for INTERNAL TESTING. Any other value (or unset) returns the Partner REST
+    client, which stays the PRODUCTION provider. Both are still gated by STORY_EPIDEMIC_MODE=prototyping.
+    Endpoints call this instead of constructing a client directly, so switching providers is a one-env change
+    with no code edits and no change to the REST path.
+    """
+    provider = os.environ.get("STORY_MUSIC_PROVIDER", "").strip().lower()
+    if provider == "mcp":
+        from .mcp_client import EpidemicMCPClient  # local import: MCP transport confined to its module
+        return EpidemicMCPClient(key=key, secret_id=secret_id)
+    return EpidemicClient(key=key, secret_id=secret_id)
+
+
 __all__ = [
     "BASE", "FLAG_ENV", "DEFAULT_SECRET_ID", "prototyping_enabled",
     "EpidemicDisabledError", "EpidemicAuthError", "EpidemicProviderError",
     "load_key", "normalize_bpm", "normalize_beats", "normalize_highlight", "normalize_energy",
-    "to_music_analysis_v1", "Candidate", "rank_candidates", "EpidemicClient",
+    "to_music_analysis_v1", "Candidate", "rank_candidates", "EpidemicClient", "get_music_client",
 ]
