@@ -64,7 +64,7 @@ struct CustomizeYourStoryView: View {
                     }
                     if let full = fullSeconds {
                         row(selected: length == .full, title: "Full Story",
-                            detail: rec.recommendation?.rationale ?? "More of the journey, details and atmosphere",
+                            detail: "More of the journey, details and atmosphere",
                             trailing: "~\(Int(full.rounded()))s") { length = .full }
                     }
                     row(selected: length == .custom, title: "Custom",
@@ -139,7 +139,7 @@ struct CustomizeYourStoryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(StoryTheme.body(16, .medium)).foregroundStyle(StoryTheme.cream)
                     Text(detail).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 if let trailing {
