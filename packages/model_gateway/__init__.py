@@ -62,6 +62,9 @@ class StructuredResult:
     repaired: bool = False
     model: str | None = None
     provider: str | None = None
+    stop_reason: str | None = None  # Bedrock stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | ...
+                                    # 'max_tokens' here means the output was TRUNCATED (a real cause of an
+                                    # empty/short structured result, distinct from the model choosing empty).
 
 
 class StructuredOutputError(RuntimeError):
@@ -159,6 +162,7 @@ class BedrockModelGateway:
                 raise ProviderError(f"bedrock converse failed: {type(e).__name__}: {e}") from e
 
             tool_input = self._extract_tool_input(resp)
+            stop_reason = resp.get("stopReason")
             if tool_input is not None:
                 usage = resp.get("usage") or {}
                 return StructuredResult(
@@ -172,8 +176,14 @@ class BedrockModelGateway:
                     repaired=attempt > 0,
                     model=self.model_id,
                     provider="bedrock",
+                    stop_reason=stop_reason,
                 )
-            last_err = StructuredOutputError("model did not return a tool_use block")
+            # No tool_use block. If Bedrock stopped at max_tokens the OUTPUT WAS TRUNCATED — surface that as
+            # the error so the caller can log 'stop_reason=max_tokens' instead of a generic 'no output'.
+            if stop_reason == "max_tokens":
+                last_err = StructuredOutputError("output truncated at max_tokens (increase max_tokens)")
+            else:
+                last_err = StructuredOutputError(f"model did not return a tool_use block (stop_reason={stop_reason})")
             # On repair attempt, nudge the model to call the tool.
             kwargs["messages"] = [
                 {"role": "user", "content": content},

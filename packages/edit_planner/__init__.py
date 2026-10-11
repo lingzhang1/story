@@ -455,6 +455,7 @@ class RealEditPlannerEngine:
             "first_pass_executable": False, "normalized": False,
             "normalize_notes": [], "repaired": False,
             "input_tokens": 0, "output_tokens": 0, "final": "pending",
+            "last_stop_reason": None, "last_output_tokens": 0, "max_tokens": self._max_tokens,
         }
 
         def _call(user_content: str) -> dict:
@@ -468,6 +469,10 @@ class RealEditPlannerEngine:
             if u:
                 diag["input_tokens"] += (u.input_tokens or 0)
                 diag["output_tokens"] += (u.output_tokens or 0)
+                diag["last_output_tokens"] = u.output_tokens or 0
+            # stop_reason='max_tokens' means THIS call's output was truncated at the ceiling — the prime
+            # suspect when a 24-Moment plan comes back with an empty segments[] despite feasible=true.
+            diag["last_stop_reason"] = result.stop_reason
             return result.data
 
         # 1-3: initial generation, safe normalization, executability validation.

@@ -12,6 +12,7 @@ routes live under /v1 (03-system-architecture.md §14).
 
 from __future__ import annotations
 
+import json
 import time
 from uuid import UUID, uuid4
 
@@ -695,7 +696,19 @@ def create_app() -> FastAPI:
             log.warning("edit_plan_invalid_after_repair",
                         extra={**base, "success": False, "error": str(e)[:300],
                                "model_calls": diag.get("model_calls"),
-                               "repairs_used": diag.get("executability_repairs_used"), "raw_feasible": diag.get("raw_feasible"), "raw_infeasible_reason": diag.get("raw_infeasible_reason"), "raw_segment_count": diag.get("raw_segment_count")})
+                               "repairs_used": diag.get("executability_repairs_used"),
+                               "raw_feasible": diag.get("raw_feasible"),
+                               "raw_infeasible_reason": diag.get("raw_infeasible_reason"),
+                               "raw_segment_count": diag.get("raw_segment_count"),
+                               # TRUNCATION diagnostics: last_stop_reason=='max_tokens' + last_output_tokens≈max_tokens
+                               # proves the empty plan is an OUTPUT-TRUNCATION, not the model choosing empty.
+                               "last_stop_reason": diag.get("last_stop_reason"),
+                               "last_output_tokens": diag.get("last_output_tokens"),
+                               "max_tokens": diag.get("max_tokens"),
+                               "input_tokens": diag.get("input_tokens"),
+                               # INPUT SIZE: moment count + the serialized request payload bytes.
+                               "n_moments": len(body.moments),
+                               "request_bytes": len(json.dumps(body.moments, default=str))})
             raise HTTPException(status_code=503,
                                 detail="edit plan could not be made executable; retry")
         except ProviderError as e:
