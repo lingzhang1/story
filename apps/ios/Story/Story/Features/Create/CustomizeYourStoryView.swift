@@ -11,17 +11,19 @@ struct CustomizeYourStoryView: View {
     let inferredSound: SoundPreference?         // advisory recommendation (nil => none inferred)
     let initialExplicitSound: SoundPreference?  // the user's prior explicit choice, if any
     /// Returns the chosen duration (seconds) + the user's sound choice (always explicit once they press Create).
-    let onCreate: (Double, SoundPreference) -> Void
+    let onCreate: (Double, SoundPreference, String) -> Void
     let onCancel: () -> Void
 
-    enum LengthChoice: Hashable { case highlights, full, custom }
+    enum LengthChoice: Hashable { case highlights, full, custom
+        var wire: String { switch self { case .highlights: return "highlights"; case .full: return "full"; case .custom: return "custom" } }
+    }
 
     @State private var length: LengthChoice
     @State private var sound: SoundPreference
     @State private var customSeconds: Double
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
-         onCreate: @escaping (Double, SoundPreference) -> Void, onCancel: @escaping () -> Void) {
+         onCreate: @escaping (Double, SoundPreference, String) -> Void, onCancel: @escaping () -> Void) {
         self.rec = rec; self.inferredSound = inferredSound; self.initialExplicitSound = initialExplicitSound
         self.onCreate = onCreate; self.onCancel = onCancel
         // Default length: Full Story when a recommended point exists, else Custom.
@@ -93,7 +95,7 @@ struct CustomizeYourStoryView: View {
                     soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
                 }
 
-                Button { onCreate(chosenSeconds, sound) } label: {
+                Button { onCreate(chosenSeconds, sound, length.wire) } label: {
                     Text("Create my Story").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
                         .frame(maxWidth: .infinity).padding(.vertical, 16)
                         .background(StoryTheme.cream).clipShape(Capsule())

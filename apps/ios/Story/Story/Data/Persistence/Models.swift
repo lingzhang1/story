@@ -95,6 +95,11 @@ final class StoryModel {
     var soundPreferenceExplicit: String?    // set only when the user picks; nil = not chosen
     var soundPreferenceInferred: String?     // recommendation from CreativeIntent; may be recomputed
 
+    // M-e / editorial-mode: the user's Story-length editorial choice (highlights|full|custom), persisted so the
+    // edit-plan request can tell the planner the intended BREADTH (not just the collapsed target duration).
+    // Additive migration (optional + defaulted nil); nil = older Story / not chosen => planner infers as before.
+    var editorialMode: String?
+
     var createdAt: Date
     var updatedAt: Date
 

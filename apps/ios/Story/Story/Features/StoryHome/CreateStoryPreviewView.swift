@@ -111,10 +111,11 @@ struct CreateStoryPreviewView: View {
 
     /// Customize Your Story accept: persist BOTH the chosen duration AND the user's EXPLICIT sound preference
     /// (authoritative — survives relaunch/regeneration), then continue the unchanged music flow.
-    private func acceptCustomize(seconds: Double, sound: SoundPreference) {
+    private func acceptCustomize(seconds: Double, sound: SoundPreference, mode: String) {
         durationRec = nil
         story.intentTargetDurationSeconds = (seconds * 10).rounded() / 10
         story.soundPreferenceExplicit = sound.rawValue   // explicit choice; never overwritten by inference
+        story.editorialMode = mode                        // highlights|full|custom -> edit-plan request breadth
         try? context.save()
         beginMusicFlow()
     }
@@ -326,7 +327,7 @@ struct CreateStoryPreviewView: View {
                 inferredSound: SoundPreference.infer(theme: story.intentTheme, tone: story.intentTone,
                     desiredFeeling: story.intentDesiredFeeling, styleTags: story.intentStyleTags),
                 initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
-                onCreate: { seconds, sound in acceptCustomize(seconds: seconds, sound: sound) },
+                onCreate: { seconds, sound, mode in acceptCustomize(seconds: seconds, sound: sound, mode: mode) },
                 onCancel: { durationRec = nil })
                 .presentationDetents([.large])
         }

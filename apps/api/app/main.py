@@ -197,6 +197,8 @@ class EditPlanRequest(BaseModel):
     music_analysis: dict | None = Field(default=None, description="frozen music_analysis/1; omit for no-music planning")
     sound_preference: str | None = Field(
         default=None, description="effective user sound preference: immersive|balanced|music_led (None = infer)")
+    editorial_mode: str | None = Field(
+        default=None, description="Story-length editorial mode: highlights|full|custom (None = infer from duration; back-compat)")
 
 
 class DurationRecommendationRequest(BaseModel):
@@ -688,7 +690,8 @@ def create_app() -> FastAPI:
             story_coverage=body.story_coverage, moments=body.moments, music_plan=body.music_plan,
             output_format=body.output_format, music_asset_id=body.music_asset_id,
             music_plan_id=str(body.music_plan_id) if body.music_plan_id else None,
-            music_analysis=body.music_analysis, sound_preference=body.sound_preference)
+            music_analysis=body.music_analysis, sound_preference=body.sound_preference,
+            editorial_mode=body.editorial_mode)
         try:
             plan = engine.generate(inputs)
         except MalformedPlanError as e:

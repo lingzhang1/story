@@ -278,6 +278,7 @@ class EditPlanInputs:
     music_plan_id: str | None = None
     music_analysis: dict | None = None  # frozen music_analysis/1 shape; None => no-music planning
     sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
+    editorial_mode: str | None = None  # highlights|full|custom; None => infer from duration (back-compat). Advisory; no schema change.
 
 
 # ---------------------------------------------------------------------------
@@ -370,11 +371,31 @@ def _build_user(inputs: EditPlanInputs) -> str:
         payload["music_analysis"] = inputs.music_analysis
     if inputs.sound_preference:
         payload["sound_preference"] = inputs.sound_preference
+    if inputs.editorial_mode:
+        payload["editorial_mode"] = inputs.editorial_mode
     return ("Plan the EditPlan for THIS Story from the material below. Use only the given Moment ids and their "
             "real/useful ranges. Plan to the Story target duration. Respect native audio.\n"
             + _edit_sound_pref_directive(inputs.sound_preference)
+            + _edit_mode_directive(inputs.editorial_mode)
             + "\nINPUT:\n"
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
+
+
+def _edit_mode_directive(mode: str | None) -> str:
+    """One-line editorial-breadth bias from the user's Story-length mode. Advisory REQUEST context; the v5.1
+    prompt clause reads editorial_mode. Target duration stays authoritative; no minimum clip count; no forced
+    Guide completion. Empty string when unset (older clients) so v5 behavior is unchanged."""
+    if mode == "highlights":
+        return ("\nEDITORIAL MODE = highlights: favor the STRONGEST material, impact and concision; it is correct "
+                "to use fewer, higher-value Moments.")
+    if mode == "full":
+        return ("\nEDITORIAL MODE = full: seek BROADER distinct, meaningful representation of the experience where "
+                "the footage and duration support it — include additional Moments when they add narrative, "
+                "atmosphere, character, progression or emotional value; still avoid redundant clips and never pad.")
+    if mode == "custom":
+        return ("\nEDITORIAL MODE = custom: respect the selected duration and infer appropriate breadth from the "
+                "Story's intent and available material.")
+    return ""
 
 
 def _edit_sound_pref_directive(pref: str | None) -> str:
