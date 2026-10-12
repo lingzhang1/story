@@ -32,6 +32,21 @@ enum StoryBackend {
         cfg.waitsForConnectivity = true
         return URLSession(configuration: cfg)
     }()
+
+    /// A SEPARATE session for BACKGROUND model inference (asset/scene understanding). Isolating it from the
+    /// interactive `longSession` means a Story's 20-25 large multipart AU uploads cannot occupy the connection
+    /// pool that interactive requests (creative-intent, guide, director) need — so starting/working on Story B
+    /// stays responsive while Story A analyzes. Per-host connections are capped so the client itself bounds how
+    /// much AU hits the backend at once (interactive priority = isolation, not preemption). Generous timeout
+    /// (AU is a model call) but a tighter per-host cap than the default 6.
+    static let backgroundSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 180
+        cfg.timeoutIntervalForResource = 300
+        cfg.waitsForConnectivity = true
+        cfg.httpMaximumConnectionsPerHost = 2   // bound background upload concurrency at the transport layer
+        return URLSession(configuration: cfg)
+    }()
 }
 
 enum CreativeIntentServiceError: Error, LocalizedError {

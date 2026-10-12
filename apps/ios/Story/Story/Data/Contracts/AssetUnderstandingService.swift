@@ -102,7 +102,7 @@ protocol AUAnalyzing {
 
 struct AssetUnderstandingService: AUAnalyzing {
     var baseURL: URL = StoryBackend.baseURL
-    var session: URLSession = .shared
+    var session: URLSession = StoryBackend.backgroundSession
 
     func analyze(
         frames: [AUExtractedFrame],
