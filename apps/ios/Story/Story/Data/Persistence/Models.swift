@@ -637,7 +637,10 @@ final class MyMusicAssetModel {
     var relativePath: String                // under <Documents>/mymusic/<uuid>.<ext>; resolve via MyMusicStore
     var originalFilename: String
     var durationSeconds: Double
-    @Attribute(.unique) var contentHash: String   // sha256 of bytes — dedup + corruption detection
+    // sha256 of imported bytes, or "provider:<trackId>" for a saved favorite. Dedup is enforced in CODE (fetch
+    // by contentHash before insert), NOT a DB unique constraint — a second @Attribute(.unique) on a freshly
+    // added model is a lightweight-migration hazard on an existing on-device store.
+    var contentHash: String
     var energyCurveJSON: String             // coarse normalized (0..1) amplitude curve, locally derived ("[]" if none)
     var bpm: Double?                        // ONLY if validated locally; nil otherwise (never fabricated)
     // M-e (save-from-list): when non-nil, this row is a SAVED PROVIDER FAVORITE — a reference to a provider

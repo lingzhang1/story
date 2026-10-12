@@ -32,10 +32,11 @@ struct MusicPickerView: View {
 
     // M-e: imported "My Music" is a FIRST-CLASS source in this picker (create time AND Change Music), shown
     // alongside the provider recommendations. The library persists across Stories; import is via the Files picker.
-    @Query(sort: \MyMusicAssetModel.lastUsedAt, order: .reverse) private var myMusic: [MyMusicAssetModel]
+    @Query(sort: \MyMusicAssetModel.createdAt, order: .reverse) private var myMusic: [MyMusicAssetModel]
     @State private var importingFile = false
     @State private var importError: String?
     @State private var myMusicPlayingId: UUID?
+    @State private var pickerTab: PickerTab = .songs
 
     // Free-text search + load-more pagination (overlays the recommended list when a query is active).
     @State private var searchText: String = ""
@@ -77,21 +78,25 @@ struct MusicPickerView: View {
             StoryTheme.ink.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
+                tabBar
                 searchBar
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if isSearchActive {
                             searchResultsList
-                        } else {
-                            // M-e: music SOURCES first (imported + saved favorites + Import) so they are
-                            // visible without scrolling past the provider list.
+                        } else if pickerTab == .myMusic {
+                            // My Music tab: imported tracks + saved favorites + Import. (No long packed list.)
                             myMusicSection
-                            Text("STORY'S PICKS").font(StoryTheme.body(10)).tracking(1.3)
-                                .foregroundStyle(StoryTheme.cream.opacity(0.22))
-                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 6)
+                        } else {
+                            // Songs tab: provider recommendations only.
                             Text("Each track shapes a different edit — Story cuts the moments and pacing to fit.")
                                 .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.36))
-                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 6).padding(.bottom, 6)
+                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 12).padding(.bottom, 6)
+                            if currentRec.candidates.isEmpty {
+                                Text("No suggestions right now — switch to My Music, or create without music.")
+                                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                                    .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 10)
+                            }
                             ForEach(currentRec.candidates) { track in
                                 trackRow(track)
                             }
@@ -108,6 +113,31 @@ struct MusicPickerView: View {
                       allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff],
                       allowsMultipleSelection: false) { handleFileImport($0) }
         .onDisappear { searchTask?.cancel(); stopPreview(); stopMyMusicPreview() }
+    }
+
+    private enum PickerTab { case songs, myMusic }
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            tabButton("Songs", .songs)
+            tabButton("My Music", .myMusic)
+        }
+        .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 10)
+    }
+
+    private func tabButton(_ title: String, _ tab: PickerTab) -> some View {
+        let active = pickerTab == tab
+        return Button {
+            stopPreview(); stopMyMusicPreview()
+            pickerTab = tab
+        } label: {
+            VStack(spacing: 7) {
+                Text(title).font(StoryTheme.body(14, active ? .semibold : .regular))
+                    .foregroundStyle(active ? StoryTheme.cream : StoryTheme.cream.opacity(0.4))
+                Rectangle().fill(active ? StoryTheme.gold : .clear).frame(height: 2)
+            }
+            .frame(maxWidth: .infinity)
+        }.buttonStyle(.plain)
     }
 
     // MARK: - recommendation pager (Next page = different options)
@@ -269,18 +299,17 @@ struct MusicPickerView: View {
     @ViewBuilder private var myMusicSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("YOUR MUSIC").font(StoryTheme.body(10)).tracking(1.3)
-                    .foregroundStyle(StoryTheme.cream.opacity(0.22))
+                Text("Imported & saved tracks — reusable in every Story.")
+                    .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.4))
                 Spacer()
-                // Temporary build stamp so we can confirm the running binary includes this screen.
                 Text("build \(StoryCreativeRefinement.buildIdentifier)")
                     .font(StoryTheme.body(9)).foregroundStyle(StoryTheme.cream.opacity(0.18))
             }
-            .padding(.top, 4)
+            .padding(.top, 12)
 
             if myMusic.isEmpty {
-                Text("Save a track below with ☆, or import your own — it’ll live here for every Story.")
-                    .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                Text("Nothing here yet. Import your own audio, or save a track from Songs with ☆.")
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.35)).padding(.top, 4)
             } else {
                 ForEach(myMusic) { asset in myMusicRow(asset) }
             }
@@ -455,7 +484,7 @@ struct MusicPickerView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
-            if !pendingTrackId.isEmpty {
+            if pickerTab == .songs && !pendingTrackId.isEmpty {
                 StoryPrimaryButton(title: "Use this music") {
                     stopPreview()
                     onChoose(.track(pendingTrackId))
