@@ -150,4 +150,36 @@ final class EditPlannerCaseGTests: XCTestCase {
         XCTAssertEqual(plan.segments.first?.nativeAudio, "keep")
         XCTAssertNil(plan.segments.first?.musicAlignment)
     }
+
+    // Phase 1 wiring: persisted StoryGuide + StoryCoverage must reach the backend request (were empty before).
+    func test_persisted_guide_and_coverage_reach_the_request() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/caseg-gc.mov", dur: 8.0)
+        completeAU(m, useful: [(0.5, 5.0)])
+        ctx.insert(StoryGuideModel(storyId: s.id,
+            guideJSON: #"{"schema_version":"story_guide/1","dimensions":[{"id":"d1","label":"journey"}]}"#))
+        ctx.insert(StoryCoverageModel(storyId: s.id,
+            coverageJSON: #"{"schema_version":"story_coverage/2","sufficiency":"sufficient"}"#,
+            sourceUnderstandingIdsFingerprint: "f", creativeIntentFingerprint: "f", pendingCount: 0))
+
+        let data = try StoryContractCoding.encoder().encode(EditPlanRequestBuilder.build(story: s, context: ctx).request)
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let guide = obj["story_guide"] as? [String: Any] ?? [:]
+        let coverage = obj["story_coverage"] as? [String: Any] ?? [:]
+        XCTAssertFalse(guide.isEmpty, "StoryGuide must be sent non-empty when persisted")
+        XCTAssertEqual(guide["schema_version"] as? String, "story_guide/1")
+        XCTAssertFalse(coverage.isEmpty, "StoryCoverage must be sent non-empty when persisted")
+        XCTAssertEqual(coverage["sufficiency"] as? String, "sufficient")
+    }
+
+    // Honest fallback: with NO persisted Guide/Coverage, the request carries empty objects (never fabricated).
+    func test_absent_guide_and_coverage_fall_back_to_empty() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/caseg-noevidence.mov", dur: 8.0)
+        completeAU(m, useful: [(0.5, 5.0)])
+        let data = try StoryContractCoding.encoder().encode(EditPlanRequestBuilder.build(story: s, context: ctx).request)
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertTrue((obj["story_guide"] as? [String: Any] ?? [:]).isEmpty)
+        XCTAssertTrue((obj["story_coverage"] as? [String: Any] ?? [:]).isEmpty)
+    }
 }

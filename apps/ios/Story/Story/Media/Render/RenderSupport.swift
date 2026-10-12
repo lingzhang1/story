@@ -294,12 +294,21 @@ enum EditPlanRequestBuilder {
 
         let intent = creativeIntentPayload(story: story, target: target)
 
+        // Wire the Story's PERSISTED StoryGuide + StoryCoverage into the request. Edit Planner v5's prompt is
+        // told to "allocate time by narrative significance relative to the Guide and Coverage" — but these were
+        // being sent as EMPTY objects, so v5 selected from CreativeIntent + thin per-Moment summaries alone and
+        // under-used footage (observed: 36 eligible -> 11 selected at a 105s target). We send the ACTUAL evidence
+        // when present; honest empty-object fallback when absent (never fabricated/stale-forced). Same loaders as
+        // the music path. No frozen prompt/contract change — the fields already exist and v5 already reads them.
+        let guideJSON = Self.loadGuideJSON(for: story.id, context: context)
+        let coverageJSON = Self.loadCoverageJSON(for: story.id, context: context)
+
         let req = EditPlanRequestDTO(
             storyId: story.id,
             creativeIntentId: story.id,                 // CreativeIntent is 1:1 with the Story (flattened on StoryModel)
             creativeIntent: intent,
-            storyGuide: .object([:]),                   // optional; omitted-equivalent
-            storyCoverage: .object([:]),                // optional; omitted-equivalent
+            storyGuide: guideJSON,
+            storyCoverage: coverageJSON,
             moments: moments,
             outputFormat: outputFormat,
             musicPlan: musicPlan,                       // R-d: present => music-aware planning; nil => no-music parity
@@ -308,6 +317,27 @@ enum EditPlanRequestBuilder {
             soundPreference: story.effectiveSoundPreference.rawValue)   // immersive|balanced|music_led → native_audio bias
 
         return Build(request: req, includedMedia: included, excludedMomentIds: excluded)
+    }
+
+    /// Load the Story's persisted StoryGuide wire JSON (story_guide/1), or an empty object when absent.
+    /// Never fabricates: a missing/empty Guide yields `.object([:])` so the planner falls back honestly.
+    static func loadGuideJSON(for storyId: UUID, context: ModelContext) -> JSONValue {
+        var desc = FetchDescriptor<StoryGuideModel>(predicate: #Predicate { $0.storyId == storyId })
+        desc.fetchLimit = 1
+        if let json = (try? context.fetch(desc))?.first?.guideJSON, !json.isEmpty {
+            return JSONValue.object(fromJSONString: json)
+        }
+        return .object([:])
+    }
+
+    /// Load the Story's persisted StoryCoverage wire JSON (story_coverage/*), or an empty object when absent.
+    static func loadCoverageJSON(for storyId: UUID, context: ModelContext) -> JSONValue {
+        var desc = FetchDescriptor<StoryCoverageModel>(predicate: #Predicate { $0.storyId == storyId })
+        desc.fetchLimit = 1
+        if let json = (try? context.fetch(desc))?.first?.coverageJSON, !json.isEmpty {
+            return JSONValue.object(fromJSONString: json)
+        }
+        return .object([:])
     }
 
     /// Extract `[[start,end], ...]` pairs from a MomentUnderstanding's observed.useful_segments. Falls back to
