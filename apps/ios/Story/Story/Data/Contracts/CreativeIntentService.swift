@@ -52,7 +52,11 @@ enum CreativeIntentServiceError: Error, LocalizedError {
 
 struct CreativeIntentService {
     var baseURL: URL = StoryBackend.baseURL
-    var session: URLSession = .shared
+    // Model-backed call: use the GENEROUS 180s session, NOT URLSession.shared (60s). Under load — e.g. starting
+    // a SECOND Story while the first is still uploading 24 clips (each AU ~10-14s, coverage ~40s, saturating the
+    // backend) — the shared 60s timeout fires and the client throws "Couldn't create your Story" even though the
+    // request later succeeds server-side. The 180s session absorbs that contention + App Runner cold start.
+    var session: URLSession = CreativeIntentService.longSession
 
     func resolve(rawText: String) async throws -> CreativeIntentContractDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/creative-intent"))

@@ -25,7 +25,7 @@ enum MusicDirectionServiceError: Error { case encoding(Error), transport(Error),
 final class MusicDirectionService: MusicDirectionInferring {
     private let baseURL: URL
     private let session: URLSession
-    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = .shared) {
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
         self.baseURL = baseURL
         self.session = session
     }

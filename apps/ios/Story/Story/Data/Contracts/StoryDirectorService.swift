@@ -30,7 +30,7 @@ enum StoryDirectorServiceError: Error, LocalizedError {
 
 struct StoryDirectorService {
     var baseURL: URL = StoryBackend.baseURL
-    var session: URLSession = .shared
+    var session: URLSession = StoryBackend.longSession
 
     /// Resolve the first Director recommendation. `sceneUnderstanding` is nil when the
     /// user used Skip Scan — the body then omits scene_understanding (server treats it as

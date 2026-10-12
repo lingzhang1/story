@@ -83,7 +83,7 @@ protocol StoryCoverageV2Computing {
 
 struct StoryCoverageV2Service: StoryCoverageV2Computing {
     var baseURL: URL = StoryBackend.baseURL
-    var session: URLSession = .shared
+    var session: URLSession = StoryBackend.longSession
 
     func compute(_ request: StoryCoverageV2RequestDTO) async throws -> StoryCoverageV2DTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage/v2"))
@@ -105,7 +105,7 @@ struct StoryCoverageV2Service: StoryCoverageV2Computing {
 
 struct StoryCoverageService: StoryCoverageComputing {
     var baseURL: URL = StoryBackend.baseURL
-    var session: URLSession = .shared
+    var session: URLSession = StoryBackend.longSession
 
     func compute(_ request: StoryCoverageRequestDTO) async throws -> StoryCoverageDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage"))
