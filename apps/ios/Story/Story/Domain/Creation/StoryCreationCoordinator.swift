@@ -432,6 +432,15 @@ final class StoryCreationCoordinator {
         let fingerprint = Self.fingerprint(for: momentIds, story: story)
         let provenance = Self.provenance(plan: plan)
 
+        // M-e: persist the EXACT executable plan so a soundtrack-only re-render (Change Music) can reuse the
+        // visual edit verbatim without re-invoking the Edit Planner. This is the post-refinement plan — the one
+        // the renderer actually consumed. Encoded with the canonical snake_case encoder (EditPlan/2 wire shape).
+        let planJSON: String? = (try? StoryContractCoding.encoder().encode(plan)).flatMap { String(data: $0, encoding: .utf8) }
+        let musicRef: String = {
+            if let tid = pendingMusic?.trackId { return "provider:\(tid)" }
+            return "none"
+        }()
+
         let output = GeneratedOutputModel(
             title: story.title,
             durationSeconds: result.durationSeconds,
@@ -444,7 +453,15 @@ final class StoryCreationCoordinator {
             renderWidth: Double(result.renderSize.width),
             renderHeight: Double(result.renderSize.height),
             isStale: false,
-            soundtrackTitle: pendingMusic?.trackTitle)
+            soundtrackTitle: pendingMusic?.trackTitle,
+            versionId: nil,                             // original render: versionId defaults to the row id
+            parentVersionId: nil,
+            operationType: "original",
+            editPlanJSON: planJSON,
+            soundtrackRole: pendingMusic?.soundtrackRole,
+            nativeAudioPriority: pendingMusic?.nativeAudioPriority,
+            soundPreferenceRaw: story.effectiveSoundPreference.rawValue,
+            musicAssetRef: musicRef)
         output.story = story
         context.insert(output)
         story.generatedOutputs.append(output)

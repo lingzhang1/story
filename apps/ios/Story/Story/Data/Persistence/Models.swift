@@ -255,6 +255,30 @@ final class GeneratedOutputModel {
     /// the real title when present; NEVER a fabricated track name.
     var soundtrackTitle: String? = nil
 
+    // --- M-e shared versioning foundation (all defaulted = migration-safe) ---
+    // A GeneratedOutput row IS a version. A Story has many; they are ADDITIVE and never overwritten.
+    //
+    // versionId      : stable version handle (defaults to `id` for originals + legacy rows).
+    // parentVersionId: nil for an original render; the SOURCE output's versionId for a derived version
+    //                  (e.g. a Change-Music re-render points at the version it replaced the soundtrack of).
+    // operationType  : "original" | "change_music"  (future: "another_version", "edit_ai"). Legacy rows read "original".
+    // editPlanJSON   : the EXACT executable EditPlanV2 this output rendered from, as canonical snake_case JSON
+    //                  (the POST-refinement plan). This is what makes the visual edit faithfully reconstructable
+    //                  for Change Music — the Edit Planner is never re-invoked. nil on legacy rows (which are
+    //                  therefore not Change-Music eligible — honest, not a crash).
+    // soundtrackRole / nativeAudioPriority: the mix knobs used, re-applied verbatim on a soundtrack-only re-render
+    //                  so native-audio treatment is identical.
+    // soundPreferenceRaw: effective sound preference at render time (provenance).
+    // musicAssetRef  : soundtrack identity — "provider:<trackId>" | "mymusic:<MyMusicAssetModel.id>" | "none".
+    var versionId: UUID = UUID()
+    var parentVersionId: UUID? = nil
+    var operationType: String = "original"
+    var editPlanJSON: String? = nil
+    var soundtrackRole: String? = nil
+    var nativeAudioPriority: String? = nil
+    var soundPreferenceRaw: String? = nil
+    var musicAssetRef: String? = nil
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -269,6 +293,14 @@ final class GeneratedOutputModel {
         renderHeight: Double = 0,
         isStale: Bool = false,
         soundtrackTitle: String? = nil,
+        versionId: UUID? = nil,
+        parentVersionId: UUID? = nil,
+        operationType: String = "original",
+        editPlanJSON: String? = nil,
+        soundtrackRole: String? = nil,
+        nativeAudioPriority: String? = nil,
+        soundPreferenceRaw: String? = nil,
+        musicAssetRef: String? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
@@ -284,6 +316,14 @@ final class GeneratedOutputModel {
         self.renderHeight = renderHeight
         self.isStale = isStale
         self.soundtrackTitle = soundtrackTitle
+        self.versionId = versionId ?? id
+        self.parentVersionId = parentVersionId
+        self.operationType = operationType
+        self.editPlanJSON = editPlanJSON
+        self.soundtrackRole = soundtrackRole
+        self.nativeAudioPriority = nativeAudioPriority
+        self.soundPreferenceRaw = soundPreferenceRaw
+        self.musicAssetRef = musicAssetRef
         self.createdAt = createdAt
     }
 }
@@ -557,5 +597,61 @@ final class StoryMusicDirectionModel {
         self.fingerprint = fingerprint
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+}
+
+// ---------------------------------------------------------------------------
+// My Music — Milestone M-e (user-imported audio library)
+//
+// A user-provided audio file imported through the iOS Files picker, copied into
+// managed LOCAL storage. LOCAL-FIRST: the bytes live under <Documents>/mymusic/
+// (relativePath), NEVER uploaded to the backend and NEVER a cloud URL. This is a
+// LIBRARY — one row is reusable across many Stories and survives relaunch.
+//
+// Distinct from PROVIDER tracks (which are resolved transiently per-create and are
+// NEVER permanently copied, for licensing). Only user-owned imports are stored here.
+//
+// Identity + dedup: `contentHash` is sha256 of the imported bytes. A re-import of
+// the same file reuses the existing row (no second copy). `id` is the stable
+// MusicAsset identity a GeneratedOutput version references as "mymusic:<id>".
+//
+// Analysis is LOCAL and HONEST: duration + a coarse energy curve always; bpm/beats
+// ONLY when a validated local estimate exists, else nil/empty. NEVER fabricated.
+// ---------------------------------------------------------------------------
+@Model
+final class MyMusicAssetModel {
+    @Attribute(.unique) var id: UUID
+    var displayName: String                 // user-facing; defaults to the filename stem, renamable
+    var relativePath: String                // under <Documents>/mymusic/<uuid>.<ext>; resolve via MyMusicStore
+    var originalFilename: String
+    var durationSeconds: Double
+    @Attribute(.unique) var contentHash: String   // sha256 of bytes — dedup + corruption detection
+    var energyCurveJSON: String             // coarse normalized (0..1) amplitude curve, locally derived ("[]" if none)
+    var bpm: Double?                        // ONLY if validated locally; nil otherwise (never fabricated)
+    var createdAt: Date
+    var lastUsedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        displayName: String,
+        relativePath: String,
+        originalFilename: String,
+        durationSeconds: Double,
+        contentHash: String,
+        energyCurveJSON: String = "[]",
+        bpm: Double? = nil,
+        createdAt: Date = .now,
+        lastUsedAt: Date? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.relativePath = relativePath
+        self.originalFilename = originalFilename
+        self.durationSeconds = durationSeconds
+        self.contentHash = contentHash
+        self.energyCurveJSON = energyCurveJSON
+        self.bpm = bpm
+        self.createdAt = createdAt
+        self.lastUsedAt = lastUsedAt
     }
 }

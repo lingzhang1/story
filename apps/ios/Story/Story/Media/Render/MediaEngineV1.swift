@@ -18,7 +18,7 @@ import Foundation
 
 // MARK: - EditPlan/2 decode shapes (mirror the frozen contract; renderer-side DTOs)
 
-struct EditPlanV2: Decodable {
+struct EditPlanV2: Codable {
     let schemaVersion: String
     let targetDurationSeconds: Double
     let outputFormat: String            // vertical | square | landscape
@@ -36,7 +36,7 @@ struct EditPlanV2: Decodable {
     }
 }
 
-struct EditSegmentV2: Decodable {
+struct EditSegmentV2: Codable {
     let order: Int
     let assetId: String                 // Moment id -> MediaStore relative path lookup by the caller
     let sourceStartSeconds: Double?
@@ -72,7 +72,7 @@ struct EditSegmentV2: Decodable {
 /// Mirrors the frozen TransitionInstruction (ai_contracts.TransitionType = cut | fade | dissolve). The renderer
 /// treats a CROSSFADE as `dissolve` (both clips visible, cross-dissolving opacity) — the standard meaning;
 /// `fade` is a single-clip fade and `cut` is a straight cut. We do NOT change the frozen contract.
-struct Transition: Decodable {
+struct Transition: Codable {
     let type: String                    // cut | fade | dissolve
     let durationSeconds: Double?
     enum CodingKeys: String, CodingKey {
@@ -83,7 +83,7 @@ struct Transition: Decodable {
     var crossfadeSeconds: Double { type == "dissolve" ? (durationSeconds ?? 0.3) : 0.0 }
 }
 
-struct MusicAlignment: Decodable {
+struct MusicAlignment: Codable {
     let anchor: String                  // beat | downbeat | highlight | none
     let note: String?
 }
