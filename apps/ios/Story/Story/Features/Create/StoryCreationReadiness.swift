@@ -20,8 +20,11 @@ enum StoryCreationReadiness: Equatable {
     case pendingAnalysis(ready: Int, pending: Int)
     /// No Moments at all.
     case noMoments
-    /// Moments exist, but NONE has a resolvable local file (so none can be planned, regardless of AU).
+    /// Moments exist, but NONE has a resolvable local file — the original media is gone from this device
+    /// (NOT an analysis delay). A recovery state: the moment RECORDS exist but their files do not.
     case noUsableMedia(totalMoments: Int)
+    /// Moments exist WITH files, but none has completed AU yet — a genuine analysis delay.
+    case analyzing(totalMoments: Int)
 
     /// Can the Create action be launched? GATE DECISION: `.ready` OR `.pendingAnalysis` (ready>=1) are plannable —
     /// the planner only consumes the ready Moments, so a mix is fine. `.noMoments` / `.noUsableMedia` are not.
@@ -29,7 +32,7 @@ enum StoryCreationReadiness: Equatable {
         switch self {
         case .ready: return true
         case .pendingAnalysis(let ready, _): return ready >= 1
-        case .noMoments, .noUsableMedia: return false
+        case .noMoments, .noUsableMedia, .analyzing: return false
         }
     }
 
@@ -45,6 +48,8 @@ enum StoryCreationReadiness: Equatable {
         case .noMoments:
             return "Shoot or add a moment first."
         case .noUsableMedia:
+            return "The original files for these moments are no longer on this device. Re-add them to create your Story."
+        case .analyzing:
             return "Your moments are still being analyzed."
         }
     }
@@ -53,14 +58,13 @@ enum StoryCreationReadiness: Equatable {
 
     /// Classify from the three counts the two inputs produce. `usable` = Moments with BOTH a resolvable file AND a
     /// completed AU; `withFile` = Moments with a resolvable file (regardless of AU); `total` = all Moments.
-    /// pending (file present, AU not complete) = withFile - usable.
     static func classify(usable: Int, withFile: Int, total: Int) -> StoryCreationReadiness {
         if total == 0 { return .noMoments }
-        if withFile == 0 { return .noUsableMedia(totalMoments: total) }
+        if withFile == 0 { return .noUsableMedia(totalMoments: total) }   // files GONE (not an analysis delay)
         let pending = max(0, withFile - usable)
         if usable == 0 {
-            // Files exist but none analyzed yet -> not plannable; honest "being analyzed".
-            return .noUsableMedia(totalMoments: total)
+            // Files exist but none analyzed yet -> genuine analysis delay.
+            return .analyzing(totalMoments: total)
         }
         if pending > 0 { return .pendingAnalysis(ready: usable, pending: pending) }
         return .ready(usableCount: usable, totalMoments: total)

@@ -34,11 +34,19 @@ final class StoryCreationReadinessTests: XCTestCase {
                        .noUsableMedia(totalMoments: 3))
     }
 
-    func test_classify_filesButNoAU_notPlannable() {
+    func test_classify_filesButNoAU_isAnalyzing() {
         // files present, none analyzed -> not plannable, honest "being analyzed".
         let r = StoryCreationReadiness.classify(usable: 0, withFile: 2, total: 2)
-        XCTAssertEqual(r, .noUsableMedia(totalMoments: 2))
+        XCTAssertEqual(r, .analyzing(totalMoments: 2))
         XCTAssertFalse(r.isPlannable)
+    }
+
+    func test_classify_noFiles_isMediaGone() {
+        // moment RECORDS exist but NO file resolves -> media gone (not analyzing). Honest recovery copy.
+        let r = StoryCreationReadiness.classify(usable: 0, withFile: 0, total: 3)
+        XCTAssertEqual(r, .noUsableMedia(totalMoments: 3))
+        XCTAssertFalse(r.isPlannable)
+        XCTAssertTrue(r.copy.lowercased().contains("no longer on this device"))
     }
 
     func test_classify_mixReadyAndPending() {
@@ -63,7 +71,8 @@ final class StoryCreationReadinessTests: XCTestCase {
     func test_copy_isHonestAndNeverComingLater() {
         for r: StoryCreationReadiness in [.ready(usableCount: 2, totalMoments: 3),
                                           .pendingAnalysis(ready: 1, pending: 2),
-                                          .noMoments, .noUsableMedia(totalMoments: 2)] {
+                                          .noMoments, .noUsableMedia(totalMoments: 2),
+                                          .analyzing(totalMoments: 2)] {
             XCTAssertFalse(r.copy.lowercased().contains("coming later"))
             XCTAssertFalse(r.copy.lowercased().contains("later update"))
             XCTAssertFalse(r.copy.isEmpty)
