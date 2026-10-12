@@ -94,6 +94,11 @@ struct StoryResultView: View {
     @State private var saveOutcome: PhotosSaveOutcome?
     @State private var showShare = false
     @State private var recreateCoordinator: StoryCreationCoordinator?
+    @State private var showChangeMusic = false
+    // When Change Music produces a new version, we re-present the Result screen on it (NavigationLink-style
+    // push via a fullScreenCover) so the user lands on the re-soundtracked video while the previous one
+    // remains in the Story's version list (never overwritten).
+    @State private var newVersion: GeneratedOutputModel?
 
     private var playback: ResultPlayback {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
@@ -135,6 +140,16 @@ struct StoryResultView: View {
         )
         .sheet(isPresented: $showShare) {
             if let url = resolvedURL { ShareSheet(items: [url]) }
+        }
+        .sheet(isPresented: $showChangeMusic) {
+            ChangeMusicSheet(story: story, source: output) { created in
+                newVersion = created
+            }
+        }
+        .fullScreenCover(item: $newVersion) { version in
+            // Land on the re-soundtracked version. The previous output remains in story.generatedOutputs
+            // (never overwritten). Home/recreate closures are threaded through unchanged.
+            StoryResultView(story: story, output: version, onHome: onHome, onRecreate: onRecreate)
         }
     }
 
@@ -228,10 +243,17 @@ struct StoryResultView: View {
             .buttonStyle(.plain)
 
             HStack(spacing: 18) {
-                // "Change music" — DISABLED future feature (R-d). Never implies music is present.
-                Text("♫ Change music")
-                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.18))
-                    .accessibilityHint("Not available yet")
+                // "Change music" (M-e): swap the soundtrack without re-editing the video — reuses the
+                // persisted EditPlan and saves a NEW version. Enabled only when this output carries a
+                // persisted executable plan (legacy/mock outputs can't be faithfully re-rendered).
+                Button { showChangeMusic = true } label: {
+                    Text("♫ Change music")
+                        .font(StoryTheme.body(13))
+                        .foregroundStyle(output.editPlanJSON != nil ? StoryTheme.gold.opacity(0.85) : StoryTheme.cream.opacity(0.18))
+                }
+                .buttonStyle(.plain)
+                .disabled(output.editPlanJSON == nil)
+                .accessibilityHint(output.editPlanJSON != nil ? "Replace the soundtrack; the edit stays the same" : "Not available for this video")
             }
             .padding(.top, 2)
 
