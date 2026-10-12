@@ -71,7 +71,7 @@ struct CreativeIntentService {
     // a SECOND Story while the first is still uploading 24 clips (each AU ~10-14s, coverage ~40s, saturating the
     // backend) — the shared 60s timeout fires and the client throws "Couldn't create your Story" even though the
     // request later succeeds server-side. The 180s session absorbs that contention + App Runner cold start.
-    var session: URLSession = CreativeIntentService.longSession
+    var session: URLSession = StoryBackend.longSession
 
     func resolve(rawText: String) async throws -> CreativeIntentContractDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/creative-intent"))
