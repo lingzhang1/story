@@ -158,6 +158,44 @@ enum OutputSize {
 
 // MARK: - Deterministic native-audio gain policy (V1, no model curves)
 
+/// Pure, deterministic plan for filling a timeline of `totalSeconds` with a soundtrack of `trackSeconds`
+/// by LOOPING it, using a short `seamSeconds` crossfade where one loop meets the next. No AVFoundation here
+/// so it is unit-testable: it answers "how many loop iterations, each how long, starting where, and where are
+/// the seams" — exactly what buildComposition then lays onto two alternating audio tracks. The video length is
+/// authoritative; music is never capped to the track and the timeline is never shortened to the music.
+struct SoundtrackLoopPlan {
+    struct Iteration { let trackIndex: Int; let start: Double; let length: Double }
+    let iterations: [Iteration]
+    let seams: [Double]           // timeline times where loop N's tail meets loop N+1's head
+    var loopCount: Int { iterations.count }
+
+    /// Returns nil when the asset is unusable (non-finite/too-short track, or no timeline to fill) — the caller
+    /// then renders native-audio-only rather than looping a blip forever.
+    static func compute(trackSeconds: Double, totalSeconds: Double, seamSeconds: Double = 0.4) -> SoundtrackLoopPlan? {
+        guard trackSeconds.isFinite, trackSeconds >= 0.5, totalSeconds > 0 else { return nil }
+        var iters: [Iteration] = []
+        var seams: [Double] = []
+        var cursor = 0.0
+        var idx = 0
+        while cursor < totalSeconds - 1e-6 {
+            let remaining = totalSeconds - cursor
+            let thisLen = min(trackSeconds, remaining)
+            if thisLen < 0.05 { break }
+            iters.append(Iteration(trackIndex: idx % 2, start: cursor, length: thisLen))
+            let loopEnd = cursor + thisLen
+            if loopEnd < totalSeconds - 1e-6 && thisLen > seamSeconds {
+                seams.append(loopEnd)
+                cursor = loopEnd - seamSeconds        // next loop head overlaps this tail -> seam crossfade
+            } else {
+                cursor = loopEnd
+            }
+            idx += 1
+            if iters.count > 10_000 { break }         // runaway guard
+        }
+        return iters.isEmpty ? nil : SoundtrackLoopPlan(iterations: iters, seams: seams)
+    }
+}
+
 enum NativeAudioPolicy {
     /// Per-segment captured-audio gain. keep=1.0; duck=low under a soundtrack; mute=0.
     static func captureGain(nativeAudio: String) -> Float {
@@ -194,6 +232,9 @@ struct BuiltComposition {
     let videoComposition: AVMutableVideoComposition
     let segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)]
     let soundtrackTrack: AVMutableCompositionTrack?
+    let soundtrackTrackB: AVMutableCompositionTrack?   // alternate loop track for seam crossfades (nil if no loop/music)
+    let loopSeams: [CMTime]                            // timeline times where loop N's tail meets loop N+1's head
+    let loopCount: Int                                 // number of soundtrack iterations laid down (0 = none)
     let totalDuration: CMTime
 }
 
@@ -363,31 +404,72 @@ struct MediaEngineV1 {
         videoComposition.instructions = instructions
 
         // optional soundtrack (a LOCAL licensed test file; never Free-tier Epidemic export)
-        var soundtrackTrack: AVMutableCompositionTrack? = nil
-        // Use the asset PRE-LOADED asynchronously by render() (see renderSoundtrackAsset). A freshly-downloaded
-        // temp MP3 is not indexed yet, so a sync tracks() read here returns empty on iOS 16+ (the 'no music'
-        // bug); loading it with await in render() BEFORE this sync builder makes tracks() return the real track
-        // without a blocking semaphore (which risked the AVFoundation 'Result accumulator timeout' stall).
+        //
+        // LOOPING FILL: a soundtrack shorter than the video must REPEAT to cover the whole timeline, not stop
+        // at its natural length (which left the tail of a 200s+ Story silent — the "half the video has no
+        // music" bug). We lay the track down repeatedly onto TWO alternating soundtrack tracks (same ping-pong
+        // arrangement the video uses) so each loop's tail can CROSSFADE into the next loop's head — the mix
+        // ramps the seam, avoiding a click/abrupt restart. A short tail is clamped; the whole fill is bounded
+        // to `total`. The user's Story duration is preserved; music is NEVER capped to the track length and
+        // the video is never shortened to the music.
+        var soundtrackTrack: AVMutableCompositionTrack? = nil        // primary (kept for back-compat API)
+        var soundtrackTrackB: AVMutableCompositionTrack? = nil       // alternate loop track for seam crossfade
+        var loopSeams: [CMTime] = []                                 // timeline times where loop N meets N+1
+        var loopCount = 0
+        let seamCrossfade = CMTime(seconds: 0.4, preferredTimescale: 600)  // short seam blend
         if let sAsset = inputs.preloadedSoundtrackAsset {
+            let trackDur = sAsset.duration.seconds
+            // SAFETY + loop plan: a very short, empty, zero/NaN or trackless asset must not loop forever or
+            // divide by zero — SoundtrackLoopPlan.compute returns nil, and we fall back to no soundtrack
+            // (native audio still carries the Story).
             if let sTrack = sAsset.tracks(withMediaType: .audio).first,
-               let mTrack = composition.addMutableTrack(withMediaType: .audio,
-                                                        preferredTrackID: kCMPersistentTrackID_Invalid) {
-                let avail = CMTime(seconds: min(sAsset.duration.seconds, total.seconds), preferredTimescale: 600)
-                do {
-                    try mTrack.insertTimeRange(CMTimeRange(start: .zero, duration: avail), of: sTrack, at: .zero)
-                    soundtrackTrack = mTrack
-                } catch {
-                    StoryCreativeRefinement.lastMusicNote += " | soundtrack insert FAILED: \(error)"
+               let plan = SoundtrackLoopPlan.compute(trackSeconds: trackDur, totalSeconds: total.seconds,
+                                                     seamSeconds: seamCrossfade.seconds) {
+                guard let mTrackA = composition.addMutableTrack(withMediaType: .audio,
+                                                                preferredTrackID: kCMPersistentTrackID_Invalid),
+                      let mTrackB = composition.addMutableTrack(withMediaType: .audio,
+                                                                preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                    StoryCreativeRefinement.lastMusicNote += " | could not add soundtrack tracks"
+                    let segmentRanges = placed.map { (segment: $0.segment, range: $0.range) }
+                    return BuiltComposition(composition: composition, videoComposition: videoComposition,
+                                            segmentRanges: segmentRanges, soundtrackTrack: nil,
+                                            soundtrackTrackB: nil, loopSeams: [], loopCount: 0,
+                                            totalDuration: total)
+                }
+                let loopTracks = [mTrackA, mTrackB]
+                var inserted = false
+                for it in plan.iterations {
+                    let dst = loopTracks[it.trackIndex]
+                    let len = CMTime(seconds: it.length, preferredTimescale: 600)
+                    let at = CMTime(seconds: it.start, preferredTimescale: 600)
+                    do {
+                        try dst.insertTimeRange(CMTimeRange(start: .zero, duration: len), of: sTrack, at: at)
+                        inserted = true
+                        loopCount += 1
+                    } catch {
+                        StoryCreativeRefinement.lastMusicNote += " | soundtrack loop insert FAILED: \(error)"
+                        break
+                    }
+                }
+                loopSeams = plan.seams.map { CMTime(seconds: $0, preferredTimescale: 600) }
+                if inserted {
+                    soundtrackTrack = mTrackA
+                    soundtrackTrackB = mTrackB
+                    StoryCreativeRefinement.lastMusicNote += " | soundtrack looped x\(loopCount) seams=\(loopSeams.count) trackDur=\(String(format: "%.1f", trackDur))s total=\(String(format: "%.1f", total.seconds))s"
+                } else {
+                    composition.removeTrack(mTrackA); composition.removeTrack(mTrackB)
+                    loopSeams = []
                 }
             } else {
-                StoryCreativeRefinement.lastMusicNote += " | preloaded soundtrack had NO audio track (file bad?)"
+                StoryCreativeRefinement.lastMusicNote += " | soundtrack unusable (no track / dur=\(String(format: "%.2f", trackDur))s) — native audio only"
             }
         }
         // segmentRanges keeps the old (segment, timeline-range) shape the audio mix + duration-verify expect.
         let segmentRanges = placed.map { (segment: $0.segment, range: $0.range) }
         return BuiltComposition(composition: composition, videoComposition: videoComposition,
                                 segmentRanges: segmentRanges, soundtrackTrack: soundtrackTrack,
-                                totalDuration: total)
+                                soundtrackTrackB: soundtrackTrackB, loopSeams: loopSeams,
+                                loopCount: loopCount, totalDuration: total)
     }
 
     /// Aspect-FIT (contain) transform mapping a source track fully inside the render rect — NO cropping.
@@ -413,18 +495,22 @@ struct MediaEngineV1 {
     func buildAudioMix(_ inputs: MediaEngineInputs,
                        composition: AVMutableComposition,
                        segmentRanges: [(segment: EditSegmentV2, range: CMTimeRange)],
-                       soundtrackTrack: AVMutableCompositionTrack?) -> AVMutableAudioMix {
+                       soundtrackTrack: AVMutableCompositionTrack?,
+                       soundtrackTrackB: AVMutableCompositionTrack? = nil,
+                       loopSeams: [CMTime] = [],
+                       totalDuration: CMTime = .zero) -> AVMutableAudioMix {
         let mix = AVMutableAudioMix()
         var params: [AVMutableAudioMixInputParameters] = []
         let ramp = CMTime(seconds: 0.08, preferredTimescale: 600)   // short deterministic click-guard fade
 
+        let soundtrackTracks: [AVMutableCompositionTrack] = [soundtrackTrack, soundtrackTrackB].compactMap { $0 }
         // Capture audio lives on up to TWO tracks (ping-pong, index = segment order % 2). A crossfade overlaps
         // segment i's track with segment i+1's; we ramp each segment's gain in/out across its OWN output range,
         // and the ramp-out of the outgoing segment coincides with the ramp-in of the incoming one over the
         // overlap window — so the sum never spikes above the two segments' target gains.
-        let captureTracks = composition.tracks(withMediaType: .audio).prefix(soundtrackTrack == nil ? 2 : 2)
-        let captureArr = Array(captureTracks)
-        for (idx, track) in captureArr.enumerated() where track != soundtrackTrack {
+        // Capture tracks are the audio tracks that are NOT soundtrack loop tracks.
+        let captureArr = composition.tracks(withMediaType: .audio).filter { t in !soundtrackTracks.contains(t) }
+        for (idx, track) in captureArr.enumerated() {
             let p = AVMutableAudioMixInputParameters(track: track)
             // segments placed on THIS track (every other segment)
             for (i, sr) in segmentRanges.enumerated() where i % 2 == idx {
@@ -440,14 +526,50 @@ struct MediaEngineV1 {
             params.append(p)
         }
 
-        // soundtrack track: gained per segment by audio_strategy under kept native audio
-        if let music = soundtrackTrack {
+        // SOUNDTRACK loop tracks: each gained per segment by audio_strategy under kept native audio, PLUS
+        // seam crossfades at loop joins and a final fade-out at the video end. Loop N lives on track (N%2);
+        // at each seam the outgoing loop ramps 1->0 and the incoming loop ramps 0->1 over the seam window,
+        // so there is no click/abrupt restart and NO accidental silence between loops.
+        let seamXf = CMTime(seconds: 0.4, preferredTimescale: 600)
+        let finalFade = CMTime(seconds: 1.0, preferredTimescale: 600)
+        // base gain curve for the soundtrack across the timeline, sampled at each segment start
+        func baseGain(at t: CMTime) -> Float {
+            // find the segment live at t; default to the first segment's strategy
+            let sr = segmentRanges.last(where: { CMTimeCompare($0.range.start, t) <= 0 }) ?? segmentRanges.first
+            guard let s = sr?.segment else { return 0.8 }
+            return NativeAudioPolicy.soundtrackGainUnder(nativeAudio: s.nativeAudio,
+                                                         role: inputs.soundtrackRole, priority: inputs.nativeAudioPriority)
+        }
+        for (trackIdx, music) in soundtrackTracks.enumerated() {
             let p = AVMutableAudioMixInputParameters(track: music)
+            // per-segment strategy gain
             for sr in segmentRanges {
-                let g = NativeAudioPolicy.soundtrackGainUnder(
-                    nativeAudio: sr.segment.nativeAudio,
-                    role: inputs.soundtrackRole, priority: inputs.nativeAudioPriority)
-                p.setVolume(g, at: sr.range.start)
+                p.setVolume(baseGain(at: sr.range.start), at: sr.range.start)
+            }
+            // seam crossfades: a seam at time `s` joins the loop ENDING at s (track (loopIdx)%2) with the loop
+            // STARTING at s - seamXf (track (loopIdx+1)%2). We ramp this track at every seam where it is the
+            // outgoing or incoming side.
+            for (loopIdx, seam) in loopSeams.enumerated() {
+                let outgoingTrack = loopIdx % 2
+                let incomingTrack = (loopIdx + 1) % 2
+                let g = baseGain(at: seam)
+                if trackIdx == outgoingTrack {
+                    // ramp down into the seam
+                    p.setVolumeRamp(fromStartVolume: g, toEndVolume: 0.0,
+                                    timeRange: CMTimeRange(start: CMTimeSubtract(seam, seamXf), end: seam))
+                }
+                if trackIdx == incomingTrack {
+                    // ramp up from the seam start (which began seamXf before `seam`)
+                    let inStart = CMTimeSubtract(seam, seamXf)
+                    p.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: g,
+                                    timeRange: CMTimeRange(start: inStart, end: seam))
+                }
+            }
+            // final fade-out at the very end (whichever track carries the last loop), avoiding a hard stop.
+            if CMTimeCompare(totalDuration, finalFade) > 0 {
+                let fadeStart = CMTimeSubtract(totalDuration, finalFade)
+                p.setVolumeRamp(fromStartVolume: baseGain(at: fadeStart), toEndVolume: 0.0,
+                                timeRange: CMTimeRange(start: fadeStart, end: totalDuration))
             }
             params.append(p)
         }
@@ -532,7 +654,7 @@ extension MediaEngineV1 {
             MediaEngineV1.beacon("buildComposition THREW: \(String(describing: error).prefix(120))")
             throw error
         }
-        MediaEngineV1.beacon("built soundtrackTrack=\(built.soundtrackTrack != nil ? "YES" : "NO") note=\(StoryCreativeRefinement.lastMusicNote.suffix(80))")
+        MediaEngineV1.beacon("built soundtrackTrack=\(built.soundtrackTrack != nil ? "YES" : "NO") loops=\(built.loopCount) seams=\(built.loopSeams.count) total=\(String(format: "%.1f", built.totalDuration.seconds))s note=\(StoryCreativeRefinement.lastMusicNote.suffix(80))")
         // Append the per-segment native_audio histogram + role/priority: these three numbers decide whether
         // native audio is AUDIBLE in the final mix (keep=1.0, duck=0.25, mute=0.0; soundtrack full under
         // duck/mute when role=continuous). Surfaced on-screen so a silent-native render names its own cause.
@@ -543,7 +665,9 @@ extension MediaEngineV1 {
             " | native_audio[\(naHist)] role=\(inputs.soundtrackRole) priority=\(inputs.nativeAudioPriority)"
         MediaEngineV1.beacon("audio-mix native_audio[\(naHist)] role=\(inputs.soundtrackRole) priority=\(inputs.nativeAudioPriority)")
         let mix = buildAudioMix(inputs, composition: built.composition,
-                                segmentRanges: built.segmentRanges, soundtrackTrack: built.soundtrackTrack)
+                                segmentRanges: built.segmentRanges, soundtrackTrack: built.soundtrackTrack,
+                                soundtrackTrackB: built.soundtrackTrackB, loopSeams: built.loopSeams,
+                                totalDuration: built.totalDuration)
 
         guard let export = AVAssetExportSession(asset: built.composition,
                                                 presetName: AVAssetExportPresetHighestQuality) else {

@@ -193,4 +193,74 @@ final class MediaEngineV1Tests: XCTestCase {
         // no slice has 0 live segments (would be a gap -> black frame / invalid timeline)
         XCTAssertFalse(pattern.contains(0))
     }
+
+    // MARK: - Music-fill looping (owner milestone: no silent tail on a video longer than the track)
+
+    func testLoopFillCoversWholeTimelineWithSeams() {
+        // 120s track, 200s video -> loops cover [0,200], no silent tail. seam=0.4s.
+        let plan = SoundtrackLoopPlan.compute(trackSeconds: 120, totalSeconds: 200, seamSeconds: 0.4)
+        let p = try! XCTUnwrap(plan)
+        XCTAssertGreaterThanOrEqual(p.loopCount, 2)                     // one 120s loop cannot fill 200s
+        // iterations alternate tracks for seam crossfades
+        XCTAssertEqual(p.iterations[0].trackIndex, 0)
+        XCTAssertEqual(p.iterations[1].trackIndex, 1)
+        // coverage: the last iteration ends at/after total (no gap) — i.e. the tail is NOT silent
+        let lastEnd = p.iterations.map { $0.start + $0.length }.max() ?? 0
+        XCTAssertGreaterThanOrEqual(lastEnd, 200 - 1e-6)
+        // there is exactly one seam (first loop ends at 120 < 200; second loop finishes the rest)
+        XCTAssertEqual(p.seams.count, 1)
+        XCTAssertEqual(p.seams[0], 120.0, accuracy: 0.001)
+        // the second loop STARTS before the seam (head overlaps the previous tail by seam=0.4)
+        XCTAssertEqual(p.iterations[1].start, 120.0 - 0.4, accuracy: 0.001)
+    }
+
+    func testLoopFillNoLoopWhenTrackLongerThanVideo() {
+        // track longer than video -> ONE iteration, truncated to the video length, no seam, no silence.
+        let p = try! XCTUnwrap(SoundtrackLoopPlan.compute(trackSeconds: 180, totalSeconds: 65, seamSeconds: 0.4))
+        XCTAssertEqual(p.loopCount, 1)
+        XCTAssertEqual(p.seams.count, 0)
+        XCTAssertEqual(p.iterations[0].length, 65.0, accuracy: 0.001)   // music fills exactly to video end
+    }
+
+    func testLoopFillManyLoopsForShortTrack() {
+        // 30s track, 200s video -> ceil-ish number of loops; final iteration finishes exactly at total.
+        let p = try! XCTUnwrap(SoundtrackLoopPlan.compute(trackSeconds: 30, totalSeconds: 200, seamSeconds: 0.4))
+        XCTAssertGreaterThanOrEqual(p.loopCount, 7)                     // 200/30 ≈ 6.7, plus seam pullbacks
+        let lastEnd = p.iterations.map { $0.start + $0.length }.max() ?? 0
+        XCTAssertEqual(lastEnd, 200.0, accuracy: 0.001)                 // ends exactly at the video end
+        // every seam strictly inside (0, total) and strictly increasing
+        for s in p.seams { XCTAssertTrue(s > 0 && s < 200) }
+        XCTAssertEqual(p.seams, p.seams.sorted())
+        // alternating tracks so adjacent loops can crossfade (no two consecutive same-track loops overlap)
+        for i in 1..<p.iterations.count {
+            XCTAssertNotEqual(p.iterations[i].trackIndex, p.iterations[i-1].trackIndex)
+        }
+    }
+
+    func testLoopFillRejectsUnusableAssets() {
+        // too-short / zero / NaN / no-timeline -> nil (caller renders native-audio only, never loops a blip)
+        XCTAssertNil(SoundtrackLoopPlan.compute(trackSeconds: 0.2, totalSeconds: 100))   // < 0.5s minimum
+        XCTAssertNil(SoundtrackLoopPlan.compute(trackSeconds: 0, totalSeconds: 100))
+        XCTAssertNil(SoundtrackLoopPlan.compute(trackSeconds: Double.nan, totalSeconds: 100))
+        XCTAssertNil(SoundtrackLoopPlan.compute(trackSeconds: Double.infinity, totalSeconds: 100))
+        XCTAssertNil(SoundtrackLoopPlan.compute(trackSeconds: 120, totalSeconds: 0))     // no timeline to fill
+    }
+
+    func testLoopFillSeamPullbackNeverInverts() {
+        // a track only slightly longer than the seam must not produce a negative-length or overlapping-invalid
+        // placement; coverage still reaches total.
+        let p = try! XCTUnwrap(SoundtrackLoopPlan.compute(trackSeconds: 0.6, totalSeconds: 3.0, seamSeconds: 0.4))
+        for it in p.iterations { XCTAssertGreaterThan(it.length, 0) }
+        let lastEnd = p.iterations.map { $0.start + $0.length }.max() ?? 0
+        XCTAssertEqual(lastEnd, 3.0, accuracy: 0.05)
+    }
+
+    func testFinalFadeAndSeamGainContract() {
+        // The mix uses a 1.0s final fade-out and a 0.4s seam crossfade. Assert the policy gains the fade targets
+        // 0 and that the soundtrack base gain under a kept-important sparse segment is 0 (real sound leads),
+        // so a seam/fade ramp from that base is a no-op there (never ducks the real sound to raise music).
+        XCTAssertEqual(NativeAudioPolicy.soundtrackGainUnder(nativeAudio: "keep", role: "sparse", priority: "important"), 0.0)
+        // under a duck segment the soundtrack carries, so the fade-out actually fades a non-zero gain to 0.
+        XCTAssertGreaterThan(NativeAudioPolicy.soundtrackGainUnder(nativeAudio: "duck", role: "continuous", priority: "low"), 0.5)
+    }
 }
