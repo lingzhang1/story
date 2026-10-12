@@ -112,4 +112,18 @@ struct MyMusicStore {
         context.delete(asset)
         try? context.save()
     }
+
+    /// Build a local MusicAnalysisV1 for an imported asset — duration only; beats/bpm honestly empty
+    /// (local analysis never fabricates them). Shared by the create flow and Change Music.
+    static func localAnalysis(for asset: MyMusicAssetModel) -> MusicAnalysisV1? {
+        let dict: [String: Any] = [
+            "duration_seconds": asset.durationSeconds,
+            "tempo_reliable": false,
+            "beats": [Double](),
+            "downbeats": [Double]()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let an = try? JSONDecoder().decode(MusicAnalysisV1.self, from: data) else { return nil }
+        return an
+    }
 }

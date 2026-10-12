@@ -1,6 +1,8 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import SwiftData
+import UniformTypeIdentifiers
 
 // MusicPickerView — R-d final picker (frozen Figma ScreenTMBMusic "Recommended for your Story").
 //
@@ -16,15 +18,24 @@ struct MusicPickerView: View {
     let onChoose: (Choice) -> Void
 
     enum Choice: Equatable {
-        case track(String)   // create WITH this track id
-        case noMusic         // create without music
-        case cancel          // back out, no change
+        case track(String)          // create WITH this provider track id
+        case myMusic(String)        // create WITH this imported My Music asset id (UUID string)
+        case noMusic                // create without music
+        case cancel                 // back out, no change
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @State private var pendingTrackId: String
     @State private var player: AVPlayer?
     @State private var playingTrackId: String?
+
+    // M-e: imported "My Music" is a FIRST-CLASS source in this picker (create time AND Change Music), shown
+    // alongside the provider recommendations. The library persists across Stories; import is via the Files picker.
+    @Query(sort: \MyMusicAssetModel.lastUsedAt, order: .reverse) private var myMusic: [MyMusicAssetModel]
+    @State private var importingFile = false
+    @State private var importError: String?
+    @State private var myMusicPlayingId: UUID?
 
     // Free-text search + load-more pagination (overlays the recommended list when a query is active).
     @State private var searchText: String = ""
@@ -79,6 +90,7 @@ struct MusicPickerView: View {
                                 trackRow(track)
                             }
                             pager
+                            myMusicSection
                         }
                     }
                 }
@@ -87,7 +99,10 @@ struct MusicPickerView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
-        .onDisappear { searchTask?.cancel(); stopPreview() }
+        .fileImporter(isPresented: $importingFile,
+                      allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff],
+                      allowsMultipleSelection: false) { handleFileImport($0) }
+        .onDisappear { searchTask?.cancel(); stopPreview(); stopMyMusicPreview() }
     }
 
     // MARK: - recommendation pager (Next page = different options)
@@ -244,6 +259,97 @@ struct MusicPickerView: View {
         searchText = ""; searchResults = []; searchCursor = nil; searchError = nil; searching = false
     }
 
+    // MARK: - My Music (imported) — shared source, non-search mode
+
+    @ViewBuilder private var myMusicSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("YOUR MUSIC").font(StoryTheme.body(10)).tracking(1.3)
+                .foregroundStyle(StoryTheme.cream.opacity(0.22))
+                .padding(.top, 4)
+
+            ForEach(myMusic) { asset in myMusicRow(asset) }
+
+            Button { importingFile = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 19)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                    Text("Import from Files…").font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream)
+                    Spacer()
+                }
+                .padding(.vertical, 13).padding(.horizontal, 14)
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(StoryTheme.cream.opacity(0.14), lineWidth: 1.5))
+            }.buttonStyle(.plain)
+
+            if let e = importError {
+                Text(e).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold)
+            }
+        }
+        .padding(.horizontal, StoryTheme.screenPadding)
+        .padding(.bottom, 10)
+    }
+
+    private func myMusicRow(_ asset: MyMusicAssetModel) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if myMusicPlayingId == asset.id { stopMyMusicPreview() }
+                else { startMyMusicPreview(asset) }
+            } label: {
+                Image(systemName: myMusicPlayingId == asset.id ? "pause.circle.fill" : "play.circle")
+                    .font(.system(size: 26)).foregroundStyle(StoryTheme.gold)
+            }.buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.displayName).font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream).lineLimit(1)
+                Text("My Music · \(Self.time(asset.durationSeconds))")
+                    .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+            }
+            Spacer()
+            Button { stopPreview(); stopMyMusicPreview(); onChoose(.myMusic(asset.id.uuidString)) } label: {
+                Text("Use").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.ink)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
+                    .background(Capsule().fill(StoryTheme.gold))
+            }.buttonStyle(.plain)
+        }
+        .padding(.vertical, 10).padding(.horizontal, 14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(StoryTheme.cream.opacity(0.04)))
+        .contextMenu {
+            Button("Remove", role: .destructive) { MyMusicStore.shared.remove(asset, from: modelContext) }
+        }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let e): importError = "Import failed: \(e.localizedDescription)"
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            do {
+                let asset = try MyMusicStore.shared.importAudio(from: url, into: modelContext)
+                importError = nil
+                // A fresh import is usually what the user wants to use right now.
+                stopPreview(); stopMyMusicPreview(); onChoose(.myMusic(asset.id.uuidString))
+            } catch {
+                importError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func startMyMusicPreview(_ asset: MyMusicAssetModel) {
+        stopPreview()
+        guard MyMusicStore.shared.exists(asset) else { importError = "That track's file is missing."; return }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let p = AVPlayer(url: MyMusicStore.shared.absoluteURL(for: asset.relativePath))
+        player = p; myMusicPlayingId = asset.id; p.play()
+    }
+
+    private func stopMyMusicPreview() {
+        if myMusicPlayingId != nil { player?.pause(); player = nil; myMusicPlayingId = nil
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation]) }
+    }
+
+    private static func time(_ s: Double) -> String {
+        let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             Button { stopPreview(); onChoose(.cancel) } label: {
@@ -310,9 +416,11 @@ struct MusicPickerView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
-            StoryPrimaryButton(title: "Use this music") {
-                stopPreview()
-                onChoose(.track(pendingTrackId))
+            if !pendingTrackId.isEmpty {
+                StoryPrimaryButton(title: "Use this music") {
+                    stopPreview()
+                    onChoose(.track(pendingTrackId))
+                }
             }
             Button { stopPreview(); onChoose(.noMusic) } label: {
                 Text("Create without music")

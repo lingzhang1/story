@@ -156,6 +156,12 @@ struct CreateStoryPreviewView: View {
                     showCreating = true
                 }
             }
+        case .myMusic(let assetId):
+            // Imported track: resolve LOCALLY (no backend MusicPlan). Mix knobs come from the Story's sound
+            // preference; analysis is the local energy-only analysis (beats honestly empty).
+            chosenMusic = Self.myMusicSelection(assetId: assetId, story: story, context: context)
+            MediaEngineV1.beacon("picker: chose myMusic=\(assetId.prefix(8)) resolved=\(chosenMusic == nil ? "NIL" : "ok")")
+            DispatchQueue.main.async { showCreating = true }
         }
     }
 
@@ -168,6 +174,31 @@ struct CreateStoryPreviewView: View {
         // "Create a new version" is the natural moment to rechoose the length, so re-offer the duration step
         // (recommendation-first) even though this Story already has a target — rather than silently reusing it.
         DispatchQueue.main.async { promptDuration() }
+    }
+
+    /// Resolve an imported My Music asset into a MusicSelection LOCALLY (no backend MusicPlan). Mix knobs come
+    /// from the Story's effective sound preference; analysis is local (duration + honest-empty beats). Returns
+    /// nil (-> honest no-music) if the asset is gone or unreadable.
+    @MainActor
+    static func myMusicSelection(assetId: String, story: StoryModel, context: ModelContext)
+        -> StoryCreationCoordinator.MusicSelection? {
+        guard let uuid = UUID(uuidString: assetId),
+              let asset = try? context.fetch(
+                FetchDescriptor<MyMusicAssetModel>(predicate: #Predicate { $0.id == uuid })).first,
+              MyMusicStore.shared.exists(asset),
+              let analysis = MyMusicStore.localAnalysis(for: asset) else { return nil }
+        asset.lastUsedAt = .now
+        try? context.save()
+        let knobs = story.effectiveSoundPreference.localMixKnobs
+        return StoryCreationCoordinator.MusicSelection(
+            musicPlanJSON: .object([:]),              // no backend plan for imported music
+            trackId: "mymusic:\(asset.id.uuidString)",
+            analysisJSON: .object([:]),
+            analysis: analysis,
+            soundtrackURL: MyMusicStore.shared.absoluteURL(for: asset.relativePath),
+            soundtrackRole: knobs.role,
+            nativeAudioPriority: knobs.priority,
+            trackTitle: asset.displayName)
     }
 
     /// Collapse the create flow back to Story Home in one tap.

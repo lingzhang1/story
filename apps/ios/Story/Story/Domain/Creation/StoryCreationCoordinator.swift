@@ -233,11 +233,20 @@ final class StoryCreationCoordinator {
         state = .preparing
         let build: EditPlanRequestBuilder.Build
         do {
+            // Imported My Music has no backend MusicPlan — its selection carries an empty music_plan object.
+            // Pass nil to the planner in that case so the edit is planned like the parity/no-music path; the
+            // imported soundtrack is a render-time overlay (the renderer uses soundtrackURL, not the plan).
+            let planForBuilder: JSONValue? = {
+                guard let p = pendingMusic?.musicPlanJSON else { return nil }
+                if case .object(let o) = p, o.isEmpty { return nil }
+                return p
+            }()
+            let assetIdForBuilder = pendingMusic?.trackId.hasPrefix("mymusic:") == true ? nil : pendingMusic?.trackId
             build = try EditPlanRequestBuilder.build(
                 story: story, context: context, targetSeconds: targetSeconds, outputFormat: outputFormat,
-                musicPlan: pendingMusic?.musicPlanJSON,
-                musicAssetId: pendingMusic?.trackId,
-                musicAnalysis: pendingMusic?.analysisJSON)
+                musicPlan: planForBuilder,
+                musicAssetId: assetIdForBuilder,
+                musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON)
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
@@ -437,8 +446,9 @@ final class StoryCreationCoordinator {
         // the renderer actually consumed. Encoded with the canonical snake_case encoder (EditPlan/2 wire shape).
         let planJSON: String? = (try? StoryContractCoding.encoder().encode(plan)).flatMap { String(data: $0, encoding: .utf8) }
         let musicRef: String = {
-            if let tid = pendingMusic?.trackId { return "provider:\(tid)" }
-            return "none"
+            guard let tid = pendingMusic?.trackId else { return "none" }
+            // Imported My Music carries a "mymusic:<uuid>" trackId already; a provider track is a bare id.
+            return tid.hasPrefix("mymusic:") ? tid : "provider:\(tid)"
         }()
 
         let output = GeneratedOutputModel(

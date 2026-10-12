@@ -91,7 +91,7 @@ final class SoundtrackReplacer {
         case .myMusic(let asset):
             guard MyMusicStore.shared.exists(asset) else { throw ChangeMusicError.sourceMediaMissing }
             soundtrackURL = MyMusicStore.shared.absoluteURL(for: asset.relativePath)
-            analysis = Self.analysis(for: asset)
+            analysis = MyMusicStore.localAnalysis(for: asset)
             role = fallbackRole; priority = fallbackPriority
             newTitle = asset.displayName; musicRef = "mymusic:\(asset.id.uuidString)"
             asset.lastUsedAt = .now
@@ -144,21 +144,5 @@ final class SoundtrackReplacer {
         story.updatedAt = .now
         try? context.save()
         return output
-    }
-
-    /// Build a renderer MusicAnalysisV1 from a My Music asset's LOCAL analysis — duration + energy only,
-    /// beats/bpm honestly empty (local analysis never fabricates them). Encoded/decoded through the frozen
-    /// music_analysis/1 shape so the renderer consumes it unchanged.
-    private static func analysis(for asset: MyMusicAssetModel) -> MusicAnalysisV1? {
-        // beats/downbeats intentionally empty; highlight nil. tempo not reliable (no local tracker).
-        let dict: [String: Any] = [
-            "duration_seconds": asset.durationSeconds,
-            "tempo_reliable": false,
-            "beats": [Double](),
-            "downbeats": [Double]()
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: dict),
-              let an = try? JSONDecoder().decode(MusicAnalysisV1.self, from: data) else { return nil }
-        return an
     }
 }

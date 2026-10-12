@@ -77,4 +77,15 @@ final class ChangeMusicVersioningTests: XCTestCase {
         XCTAssertEqual(legacy.operationType, "original")   // defaults are migration-safe
         XCTAssertEqual(legacy.versionId, legacy.id)        // versionId defaults to the row id
     }
+
+    /// The sound-preference -> (role, priority) mapping used for imported My Music (no backend plan) matches
+    /// the verified live backend A/B spectrum.
+    func testSoundPreferenceLocalMixKnobs() {
+        XCTAssertEqual(SoundPreference.immersive.localMixKnobs.role, "sparse")
+        XCTAssertEqual(SoundPreference.immersive.localMixKnobs.priority, "important")
+        XCTAssertEqual(SoundPreference.balanced.localMixKnobs.role, "supportive")
+        XCTAssertEqual(SoundPreference.balanced.localMixKnobs.priority, "selective")
+        XCTAssertEqual(SoundPreference.musicLed.localMixKnobs.role, "continuous")
+        XCTAssertEqual(SoundPreference.musicLed.localMixKnobs.priority, "low")
+    }
 }

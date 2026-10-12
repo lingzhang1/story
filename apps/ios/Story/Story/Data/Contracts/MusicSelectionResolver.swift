@@ -42,6 +42,14 @@ final class MusicSelectionResolver {
         let soundtrackRole: String
         let nativeAudioPriority: String
         let nextCursor: String?               // page the recommendations ("Next page"); nil = no further page
+
+        /// An empty recommendation (no provider candidates) — lets the shared picker still offer My Music,
+        /// Import and No-music when the provider is unavailable. role/priority default to the balanced middle.
+        static func empty(target: Double) -> Recommendation {
+            Recommendation(musicPlanJSON: .object([:]), candidates: [], topTrackId: nil,
+                           topAnalysis: nil, topAnalysisJSON: nil,
+                           soundtrackRole: "supportive", nativeAudioPriority: "selective", nextCursor: nil)
+        }
     }
 
     func recommend(for story: StoryModel, guideFramingSummary: String?) async -> Recommendation? {

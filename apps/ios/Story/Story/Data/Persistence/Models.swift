@@ -51,6 +51,18 @@ enum SoundPreference: String, Codable, CaseIterable {
         if immersiveHits.contains(where: hay.contains) { return .immersive }
         return nil
     }
+
+    /// Deterministic (soundtrack_role, native_audio_priority) for this preference, matching what the backend
+    /// MusicPlan returns per preference. Used when there is NO backend plan — e.g. an imported My Music track
+    /// chosen at create time or in Change Music. Mirrors the verified live A/B:
+    ///   immersive -> sparse / important ; balanced -> supportive / selective ; music_led -> continuous / low.
+    var localMixKnobs: (role: String, priority: String) {
+        switch self {
+        case .immersive: return ("sparse", "important")
+        case .balanced:  return ("supportive", "selective")
+        case .musicLed:  return ("continuous", "low")
+        }
+    }
 }
 
 @Model
