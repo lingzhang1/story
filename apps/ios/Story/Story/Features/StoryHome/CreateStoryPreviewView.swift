@@ -157,11 +157,27 @@ struct CreateStoryPreviewView: View {
                 }
             }
         case .myMusic(let assetId):
-            // Imported track: resolve LOCALLY (no backend MusicPlan). Mix knobs come from the Story's sound
-            // preference; analysis is the local energy-only analysis (beats honestly empty).
-            chosenMusic = Self.myMusicSelection(assetId: assetId, story: story, context: context)
-            MediaEngineV1.beacon("picker: chose myMusic=\(assetId.prefix(8)) resolved=\(chosenMusic == nil ? "NIL" : "ok")")
-            DispatchQueue.main.async { showCreating = true }
+            // A "Your music" row is either an imported file (resolve locally) or a SAVED PROVIDER FAVORITE
+            // (re-resolve live from the provider — licensing: no bytes were ever stored).
+            if let uuid = UUID(uuidString: assetId),
+               let asset = try? context.fetch(
+                FetchDescriptor<MyMusicAssetModel>(predicate: #Predicate { $0.id == uuid })).first,
+               let providerTrackId = asset.providerTrackId {
+                preparingSelection = true
+                Task {
+                    let sel = await musicResolver.resolveSelection(recommendation: rec, trackId: providerTrackId)
+                    await MainActor.run {
+                        preparingSelection = false
+                        chosenMusic = sel
+                        MediaEngineV1.beacon("picker: chose saved-favorite=\(providerTrackId.prefix(8)) resolved=\(sel == nil ? "NIL" : "ok")")
+                        showCreating = true
+                    }
+                }
+            } else {
+                chosenMusic = Self.myMusicSelection(assetId: assetId, story: story, context: context)
+                MediaEngineV1.beacon("picker: chose myMusic=\(assetId.prefix(8)) resolved=\(chosenMusic == nil ? "NIL" : "ok")")
+                DispatchQueue.main.async { showCreating = true }
+            }
         }
     }
 
@@ -296,7 +312,7 @@ struct CreateStoryPreviewView: View {
                               onRequestRecreate: handleRecreate)
         }
         .navigationDestination(item: $reopenOutput) { output in
-            StoryResultView(story: story, output: output, onHome: goHome, onRecreate: handleRecreate)
+            StoryResultView(story: story, initialOutput: output, onHome: goHome, onRecreate: handleRecreate)
         }
         .sheet(item: $musicRecommendation) { rec in
             MusicPickerView(recommendation: rec, resolver: musicResolver,

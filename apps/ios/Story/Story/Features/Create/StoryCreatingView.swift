@@ -108,7 +108,7 @@ struct StoryCreatingView: View {
         .navigationDestination(item: $completedOutput) { output in
             StoryResultView(
                 story: story,
-                output: output,
+                initialOutput: output,
                 onHome: {
                     // Pop BOTH Result and this Creating screen so the user lands on Story Home in one tap
                     // (fixes the stuck "Finishing up…" screen that a single dismiss left behind). Clearing
@@ -117,11 +117,13 @@ struct StoryCreatingView: View {
                     DispatchQueue.main.async { dismiss() }
                 },
                 onRecreate: {
-                    // "Create a new version". Prefer routing back through the preview's music picker (so the
-                    // user can re-choose a track); fall back to a local no-music re-run when standalone.
+                    // "Create a new version". Route back through the preview's Customize + music flow so the
+                    // user can re-choose length/sound/track. The parent's handler sets showCreating=false which
+                    // pops THIS Creating screen and then presents Customize — so we must NOT also call our own
+                    // dismiss() here (the two raced and dropped the Customize sheet, landing on Story Home).
                     completedOutput = nil
                     if let onRequestRecreate {
-                        DispatchQueue.main.async { dismiss(); onRequestRecreate() }
+                        onRequestRecreate()
                     } else {
                         didHandOffCompletion = false
                         coordinator?.create(for: story)

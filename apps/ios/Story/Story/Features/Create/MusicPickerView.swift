@@ -83,14 +83,19 @@ struct MusicPickerView: View {
                         if isSearchActive {
                             searchResultsList
                         } else {
+                            // M-e: music SOURCES first (imported + saved favorites + Import) so they are
+                            // visible without scrolling past the provider list.
+                            myMusicSection
+                            Text("STORY'S PICKS").font(StoryTheme.body(10)).tracking(1.3)
+                                .foregroundStyle(StoryTheme.cream.opacity(0.22))
+                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 6)
                             Text("Each track shapes a different edit — Story cuts the moments and pacing to fit.")
                                 .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.36))
-                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 14).padding(.bottom, 6)
+                                .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 6).padding(.bottom, 6)
                             ForEach(currentRec.candidates) { track in
                                 trackRow(track)
                             }
                             pager
-                            myMusicSection
                         }
                     }
                 }
@@ -263,11 +268,22 @@ struct MusicPickerView: View {
 
     @ViewBuilder private var myMusicSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("YOUR MUSIC").font(StoryTheme.body(10)).tracking(1.3)
-                .foregroundStyle(StoryTheme.cream.opacity(0.22))
-                .padding(.top, 4)
+            HStack {
+                Text("YOUR MUSIC").font(StoryTheme.body(10)).tracking(1.3)
+                    .foregroundStyle(StoryTheme.cream.opacity(0.22))
+                Spacer()
+                // Temporary build stamp so we can confirm the running binary includes this screen.
+                Text("build \(StoryCreativeRefinement.buildIdentifier)")
+                    .font(StoryTheme.body(9)).foregroundStyle(StoryTheme.cream.opacity(0.18))
+            }
+            .padding(.top, 4)
 
-            ForEach(myMusic) { asset in myMusicRow(asset) }
+            if myMusic.isEmpty {
+                Text("Save a track below with ☆, or import your own — it’ll live here for every Story.")
+                    .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+            } else {
+                ForEach(myMusic) { asset in myMusicRow(asset) }
+            }
 
             Button { importingFile = true } label: {
                 HStack(spacing: 12) {
@@ -294,12 +310,13 @@ struct MusicPickerView: View {
                 else { startMyMusicPreview(asset) }
             } label: {
                 Image(systemName: myMusicPlayingId == asset.id ? "pause.circle.fill" : "play.circle")
-                    .font(.system(size: 26)).foregroundStyle(StoryTheme.gold)
-            }.buttonStyle(.plain)
+                    .font(.system(size: 26))
+                    .foregroundStyle(asset.isProviderFavorite ? StoryTheme.gold.opacity(0.3) : StoryTheme.gold)
+            }.buttonStyle(.plain).disabled(asset.isProviderFavorite)   // favorites have no local bytes to preview
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(asset.displayName).font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream).lineLimit(1)
-                Text("My Music · \(Self.time(asset.durationSeconds))")
+                Text("\(asset.isProviderFavorite ? "Saved" : "My Music") · \(Self.time(asset.durationSeconds))")
                     .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.35))
             }
             Spacer()
@@ -350,6 +367,21 @@ struct MusicPickerView: View {
         let t = Int(s.rounded()); return String(format: "%d:%02d", t / 60, t % 60)
     }
 
+    /// Whether this provider track is already saved as a favorite in Your music.
+    private func isSaved(_ track: MusicCandidateDTO) -> Bool {
+        myMusic.contains { $0.providerTrackId == track.trackId }
+    }
+
+    /// Save/unsave a provider track as a licensing-safe favorite (reference only, no bytes).
+    private func toggleSaveFavorite(_ track: MusicCandidateDTO) {
+        if let existing = myMusic.first(where: { $0.providerTrackId == track.trackId }) {
+            MyMusicStore.shared.remove(existing, from: modelContext)   // a reference has no file; row is removed
+        } else {
+            MyMusicStore.shared.saveProviderFavorite(trackId: track.trackId, title: track.title,
+                                                     durationSeconds: track.durationSeconds, into: modelContext)
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             Button { stopPreview(); onChoose(.cancel) } label: {
@@ -389,6 +421,13 @@ struct MusicPickerView: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(track.title).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
                         Spacer()
+                        // Save to My Music (★) — licensing-safe REFERENCE, not a byte copy. Filled when saved.
+                        Button { toggleSaveFavorite(track) } label: {
+                            Image(systemName: isSaved(track) ? "star.fill" : "star")
+                                .font(.system(size: 15)).foregroundStyle(StoryTheme.gold.opacity(isSaved(track) ? 0.9 : 0.5))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isSaved(track) ? "Saved to My Music" : "Save to My Music")
                         Text(Self.lengthLabel(track.durationSeconds))
                             .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
                     }

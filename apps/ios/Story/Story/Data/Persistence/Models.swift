@@ -640,8 +640,17 @@ final class MyMusicAssetModel {
     @Attribute(.unique) var contentHash: String   // sha256 of bytes — dedup + corruption detection
     var energyCurveJSON: String             // coarse normalized (0..1) amplitude curve, locally derived ("[]" if none)
     var bpm: Double?                        // ONLY if validated locally; nil otherwise (never fabricated)
+    // M-e (save-from-list): when non-nil, this row is a SAVED PROVIDER FAVORITE — a reference to a provider
+    // track by id, NOT a local audio copy. LICENSING: provider favorites must never become permanent byte
+    // copies, so a favorite stores NO bytes (relativePath == "") and is re-resolved LIVE from the provider
+    // each time it is used. When nil, this row is an IMPORTED file (bytes under relativePath). contentHash is
+    // "provider:<trackId>" for a favorite (dedups favorites; keeps the unique constraint meaningful).
+    var providerTrackId: String? = nil
     var createdAt: Date
     var lastUsedAt: Date?
+
+    /// True when this is a saved provider favorite (reference only) rather than an imported local file.
+    var isProviderFavorite: Bool { providerTrackId != nil }
 
     init(
         id: UUID = UUID(),
@@ -652,6 +661,7 @@ final class MyMusicAssetModel {
         contentHash: String,
         energyCurveJSON: String = "[]",
         bpm: Double? = nil,
+        providerTrackId: String? = nil,
         createdAt: Date = .now,
         lastUsedAt: Date? = nil
     ) {
@@ -663,6 +673,7 @@ final class MyMusicAssetModel {
         self.contentHash = contentHash
         self.energyCurveJSON = energyCurveJSON
         self.bpm = bpm
+        self.providerTrackId = providerTrackId
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }

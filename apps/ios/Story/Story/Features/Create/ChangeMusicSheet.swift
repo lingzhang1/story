@@ -109,7 +109,21 @@ struct ChangeMusicSheet: View {
                     FetchDescriptor<MyMusicAssetModel>(predicate: #Predicate { $0.id == uuid })).first else {
                 errorText = "That track couldn't be found."; return
             }
-            apply(.myMusic(asset: asset))
+            if let providerTrackId = asset.providerTrackId {
+                // Saved favorite -> re-resolve live from the provider (no stored bytes).
+                guard let rec = recommendation else { errorText = "Music isn't available right now."; return }
+                working = true
+                Task { @MainActor in
+                    guard let sel = await resolver.resolveSelection(recommendation: rec, trackId: providerTrackId) else {
+                        working = false; errorText = "Couldn't prepare that saved track."; return
+                    }
+                    await runReplace(.provider(trackId: sel.trackId, url: sel.soundtrackURL,
+                                               role: sel.soundtrackRole, priority: sel.nativeAudioPriority,
+                                               title: sel.trackTitle, analysis: sel.analysis))
+                }
+            } else {
+                apply(.myMusic(asset: asset))
+            }
         case .track(let trackId):
             // Provider track: resolve (download + plan-derived role/priority) off the current recommendation.
             guard let rec = recommendation else { errorText = "Music isn't available right now."; return }

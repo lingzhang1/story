@@ -74,7 +74,11 @@ struct StoryResultView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
-    let output: GeneratedOutputModel
+    let initialOutput: GeneratedOutputModel
+    /// Change Music swaps the DISPLAYED output in place (never a stacked cover — that broke the recreate
+    /// navigation, landing on Home instead of Customize). The previous version stays in story.generatedOutputs.
+    @State private var swappedOutput: GeneratedOutputModel?
+    private var output: GeneratedOutputModel { swappedOutput ?? initialOutput }
     /// Collapse the ENTIRE create flow back to Story Home. When this Result was reached via the
     /// Creating screen (new render) the view stack is Home -> Preview -> Result, so a plain `dismiss()`
     /// would only pop one level. The parent (CreateStoryPreviewView) injects a closure that resets the
@@ -95,10 +99,6 @@ struct StoryResultView: View {
     @State private var showShare = false
     @State private var recreateCoordinator: StoryCreationCoordinator?
     @State private var showChangeMusic = false
-    // When Change Music produces a new version, we re-present the Result screen on it (NavigationLink-style
-    // push via a fullScreenCover) so the user lands on the re-soundtracked video while the previous one
-    // remains in the Story's version list (never overwritten).
-    @State private var newVersion: GeneratedOutputModel?
 
     private var playback: ResultPlayback {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
@@ -143,13 +143,11 @@ struct StoryResultView: View {
         }
         .sheet(isPresented: $showChangeMusic) {
             ChangeMusicSheet(story: story, source: output) { created in
-                newVersion = created
+                // Swap the displayed version IN PLACE (no stacked cover). The previous output remains in the
+                // Story's version list; recreate() still reaches Customize via the unchanged onRecreate closure.
+                swappedOutput = created
+                player?.pause(); player = nil; isPlaying = false   // reload player for the new file
             }
-        }
-        .fullScreenCover(item: $newVersion) { version in
-            // Land on the re-soundtracked version. The previous output remains in story.generatedOutputs
-            // (never overwritten). Home/recreate closures are threaded through unchanged.
-            StoryResultView(story: story, output: version, onHome: onHome, onRecreate: onRecreate)
         }
     }
 
@@ -181,10 +179,8 @@ struct StoryResultView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .onTapGesture { togglePlay() }
-            .task {
-                if player == nil {
-                    player = AVPlayer(url: RenderOutputStore.shared.absoluteURL(for: relativePath))
-                }
+            .task(id: relativePath) {
+                player = AVPlayer(url: RenderOutputStore.shared.absoluteURL(for: relativePath))
             }
 
             actionPanel

@@ -104,6 +104,32 @@ struct MyMusicStore {
         return asset
     }
 
+    /// Save a PROVIDER track as a licensing-safe favorite in the Your-music library: a REFERENCE by track id,
+    /// NOT a byte copy. Deduped by "provider:<trackId>". Re-resolved live from the provider each time it is used.
+    @MainActor
+    @discardableResult
+    func saveProviderFavorite(trackId: String, title: String, durationSeconds: Double,
+                              into context: ModelContext) -> MyMusicAssetModel {
+        let hash = "provider:\(trackId)"
+        if let hit = (try? context.fetch(
+            FetchDescriptor<MyMusicAssetModel>(predicate: #Predicate { $0.contentHash == hash })))?.first {
+            hit.lastUsedAt = .now
+            try? context.save()
+            return hit
+        }
+        let asset = MyMusicAssetModel(
+            displayName: title,
+            relativePath: "",                 // NO bytes — licensing: a favorite is a reference, not a copy
+            originalFilename: title,
+            durationSeconds: durationSeconds,
+            contentHash: hash,
+            providerTrackId: trackId,
+            lastUsedAt: .now)
+        context.insert(asset)
+        try? context.save()
+        return asset
+    }
+
     /// Remove an asset: delete the managed file then the row. A Story version still
     /// referencing it degrades to no-music on re-open (handled by the re-render path), never crashes.
     @MainActor
