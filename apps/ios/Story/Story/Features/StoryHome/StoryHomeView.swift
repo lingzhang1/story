@@ -12,6 +12,11 @@ struct StoryHomeView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Bindable var story: StoryModel
+    /// Back action. Default (nil) = pop one level via `dismiss()` — correct when StoryHomeView was pushed
+    /// directly from the app Home list. When reached THROUGH the creation wizard, the caller injects a closure
+    /// that dismisses the WHOLE creation flow so Back returns straight to app Home instead of walking back
+    /// through the wizard's describe→feel→context steps.
+    var onBack: (() -> Void)? = nil
 
     @State private var showCapture = false
     @State private var showMenu = false
@@ -44,7 +49,7 @@ struct StoryHomeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Header: ← back · title + Day/status · ••• menu (Figma inline row)
                 HStack(alignment: .top, spacing: 12) {
-                    Button { dismiss() } label: {
+                    Button { if let onBack { onBack() } else { dismiss() } } label: {
                         Text("←").font(StoryTheme.body(18))
                             .foregroundStyle(StoryTheme.cream.opacity(0.4))
                             .frame(width: 44, height: 44, alignment: .leading)
@@ -157,7 +162,7 @@ struct StoryHomeView: View {
         .storyBackground()
         .overlay(alignment: .top) { importBanner }
         .toolbar(.hidden, for: .navigationBar)
-        .swipeBackToDismiss(dismiss)
+        .swipeBack { if let onBack { onBack() } else { dismiss() } }
         .task(id: story.id) { await loadCoverage() }
         .fullScreenCover(isPresented: $showCapture, onDismiss: {
             // Returning from capture: the new Moment's AU runs async — poll until it lands so

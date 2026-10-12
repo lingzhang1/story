@@ -92,4 +92,17 @@ extension View {
                 }
         )
     }
+
+    /// Closure variant — for views whose Back is a custom action (e.g. collapsing a whole creation flow),
+    /// so the swipe gesture does exactly what the Back button does.
+    func swipeBack(_ action: @escaping () -> Void) -> some View {
+        self.simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.width > 80 && value.translation.width > abs(value.translation.height) {
+                        action()
+                    }
+                }
+        )
+    }
 }

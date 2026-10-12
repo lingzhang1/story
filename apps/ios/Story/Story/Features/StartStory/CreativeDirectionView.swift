@@ -56,7 +56,10 @@ struct CreativeDirectionView: View {
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
         .navigationDestination(isPresented: $navigate) {
-            if let s = resolvedStory { StoryHomeView(story: s) }
+            // Reached Story Home THROUGH the wizard. Its Back dismisses the WHOLE wizard (this view), which
+            // also pops the pushed Story Home — so the user lands on app Home directly instead of walking back
+            // through describe→feel→context.
+            if let s = resolvedStory { StoryHomeView(story: s, onBack: { dismiss() }) }
         }
         .alert("Couldn't create your Story", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
