@@ -17,6 +17,7 @@ import time
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from contracts.schemas.ai_contracts import (
@@ -125,6 +126,14 @@ _AU_MAX_FRAMES = 24
 _AU_MIN_FRAMES = 24                             # au_frames/1 is EXACTLY 24
 _AU_MAX_FRAME_BYTES = 1 * 1024 * 1024           # 1 MB per frame (768px JPEG is far smaller)
 _AU_MAX_TOTAL_BYTES = 12 * 1024 * 1024          # 12 MB total payload ceiling
+
+# Bounded admission for BACKGROUND model inference (asset/scene understanding). The offload keeps AU off the
+# event loop, but AU + interactive handlers share FastAPI's threadpool; without a cap, 20-25 AU jobs could still
+# occupy most threads. This semaphore bounds concurrent AU so interactive requests (creative-intent, guide,
+# director — none of which take this semaphore) always have threadpool headroom. Conservative start = 4; raise
+# after measuring. It gates ADMISSION only; it never interrupts a running call.
+import anyio
+_AU_ADMISSION = anyio.Semaphore(4)
 _AU_ALLOWED_TYPES = {"image/jpeg", "image/jpg"}
 
 # Story Coverage (Milestone E) — JSON (text-only, no media). Generous moment cap.
@@ -415,7 +424,8 @@ def create_app() -> FastAPI:
             "mode": ctx.get("mode"),
         }
         try:
-            scene = engine.analyze(frame_bytes)
+            # Offload the blocking Bedrock call off the event loop (same reason as asset_understanding).
+            scene = await run_in_threadpool(engine.analyze, frame_bytes)
         except StructuredOutputError as e:
             log.warning(
                 "scene_understanding_structured_output_failed",
@@ -533,7 +543,14 @@ def create_app() -> FastAPI:
             moment_id=moment_id, source_capture_id=source_capture_id, capture_context=capture_context
         )
         try:
-            au = engine.analyze(au_frames, req_meta)
+            # OFFLOAD the blocking Bedrock call off the event loop. This handler is `async def`, so calling the
+            # synchronous engine.analyze() directly froze the single-worker event loop for the full ~10-14s model
+            # latency — serializing EVERY request behind each AU call and timing out interactive ones (the P0
+            # "Couldn't create your Story" while another Story imports). run_in_threadpool runs it on a worker
+            # thread so the loop stays free for interactive requests (creative-intent et al.). The semaphore
+            # bounds concurrent AU so it never occupies the whole threadpool (interactive handlers don't take it).
+            async with _AU_ADMISSION:
+                au = await run_in_threadpool(engine.analyze, au_frames, req_meta)
         except AURetryableError as e:
             log.warning(
                 "asset_understanding_retryable_failure",
