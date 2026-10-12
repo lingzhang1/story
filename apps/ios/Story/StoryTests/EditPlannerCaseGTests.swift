@@ -182,4 +182,75 @@ final class EditPlannerCaseGTests: XCTestCase {
         XCTAssertTrue((obj["story_guide"] as? [String: Any] ?? [:]).isEmpty)
         XCTAssertTrue((obj["story_coverage"] as? [String: Any] ?? [:]).isEmpty)
     }
+
+    // Arm B: rich AU evidence (subjects + events + temporal note) folded into the forwarded Moment summary.
+    private func richAU(_ moment: MomentModel, summary: String, subjects: [String],
+                        events: [String], note: String, useful: [(Double, Double)]) {
+        let segs = useful.map { "{\"start_time\":\($0.0),\"end_time\":\($0.1),\"why_useful\":\"x\"}" }.joined(separator: ",")
+        let subjJSON = subjects.map { "\"\($0)\"" }.joined(separator: ",")
+        let evJSON = events.map { "{\"start_time\":0.0,\"description\":\"\($0)\"}" }.joined(separator: ",")
+        let json = """
+        {"moment_id":"\(moment.id.uuidString)","observed":{"summary":"\(summary)",
+         "subjects":[\(subjJSON)],"events":[\(evJSON)],"temporal_order_note":"\(note)",
+         "useful_segments":[\(segs)]}}
+        """
+        ctx.insert(MomentUnderstandingModel(
+            momentId: moment.id, schemaVersion: "moment_understanding/1",
+            framePolicy: "p", promptVersion: "au/1", modelId: "x", nFrames: 24, understandingJSON: json))
+    }
+
+    private func forwardedSummary(_ s: StoryModel) throws -> String {
+        let data = try StoryContractCoding.encoder().encode(EditPlanRequestBuilder.build(story: s, context: ctx).request)
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let moments = obj["moments"] as! [[String: Any]]
+        return moments.first?["summary"] as? String ?? ""
+    }
+
+    func test_armB_rich_evidence_reaches_planner() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/armb-rich.mov", dur: 15.0)
+        richAU(m, summary: "woman in green dress walking a street",
+               subjects: ["woman in green dress", "red tote bag"],
+               events: ["walking toward camera past an ornate facade"],
+               note: "approaches then passes the building", useful: [(1.0, 10.0)])
+        let fwd = try forwardedSummary(s)
+        // subjects + events detail that USED to be dropped now reach the planner.
+        XCTAssertTrue(fwd.contains("green dress"))
+        XCTAssertTrue(fwd.contains("red tote bag"))     // was in subjects only -> previously lost
+        XCTAssertTrue(fwd.contains("ornate facade"))    // was in events only -> previously lost
+    }
+
+    func test_armB_summary_only_record_still_works() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/armb-thin.mov", dur: 8.0)
+        completeAU(m, useful: [(0.5, 5.0)])             // summary="a moment", empty subjects/events
+        let fwd = try forwardedSummary(s)
+        XCTAssertEqual(fwd, "a moment")                 // graceful: just the summary, no stray separators
+    }
+
+    func test_armB_description_is_bounded_and_no_fabrication() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/armb-long.mov", dur: 15.0)
+        richAU(m, summary: String(repeating: "x", count: 400),
+               subjects: (0..<20).map { "subject\($0)" },
+               events: (0..<20).map { "event description number \($0) that is quite wordy indeed" },
+               note: String(repeating: "y", count: 400), useful: [(1.0, 10.0)])
+        let fwd = try forwardedSummary(s)
+        XCTAssertLessThanOrEqual(fwd.count, 601)        // bounded (cap 600 + ellipsis)
+        // No fabricated outfit/colour that was not in the AU evidence.
+        XCTAssertFalse(fwd.lowercased().contains("blue"))
+        XCTAssertFalse(fwd.lowercased().contains("paisley"))
+    }
+
+    func test_armB_ids_and_useful_segments_unchanged() throws {
+        let s = newStory()
+        let m = momentWithFile(s, rel: "media/armb-ids.mov", dur: 12.0)
+        richAU(m, summary: "a scene", subjects: ["x"], events: ["y"], note: "z", useful: [(2.0, 8.0)])
+        let data = try StoryContractCoding.encoder().encode(EditPlanRequestBuilder.build(story: s, context: ctx).request)
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let mom = (obj["moments"] as! [[String: Any]]).first!
+        XCTAssertEqual(mom["id"] as? String, m.id.uuidString)                 // id preserved
+        let useful = mom["useful_segments"] as! [[Double]]
+        XCTAssertEqual(useful, [[2.0, 8.0]])                                   // segments preserved
+    }
 }

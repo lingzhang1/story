@@ -359,13 +359,52 @@ enum EditPlanRequestBuilder {
         return [.array([.number(0.0), .number(max(1.0, duration))])]
     }
 
+    /// Arm B (AU-evidence forwarding): build a DETERMINISTIC, BOUNDED factual description for the planner from
+    /// the AU output ALREADY persisted — folding observed.summary + subjects + the key events + temporal note.
+    /// Previously only observed.summary was forwarded, so distinct outfits/accessories/settings AU had already
+    /// described in subjects/events never reached the Edit Planner (proven 16->22 distinct selection on the real
+    /// girl_with_dress set). This changes ONLY how much of the existing AU evidence is forwarded — no new field,
+    /// no model call, no prompt/contract change, and the original persisted AU output is untouched. Only real
+    /// present fields are used (never fabricated), de-duplicated, and the whole string is length-capped.
     private static func understandingSummary(_ understanding: JSONValue) -> JSONValue {
-        if case let .object(root) = understanding,
-           case let .object(observed)? = root["observed"],
-           case let .string(summary)? = observed["summary"] {
-            return .string(summary)
+        guard case let .object(root) = understanding,
+              case let .object(observed)? = root["observed"] else { return .string("") }
+
+        var parts: [String] = []
+        var seen = Set<String>()                 // avoid repeating the same phrase across summary/subjects/events
+        func add(_ s: String) {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { return }
+            let key = t.lowercased()
+            if seen.contains(key) { return }
+            seen.insert(key); parts.append(t)
         }
-        return .string("")
+
+        if case let .string(summary)? = observed["summary"] { add(summary) }
+
+        // subjects: who/what matters (people, key objects — e.g. "red bag"). Cap to a few, comma-joined.
+        if case let .array(subjects)? = observed["subjects"] {
+            let names = subjects.compactMap { v -> String? in if case let .string(s) = v { return s }; return nil }
+                .prefix(6)
+            if !names.isEmpty { add("subjects: " + names.joined(separator: ", ")) }
+        }
+
+        // events: ordered factual event descriptions (NOT timestamps — the planner has useful_segments for timing).
+        if case let .array(events)? = observed["events"] {
+            let descs = events.compactMap { v -> String? in
+                if case let .object(e) = v, case let .string(d)? = e["description"] { return d }; return nil
+            }.prefix(4)
+            if !descs.isEmpty { add("events: " + descs.joined(separator: "; ")) }
+        }
+
+        // temporal_order_note: the key first/then/last interpretation, when present and non-trivial.
+        if case let .string(note)? = observed["temporal_order_note"] { add(note) }
+
+        // Bounded: cap the whole description so a 36-Moment request stays measurable (~per-Moment ceiling).
+        var out = parts.joined(separator: " · ")
+        let cap = 600
+        if out.count > cap { out = String(out.prefix(cap)) + "…" }
+        return .string(out)
     }
 
     /// The resolved CreativeIntent payload the planner needs, assembled from StoryModel's flattened fields.
