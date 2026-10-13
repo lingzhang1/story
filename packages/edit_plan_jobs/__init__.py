@@ -34,6 +34,10 @@ _JOB_NS = uuid.UUID("6f1d2c3a-0b7e-5a4d-9c8b-1e2f3a4b5c6d")
 
 TERMINAL = {"completed", "failed", "cancelled", "expired"}
 
+
+class PayloadConflict(Exception):
+    """Same operation_id submitted with a DIFFERENT payload — a client bug, not a legitimate retry (concern 2)."""
+
 # Retention: staged sheets deleted at terminal; this is the hard backstop (also set as an S3 lifecycle rule).
 STAGING_TTL_SECONDS = 24 * 3600
 # A job may live this long before TTL reaps it (covers a slow worker + poll window).
@@ -45,6 +49,23 @@ LEASE_SECONDS = 900
 def job_id_for(operation_id: str) -> str:
     """Deterministic job id from the client's operation id — the whole idempotency guarantee."""
     return str(uuid.uuid5(_JOB_NS, operation_id.strip()))
+
+
+def payload_fingerprint(body_json: str, sheet_order: list[str], critique: bool, approach: str) -> str:
+    """Stable hash of the request payload so the SAME operation_id with a DIFFERENT payload is a conflict,
+    not a silent idempotent recovery (concern 2)."""
+    import hashlib
+    h = hashlib.sha256()
+    h.update(body_json.encode("utf-8"))
+    h.update(b"\x00" + json.dumps(sheet_order, sort_keys=True).encode("utf-8"))
+    h.update(b"\x00" + (b"1" if critique else b"0"))
+    h.update(b"\x00" + approach.encode("utf-8"))
+    return h.hexdigest()
+
+
+# Reconcile: re-enqueue only truly-stranded jobs (concern 6).
+RECONCILE_AFTER_SECONDS = 60
+MAX_ENQUEUE_ATTEMPTS = 2
 
 
 def _now() -> int:
@@ -125,17 +146,20 @@ class JobStore:
     # --- job lifecycle (conditional writes) ----------------------------------------------------------
     def create_or_get(self, *, operation_id: str, owner: str, approach: str,
                       critique_requested: bool, staging_prefix: str, sheet_order: list[str],
-                      has_body: bool = True) -> tuple[str, bool]:
+                      payload_fingerprint: str, has_body: bool = True) -> tuple[str, bool]:
         """Idempotent create. Returns (job_id, created). created=False => an existing job was recovered
-        (duplicate submission with the same operation_id). No duplicate expensive execution is ever queued."""
+        (duplicate submission with the same operation_id AND the same payload). A duplicate operation_id with a
+        DIFFERENT payload_fingerprint is a client bug -> raises PayloadConflict (409 at the endpoint). No
+        duplicate expensive execution is ever queued."""
         jid = job_id_for(operation_id)
         now = _now()
         item = {
             "job_id": {"S": jid}, "operation_id": {"S": operation_id}, "owner": {"S": owner},
             "status": {"S": "queued"}, "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
             "expires_at": {"N": str(now + JOB_TTL_SECONDS)}, "attempt_count": {"N": "0"},
-            "lease_until": {"N": "0"}, "approach": {"S": approach},
+            "lease_until": {"N": "0"}, "lease_token": {"S": ""}, "approach": {"S": approach},
             "critique_requested": {"BOOL": bool(critique_requested)},
+            "payload_fingerprint": {"S": payload_fingerprint},
             "request_ref": {"M": {
                 "staging_prefix": {"S": staging_prefix},
                 "sheet_order": {"S": json.dumps(sheet_order)},
@@ -149,7 +173,11 @@ class JobStore:
             return jid, True
         except Exception as e:
             if "ConditionalCheckFailed" in type(e).__name__ or "ConditionalCheckFailed" in str(e):
-                return jid, False   # idempotent recovery of the existing job
+                existing = self.get(jid)
+                if existing and existing.get("payload_fingerprint") not in (None, payload_fingerprint):
+                    raise PayloadConflict(
+                        f"operation_id already used with a different payload (job {jid})")
+                return jid, False   # idempotent recovery of the existing job (same payload)
             raise
 
     def enqueue(self, job_id: str) -> None:
@@ -158,11 +186,21 @@ class JobStore:
     def get(self, job_id: str) -> Optional[dict]:
         resp = self._ddb_c().get_item(TableName=self.cfg.table, Key={"job_id": {"S": job_id}})
         it = resp.get("Item")
-        return _deser(it) if it else None
+        if not it:
+            return None
+        d = _deser(it)
+        # Concern 5: DynamoDB TTL is NOT immediate deletion (reaped within ~48h). A non-terminal job past
+        # its expires_at is reported as `expired` on READ, so callers never see a stale queued/running row.
+        if d.get("status") not in TERMINAL and _now() > int(d.get("expires_at", 0) or 0):
+            d["status"] = "expired"
+        return d
 
     def _set_status(self, job_id: str, new: str, *, require: Optional[list[str]] = None,
-                    extra: Optional[dict] = None) -> bool:
-        """Conditional status transition. `require` = allowed current statuses. Returns True if applied."""
+                    lease_token: Optional[str] = None, extra: Optional[dict] = None) -> bool:
+        """Conditional status transition. `require` = allowed current statuses. When `lease_token` is given,
+        the write ALSO requires the stored lease_token to match — so a stale worker (whose lease expired and
+        whose job was re-claimed with a new token) cannot publish over the fresh run (concern 3). Returns True
+        if applied."""
         now = _now()
         names = {"#s": "status", "#u": "updated_at"}
         vals: dict[str, Any] = {":new": {"S": new}, ":u": {"N": str(now)}}
@@ -172,13 +210,18 @@ class JobStore:
                 names[f"#e{i}"] = k
                 vals[f":e{i}"] = v
                 set_expr += f", #e{i} = :e{i}"
-        cond = None
+        cond_parts = []
         if require:
-            cond_parts = []
+            req_parts = []
             for i, st in enumerate(require):
                 vals[f":r{i}"] = {"S": st}
-                cond_parts.append(f"#s = :r{i}")
-            cond = "(" + " OR ".join(cond_parts) + ")"
+                req_parts.append(f"#s = :r{i}")
+            cond_parts.append("(" + " OR ".join(req_parts) + ")")
+        if lease_token is not None:
+            names["#lt"] = "lease_token"
+            vals[":lt"] = {"S": lease_token}
+            cond_parts.append("#lt = :lt")
+        cond = " AND ".join(cond_parts) if cond_parts else None
         try:
             self._ddb_c().update_item(
                 TableName=self.cfg.table, Key={"job_id": {"S": job_id}},
@@ -191,33 +234,35 @@ class JobStore:
                 return False
             raise
 
-    def claim_lease(self, job_id: str) -> bool:
-        """Worker claims the job: queued|running-with-expired-lease -> running + fresh lease. A redelivery
-        while a live lease is held returns False (drop it). At-least-once safe without exactly-once claims."""
+    def claim_lease(self, job_id: str) -> Optional[str]:
+        """Worker claims the job: queued|running-with-expired-lease -> running + fresh lease + NEW lease_token.
+        Returns the lease_token on success, None if a live lease is held (redelivery -> drop). The token lets
+        complete()/fail() reject a STALE worker whose lease expired and whose job was re-claimed (concern 3)."""
         now = _now()
+        token = str(uuid.uuid4())
         try:
             self._ddb_c().update_item(
                 TableName=self.cfg.table, Key={"job_id": {"S": job_id}},
-                UpdateExpression="SET #s = :run, lease_until = :lu, updated_at = :u ADD attempt_count :one",
+                UpdateExpression=("SET #s = :run, lease_until = :lu, lease_token = :tok, "
+                                  "updated_at = :u ADD attempt_count :one"),
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={
                     ":run": {"S": "running"}, ":lu": {"N": str(now + LEASE_SECONDS)},
-                    ":u": {"N": str(now)}, ":one": {"N": "1"},
-                    ":q": {"S": "queued"}, ":r": {"S": "running"}, ":now": {"N": str(now)},
-                    ":cr": {"S": "cancel_requested"}},
+                    ":tok": {"S": token}, ":u": {"N": str(now)}, ":one": {"N": "1"},
+                    ":q": {"S": "queued"}, ":r": {"S": "running"}, ":now": {"N": str(now)}},
                 ConditionExpression="(#s = :q) OR (#s = :r AND lease_until < :now)")
-            return True
+            return token
         except Exception as e:
             if "ConditionalCheckFailed" in type(e).__name__ or "ConditionalCheckFailed" in str(e):
-                return False
+                return None
             raise
 
-    def complete(self, job_id: str, plan: dict, diagnostics: dict) -> bool:
-        return self._set_status(job_id, "completed", require=["running"],
+    def complete(self, job_id: str, plan: dict, diagnostics: dict, lease_token: str) -> bool:
+        return self._set_status(job_id, "completed", require=["running"], lease_token=lease_token,
                                 extra={"plan": {"M": _ser(plan)}, "diagnostics": {"M": _ser(diagnostics)}})
 
-    def fail(self, job_id: str, category: str, detail: str) -> bool:
-        return self._set_status(job_id, "failed", require=["running", "queued"],
+    def fail(self, job_id: str, category: str, detail: str, lease_token: str | None = None) -> bool:
+        return self._set_status(job_id, "failed", require=["running", "queued"], lease_token=lease_token,
                                 extra={"failure_category": {"S": category},
                                        "failure_detail": {"S": detail[:400]}})
 
@@ -234,6 +279,42 @@ class JobStore:
 
     def mark_cancelled(self, job_id: str) -> bool:
         return self._set_status(job_id, "cancelled", require=["cancel_requested", "running", "queued"])
+
+    def reconcile_lost_enqueue(self, limit: int = 50) -> list[str]:
+        """Concern 6: re-enqueue ONLY genuinely-stranded jobs — status=queued, never leased (attempt_count=0),
+        older than RECONCILE_AFTER_SECONDS. A job a worker already claimed (attempt_count>=1 / running) is left
+        alone. Re-enqueue is capped: after MAX_ENQUEUE_ATTEMPTS a job is failed(category=enqueue_lost). SQS
+        redelivery is still deduped by the lease, so this never doubles inference. Returns re-enqueued job_ids.
+        (Scan is fine at dev volume; a GSI on status would replace it at scale.)"""
+        now = _now()
+        cutoff = now - RECONCILE_AFTER_SECONDS
+        resp = self._ddb_c().scan(
+            TableName=self.cfg.table,
+            FilterExpression="#s = :q AND attempt_count = :z AND created_at < :cut",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":q": {"S": "queued"}, ":z": {"N": "0"},
+                                       ":cut": {"N": str(cutoff)}},
+            Limit=limit)
+        reenq: list[str] = []
+        for raw in resp.get("Items", []):
+            d = _deser(raw)
+            jid = d["job_id"]
+            # bump a reconcile counter; cap re-enqueues
+            n = int(d.get("reconcile_count", 0) or 0)
+            if n >= MAX_ENQUEUE_ATTEMPTS:
+                self.fail(jid, "enqueue_lost", "job never dequeued after max reconcile attempts")
+                continue
+            # best-effort re-enqueue + count bump (not a state change, so no lease needed)
+            try:
+                self._ddb_c().update_item(
+                    TableName=self.cfg.table, Key={"job_id": {"S": jid}},
+                    UpdateExpression="SET reconcile_count = :nc, updated_at = :u",
+                    ExpressionAttributeValues={":nc": {"N": str(n + 1)}, ":u": {"N": str(now)}})
+                self.enqueue(jid)
+                reenq.append(jid)
+            except Exception:
+                pass
+        return reenq
 
 
 # --- minimal DynamoDB (de)serialization for the nested maps we store ---------------------------------
