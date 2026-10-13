@@ -143,17 +143,18 @@ final class EditPlanJobClient {
 
     /// Poll until terminal or the bounded budget elapses. Backoff is capped; a transport error does NOT end the
     /// poll (the job runs server-side) — it is retried. `shouldCancel` lets the caller stop polling (the job is
-    /// cancelled via cancel()). maxSeconds defaults to 900 (the worker's own ceiling).
+    /// cancelled via cancel()). The callbacks are @MainActor so a @MainActor caller can touch its isolated
+    /// state in them (strict-concurrency safe). maxSeconds defaults to 900 (the worker's own ceiling).
     func pollUntilTerminal(jobId: String, maxSeconds: Int = 900,
-                           shouldCancel: () -> Bool = { false },
-                           onState: (EditPlanJobState) -> Void = { _ in }) async throws -> EditPlanJobState {
+                           shouldCancel: @MainActor () -> Bool = { false },
+                           onState: @MainActor (EditPlanJobState) -> Void = { _ in }) async throws -> EditPlanJobState {
         let start = Date()
         var delay: UInt64 = 2
         while Date().timeIntervalSince(start) < Double(maxSeconds) {
-            if shouldCancel() { throw CancellationError() }
+            if await shouldCancel() { throw CancellationError() }
             do {
                 let st = try await status(jobId: jobId)
-                onState(st)
+                await onState(st)
                 if st.status.isTerminal { return st }
             } catch EditPlanJobError.transport { /* keep polling — the job is unaffected */ }
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)

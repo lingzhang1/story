@@ -324,8 +324,7 @@ final class StoryCreationCoordinator {
             let final = try await jobClient.pollUntilTerminal(
                 jobId: jobId, maxSeconds: 900,
                 shouldCancel: { [weak self] in self?.cancelRequested ?? false },
-                onState: { [weak self] st in
-                    Task { @MainActor in self?.story.planJobStatus = st.status.rawValue } })
+                onState: { [weak self] st in self?.story.planJobStatus = st.status.rawValue })
 
             switch final.status {
             case .completed:
