@@ -19,14 +19,16 @@ protocol EditPlanning {
     func planMultimodal(_ request: EditPlanRequestDTO,
                         sheets: [MomentContactSheet],
                         creativeBrief: String?,
-                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome
+                        creativeBriefVersion: String?,
+                        critiqueRevision: Bool) async throws -> MultimodalPlanOutcome
 }
 
 extension EditPlanning {
     func planMultimodal(_ request: EditPlanRequestDTO,
                         sheets: [MomentContactSheet],
                         creativeBrief: String?,
-                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome {
+                        creativeBriefVersion: String?,
+                        critiqueRevision: Bool = false) async throws -> MultimodalPlanOutcome {
         let plan = try await plan(request)
         return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: 0, imageBytes: 0,
                                      fallbackReason: "multimodal_not_implemented",
@@ -167,7 +169,8 @@ final class EditPlannerService: EditPlanning {
     func planMultimodal(_ request: EditPlanRequestDTO,
                         sheets: [MomentContactSheet],
                         creativeBrief: String?,
-                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome {
+                        creativeBriefVersion: String?,
+                        critiqueRevision: Bool = false) async throws -> MultimodalPlanOutcome {
         // No sheets -> there is nothing multimodal to send; use the text-only path directly.
         guard !sheets.isEmpty else {
             let plan = try await plan(request)
@@ -178,7 +181,7 @@ final class EditPlannerService: EditPlanning {
         let imageBytes = sheets.reduce(0) { $0 + $1.jpeg.count }
         do {
             let plan = try await sendMultipart(request, sheets: sheets, sheetOrder: order,
-                                               creativeBrief: creativeBrief)
+                                               creativeBrief: creativeBrief, critiqueRevision: critiqueRevision)
             return MultimodalPlanOutcome(plan: plan, usedMultimodal: true, sheetCount: sheets.count,
                                          imageBytes: imageBytes, fallbackReason: nil,
                                          creativeBriefVersion: creativeBriefVersion)
@@ -205,7 +208,8 @@ final class EditPlannerService: EditPlanning {
     private func sendMultipart(_ request: EditPlanRequestDTO,
                                sheets: [MomentContactSheet],
                                sheetOrder: [String],
-                               creativeBrief: String?) async throws -> EditPlanV2 {
+                               creativeBrief: String?,
+                               critiqueRevision: Bool = false) async throws -> EditPlanV2 {
         let boundary = "story.mm.\(UUID().uuidString)"
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-mm"))
         req.httpMethod = "POST"
@@ -237,6 +241,7 @@ final class EditPlannerService: EditPlanning {
         field("body", bodyJSON, contentType: "application/json")
         field("sheet_order", orderJSON, contentType: "application/json")
         if let creativeBrief { field("creative_brief", Data(creativeBrief.utf8)) }
+        if critiqueRevision { field("critique_revision", Data("true".utf8)) }
         // One file part per sheet, in sheetOrder — order is preserved by multipart part ordering.
         for s in sheets {
             fileField("sheets", filename: "\(s.momentId.uuidString.lowercased()).jpg", s.jpeg)

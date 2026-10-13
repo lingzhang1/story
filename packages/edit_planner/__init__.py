@@ -28,7 +28,7 @@ from contracts.schemas.ai_contracts import (
     MusicAlignment,
     OutputFormat,
 )
-from model_gateway import ModelGateway, StructuredOutputError, StructuredRequest
+from model_gateway import ModelGateway, StructuredOutputError, StructuredRequest, ProviderError
 
 PROMPT_VERSION = "edit_plan/4"  # Editorial Timing significance-weighting amendment (v2/v3 preserved for reproducibility)
 TASK = "edit_plan.generate"
@@ -286,6 +286,12 @@ class EditPlanInputs:
     # message only — NEVER the frozen v5.2 system body. None => no brief (behavior unchanged).
     creative_brief: str | None = None
     image_moment_order: list[str] = field(default_factory=list)  # Moment ids matching images[], for the map line
+    # Phase-6 (experiment Arm D): ONE bounded critique->revision pass AFTER a valid plan. Flag-gated and OFF by
+    # default — it costs 2 extra model calls, each re-sending the image payload, so it is the heaviest path and
+    # the most quota-fragile. The revised plan is kept ONLY if it also passes the deterministic validator; any
+    # failure retains the original valid plan (never blocks the Story). Requires a creative_brief to critique
+    # against; a no-brief request skips it.
+    critique_revision: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +482,43 @@ def _build_repair(inputs: EditPlanInputs, bad_plan: dict, errs: list[str]) -> st
         "Return ONLY the corrected EditPlan via the tool.")
 
 
+# ---------------------------------------------------------------------------
+# Phase-6 / experiment Arm D: bounded critique -> revision. Faithful to
+# evals/multimodal_edit/run_shortform_experiment.py (the arm that produced the
+# visible engagement gain): a plain-text self-critique against the creative
+# brief, then ONE revise call re-emitting the EditPlan via the SAME schema.
+# ---------------------------------------------------------------------------
+def _build_critique(inputs: EditPlanInputs, plan: dict) -> str:
+    """Self-review the just-produced plan against the creative direction. <=180 words, no tool call — the
+    5 specific questions are the ones Arm D used (hook / variation / unjustified holds / ending / expressive
+    footage left on the table), citing Moment ids + source times."""
+    import json
+    brief = (inputs.creative_brief or "").strip()
+    return (
+        "You produced the EditPlan below for a SHORT-FORM SOCIAL video. Critique it against the creative "
+        "direction, in <=180 words, then STOP (no tool call). Judge ONLY: (1) does the first shot hook in the "
+        "first 3s? (2) is there genuine visual variation or does footage repeat? (3) does any shot run long "
+        "without an action/expression/reveal justifying the hold? (4) is the ending memorable? (5) is anything "
+        "expressive left on the table? Be specific and cite Moment ids + source times. Do not rewrite the plan.\n\n"
+        "=== CREATIVE DIRECTION ===\n" + brief + "\n=== END ===\n\nEDITPLAN:\n" + json.dumps(plan, indent=2))
+
+
+def _build_revision(inputs: EditPlanInputs, plan: dict, critique: str) -> str:
+    """Revise to address the critique, honoring the SAME creative direction, Moment ids/ranges and native-audio
+    rules. Only improvements the critique supports; no clip-count padding. Re-emits via the frozen validator."""
+    import json
+    brief = (inputs.creative_brief or "").strip()
+    inv = [{"id": m.get("id"), "duration_seconds": m.get("duration_seconds"),
+            "useful_segments": m.get("useful_segments")} for m in inputs.moments]
+    return (
+        "Revise the EditPlan to address your critique below, honoring the SAME creative direction and the SAME "
+        "Moment ids/ranges and native-audio rules. Make only improvements the critique supports; do not pad "
+        "clip count. Return ONLY the revised EditPlan via the tool.\n\n"
+        "=== CREATIVE DIRECTION ===\n" + brief + "\n=== END ===\n\nCRITIQUE:\n" + (critique or "") +
+        "\n\nCURRENT EDITPLAN:\n" + json.dumps(plan, indent=2) +
+        "\n\nMoment inventory (ids + useful ranges):\n" + json.dumps(inv, indent=2))
+
+
 def _to_contract(plan: dict, inputs: EditPlanInputs) -> EditPlanV2Contract:
     """Server mints real UUIDs for id fields; model's free-string asset_ids are mapped to the Moment UUIDs."""
     segs = []
@@ -573,6 +616,24 @@ class RealEditPlannerEngine:
                 # else: truncated — loop retries at the higher cap (if any left)
             return result.data
 
+        def _call_text(user_content: str) -> str:
+            # The gateway is structured-only, so a plain-text critique is requested via a tiny one-field schema
+            # (same approach the experiment used). Bounded: one repair, 600 tokens, images attached so the
+            # critique can actually judge the frames. Returns the critique string ("" on anything unusable).
+            cs = {"type": "object", "additionalProperties": False,
+                  "properties": {"critique": {"type": "string"}}, "required": ["critique"]}
+            req = StructuredRequest(
+                task="edit_plan.critique", schema=cs, prompt_version=PROMPT_VERSION, system=self._system,
+                user_content=user_content, max_repair_attempts=1, max_tokens=600, temperature=0.0,
+                images=list(inputs.images))
+            result = self._gw.generate_structured(req)
+            diag["model_calls"] += 1
+            u = result.usage
+            if u:
+                diag["input_tokens"] += (u.input_tokens or 0)
+                diag["output_tokens"] += (u.output_tokens or 0)
+            return str((result.data or {}).get("critique", "") or "")
+
         # 1-3: initial generation, safe normalization, executability validation.
         plan = _call(_build_user(inputs))
         raw_errs = validate_plan(plan, inputs)
@@ -610,6 +671,37 @@ class RealEditPlannerEngine:
             diag["final"] = "infeasible"
             self.last_diagnostics = diag
             raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
+
+        # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
+        # after we already hold a VALID executable plan and only when a creative brief exists to critique
+        # against. It is best-effort: the revised plan is adopted ONLY if it ALSO passes the deterministic
+        # validator; ANY problem (provider error, empty critique, invalid revision) retains the original valid
+        # plan. So the critique can never fail or degrade a Story — at worst it is a no-op that cost 2 calls.
+        if inputs.critique_revision and inputs.creative_brief:
+            diag["critique_attempted"] = True
+            try:
+                critique_text = _call_text(_build_critique(inputs, plan))
+                if critique_text and critique_text.strip():
+                    diag["critique_text"] = critique_text[:1200]
+                    revised = _call(_build_revision(inputs, plan, critique_text))
+                    revised, rnotes = normalize_plan(revised, inputs)
+                    rerrs = validate_plan(revised, inputs)
+                    if not rerrs and revised.get("feasible") is not False:
+                        plan = revised                       # adopt the revision
+                        diag["critique_applied"] = True
+                        diag["normalize_notes"] = diag["normalize_notes"] + rnotes
+                    else:
+                        diag["critique_applied"] = False     # revision invalid -> keep original valid plan
+                        diag["critique_rejected_reason"] = ("revision_invalid" if rerrs else "revision_infeasible")
+                else:
+                    diag["critique_applied"] = False
+                    diag["critique_rejected_reason"] = "empty_critique"
+            except (StructuredOutputError, ProviderError) as e:
+                # Provider/throttle failure on the extra calls (e.g. daily-token quota) — never fail the Story;
+                # keep the original valid plan. This is the quota-fragile path, so this guard matters.
+                diag["critique_applied"] = False
+                diag["critique_rejected_reason"] = f"provider_error:{type(e).__name__}"
+
         diag["final"] = "executable"
         diag["used_fallback"] = bool(getattr(self._gw, "last_fallback", False))
         self.last_diagnostics = diag

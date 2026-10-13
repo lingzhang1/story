@@ -295,7 +295,8 @@ final class StoryCreationCoordinator {
                 let outcome = try await planner.planMultimodal(
                     build.request, sheets: budget.sheets,
                     creativeBrief: StoryMultimodalPlanning.creativeBrief,
-                    creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion)
+                    creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion,
+                    critiqueRevision: StoryMultimodalPlanning.critiqueRevisionEnabled)
                 plan = outcome.plan
                 // Fallback transparency: requested stays visual_first; actual is visual_first ONLY if images
                 // actually reached the planner, else storytelling (text-only fallback) — never claim visual

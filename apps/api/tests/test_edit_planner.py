@@ -633,3 +633,56 @@ def test_mm_rejection_logs_reason_count_mismatch(caplog):
     assert getattr(rec, "reject_reason", None) == "order_sheet_count_mismatch"
     assert getattr(rec, "sheet_part_count", None) == 1
     assert getattr(rec, "sheet_order_len", None) == 2
+
+
+# ---- Phase-6 / Arm D: bounded critique -> revision pass (flag-gated) --------------------------------------
+def _crit(text="hook is weak; lead with M2's expressive moment"):
+    return {"critique": text}
+
+
+def test_critique_applied_when_revision_valid():
+    # plan -> critique -> VALID revised plan: the revision is adopted (final plan = revised).
+    orig = _plan12(6.0, 6.0)
+    revised = _plan12(6.0, 6.0, )  # structurally valid, different enough to represent a revision
+    revised = json.loads(json.dumps(revised)); revised["segments"][0]["source_start_seconds"] = 0.0
+    eng = RealEditPlannerEngine(SeqGateway([orig, _crit(), revised]))
+    inp = _target12_inputs(creative_brief="Make a punchy short-form edit.", critique_revision=True)
+    plan = eng.generate(inp)
+    d = eng.last_diagnostics
+    assert d.get("critique_attempted") is True
+    assert d.get("critique_applied") is True
+    assert d.get("model_calls") == 3   # plan + critique + revise
+    assert plan.feasible
+
+
+def test_critique_retains_original_when_revision_invalid():
+    # plan (valid) -> critique -> INVALID revised plan: keep the original valid plan, never fail the Story.
+    orig = _plan12(6.0, 6.0)
+    bad_rev = _plan12(6.0, 6.0); bad_rev = json.loads(json.dumps(bad_rev))
+    bad_rev["segments"][0]["output_duration_seconds"] = 99.0   # breaks duration-consistency -> invalid
+    eng = RealEditPlannerEngine(SeqGateway([orig, _crit(), bad_rev]))
+    inp = _target12_inputs(creative_brief="brief", critique_revision=True)
+    plan = eng.generate(inp)                 # must still succeed (original retained)
+    d = eng.last_diagnostics
+    assert d.get("critique_applied") is False
+    assert d.get("critique_rejected_reason") == "revision_invalid"
+    assert plan.feasible
+
+
+def test_critique_skipped_without_brief():
+    # critique requires a brief to critique against; no brief => no critique pass (single model call).
+    eng = RealEditPlannerEngine(SeqGateway([_plan12(6.0, 6.0)]))
+    inp = _target12_inputs(critique_revision=True)   # brief omitted
+    eng.generate(inp)
+    d = eng.last_diagnostics
+    assert d.get("critique_attempted") in (None, False)
+    assert d.get("model_calls") == 1
+
+
+def test_critique_off_by_default():
+    # flag not set => never attempts a critique even with a brief.
+    eng = RealEditPlannerEngine(SeqGateway([_plan12(6.0, 6.0)]))
+    inp = _target12_inputs(creative_brief="brief")   # critique_revision defaults False
+    eng.generate(inp)
+    assert eng.last_diagnostics.get("critique_attempted") in (None, False)
+    assert eng.last_diagnostics.get("model_calls") == 1

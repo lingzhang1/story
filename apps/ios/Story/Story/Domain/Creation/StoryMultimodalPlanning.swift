@@ -32,6 +32,20 @@ enum StoryMultimodalPlanning {
     static func setPersistentOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: flagKey) }
     private static let _enabledDefault = true
 
+    /// Phase-6 / experiment Arm D: run ONE bounded critique->revision pass on a Visual-first plan. SEPARATE,
+    /// OWN flag, DEFAULT OFF — it costs 2 extra model calls per create (each re-sending the ~3 MB image
+    /// payload), so it is the heaviest, most quota-fragile path and must be opted into explicitly for testing.
+    /// Enable with env `STORY_CRITIQUE_REVISION=1` or UserDefaults bool `STORY_CRITIQUE_REVISION=true`.
+    static var critiqueRevisionEnabled: Bool {
+        if ProcessInfo.processInfo.environment["STORY_CRITIQUE_REVISION"] == "1" { return true }
+        if UserDefaults.standard.object(forKey: critiqueFlagKey) != nil {
+            return UserDefaults.standard.bool(forKey: critiqueFlagKey)
+        }
+        return false
+    }
+    static let critiqueFlagKey = "STORY_CRITIQUE_REVISION"
+    static func setCritiqueOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: critiqueFlagKey) }
+
     static let creativeBriefVersion = "shortform_mvp/1"
     static let creativeBrief = """
     When user intent does not require chronology, prioritize visually engaging and meaningful footage. \

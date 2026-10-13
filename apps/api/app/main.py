@@ -786,7 +786,10 @@ def create_app() -> FastAPI:
                    "normalized": diag.get("normalized"), "repaired": diag.get("repaired"), "used_fallback": diag.get("used_fallback"),
                    "model_calls": diag.get("model_calls"),
                    "truncation_escalations": diag.get("truncation_escalations", 0),
-                   "last_max_tokens_used": diag.get("last_max_tokens_used")})
+                   "last_max_tokens_used": diag.get("last_max_tokens_used"),
+                   "critique_attempted": diag.get("critique_attempted", False),
+                   "critique_applied": diag.get("critique_applied"),
+                   "critique_rejected_reason": diag.get("critique_rejected_reason")})
         return plan
 
     @app.post("/v1/edit-plan-mm", response_model=EditPlanV2Contract, status_code=200)
@@ -794,6 +797,7 @@ def create_app() -> FastAPI:
         body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
         sheet_order: str = Form(..., description="JSON array of Moment ids, one per contact-sheet, in sheets[] order"),
         creative_brief: str | None = Form(default=None, description="versioned app-level brief; omit for none"),
+        critique_revision: bool = Form(default=False, description="Phase-6 Arm D: run ONE bounded critique->revision pass after a valid plan (OFF by default; costs 2 extra model calls)"),
         sheets: list[UploadFile] = File(default=[], description="bounded Tier-1 contact-sheet JPEGs, one per Moment"),
         engine: EditPlannerEngine = Depends(get_edit_planner_engine),
     ) -> EditPlanV2Contract:
@@ -874,7 +878,8 @@ def create_app() -> FastAPI:
                 "has_music_analysis": parsed.music_analysis is not None, "moment_count": len(parsed.moments),
                 "planning_mode": "multimodal" if images else "text_only",
                 "sheet_count": len(images), "image_payload_bytes": total,
-                "creative_brief_present": bool(creative_brief)}
+                "creative_brief_present": bool(creative_brief),
+                "critique_revision_requested": bool(critique_revision)}
         inputs = EditPlanInputs(
             story_id=str(parsed.story_id), creative_intent_id=str(parsed.creative_intent_id),
             creative_intent=parsed.creative_intent, story_guide=parsed.story_guide,
@@ -883,7 +888,8 @@ def create_app() -> FastAPI:
             music_plan_id=str(parsed.music_plan_id) if parsed.music_plan_id else None,
             music_analysis=parsed.music_analysis, sound_preference=parsed.sound_preference,
             editorial_mode=parsed.editorial_mode,
-            images=images, creative_brief=creative_brief, image_moment_order=order)
+            images=images, creative_brief=creative_brief, image_moment_order=order,
+            critique_revision=bool(critique_revision))
         # Offload the blocking Bedrock call off the event loop (this handler is async). Same pattern as AU.
         import anyio as _anyio
         return await _anyio.to_thread.run_sync(_execute_edit_plan, engine, inputs, base, started)
