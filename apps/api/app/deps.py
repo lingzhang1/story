@@ -163,7 +163,9 @@ def get_story_coverage_engine() -> StoryCoverageEngine:
     if os.environ.get("STORY_COVERAGE_MOCK") == "1":
         return MockStoryCoverageEngine()
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_MODEL)
-    return RealStoryCoverageEngine(BedrockModelGateway(model_id=model), model_id=model)
+    # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle), so a create
+    # degrades rather than 503s at this stage. Same-version is a no-op (helper returns the bare gateway).
+    return RealStoryCoverageEngine(_gateway_with_fallback(model), model_id=model)
 
 
 def get_story_guide_engine() -> StoryGuideEngine:
@@ -177,7 +179,9 @@ def get_story_guide_engine() -> StoryGuideEngine:
     if os.environ.get("STORY_GUIDE_MOCK") == "1":
         return MockStoryGuideEngine()
     model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
-    return RealStoryGuideEngine(BedrockModelGateway(model_id=model), model_id=model)
+    # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle). Same-version
+    # is a no-op (helper returns the bare gateway).
+    return RealStoryGuideEngine(_gateway_with_fallback(model), model_id=model)
 
 
 def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
@@ -189,7 +193,11 @@ def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
     deterministic evidence builder firewalls Guide/completion signals away from the Judge.
     """
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_V2_MODEL)
-    return RealStoryCoverageV2Engine(BedrockModelGateway(model_id=model), model_id=model)
+    # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError. THIS is the stage whose daily-quota
+    # throttle failed hiking creates ('story_coverage_v2_unavailable: Too many tokens per day') before the
+    # (already fallback-protected) edit planner was ever reached. BOTH internal calls (mapper + judge) share
+    # this gateway, so both degrade to Sonnet together. Same-version is a no-op (helper returns bare gateway).
+    return RealStoryCoverageV2Engine(_gateway_with_fallback(model), model_id=model)
 
 
 def get_music_direction_engine() -> MusicDirectionEngine:
