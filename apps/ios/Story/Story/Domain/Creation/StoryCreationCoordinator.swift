@@ -354,18 +354,32 @@ final class StoryCreationCoordinator {
             }
         } catch is CancellationError {
             return finishCancelled()
+        } catch is CancellationError {
+            return finishCancelled()
         } catch EditPlanJobError.conflict {
+            if cancelRequested { return finishCancelled() }
             return finishFailed(.planTransport("this Story is already being created"))
         } catch EditPlanJobError.pollTimeout {
+            if cancelRequested { return finishCancelled() }
             // The job may still be running server-side — do NOT lose it; the Story keeps its job_id for reopen.
             return finishFailed(.planTransport("still working — reopen to continue"))
         } catch let EditPlanJobError.transport(underlying) {
+            // A user cancel aborts the in-flight URLSession task with NSURLError -999 "cancelled" — that is a
+            // CANCELLATION, not a failure. Land in .cancelled (-> Story Home), never the error screen.
+            if cancelRequested || (underlying as NSError).code == NSURLErrorCancelled {
+                return finishCancelled()
+            }
             return finishFailed(.planTransport(String(describing: underlying)))
         } catch EditPlanJobError.badStatus(let code) {
+            if cancelRequested { return finishCancelled() }
             return finishFailed(.planTransport("unexpected status \(code)"))
         } catch EditPlanJobError.decoding(let underlying) {
+            if cancelRequested { return finishCancelled() }
             return finishFailed(.planTransport("couldn't read the plan: \(underlying)"))
         } catch {
+            if cancelRequested || (error as NSError).code == NSURLErrorCancelled {
+                return finishCancelled()
+            }
             return finishFailed(.planTransport(String(describing: error)))
         }
         if cancelRequested { return finishCancelled() }
