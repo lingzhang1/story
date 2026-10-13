@@ -140,18 +140,21 @@ export class StoryApiStack extends cdk.Stack {
       autoDeleteObjects: true, // dev
     });
 
-    // Worker Lambda — DockerImageFunction built from the SAME repo context (apps/api/Dockerfile.worker) so it
-    // bundles packages/ (edit_planner, model_gateway, edit_plan_jobs, contracts) + prompts/ exactly like the
-    // App Runner image. Conservative reserved concurrency (configurable); 15-min timeout for >120s plans.
-    const worker = new lambda.DockerImageFunction(this, "EditPlanWorker", {
+    // Worker Lambda — DOCKER-FREE zip asset (the sandbox cannot run Docker). scripts/build_worker_asset.sh
+    // pre-stages app/ + packages/ + contracts/ + prompts/ + the Linux cp312 pydantic wheels into
+    // infrastructure/cdk/.worker-asset (boto3 is in the Lambda runtime). The planner resolves prompts at
+    // packages/edit_planner/../../prompts -> the asset root, which the layout satisfies. 15-min timeout for
+    // >120s plans; conservative configurable concurrency.
+    const worker = new lambda.Function(this, "EditPlanWorker", {
       functionName: `story-${environment}-edit-plan-worker`,
-      code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, "..", "..", ".."), {
-        file: "apps/api/Dockerfile.worker",
-      }),
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "app.worker.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "..", ".worker-asset")),
       timeout: cdk.Duration.seconds(900),
       memorySize: 2048,
       reservedConcurrentExecutions: Number(process.env.STORY_WORKER_CONCURRENCY ?? "2"),
       environment: {
+        PYTHONPATH: "/var/task:/var/task/packages",
         STORY_JOBS_TABLE: jobsTable.tableName,
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,

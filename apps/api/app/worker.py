@@ -90,16 +90,18 @@ def _run_one(store: _jobs.JobStore, job_id: str) -> str:
         env = json.loads(envelope_raw)
         from model_gateway import ImageInput
         images = [ImageInput(data=data, media_type="image/jpeg") for _mid, data in sheets]
-        from contracts.schemas.dto import EditPlanRequest  # same validation as the sync path
-        parsed = EditPlanRequest.model_validate_json(env["body"])
+        # The body was already validated at submit time by the endpoint's EditPlanRequest model. The worker
+        # parses the raw dict directly — it must NOT import app.main (that pulls FastAPI/uvicorn, not bundled).
+        b = json.loads(env["body"])
         inputs = EditPlanInputs(
-            story_id=str(parsed.story_id), creative_intent_id=str(parsed.creative_intent_id),
-            creative_intent=parsed.creative_intent, story_guide=parsed.story_guide,
-            story_coverage=parsed.story_coverage, moments=parsed.moments, music_plan=parsed.music_plan,
-            output_format=parsed.output_format, music_asset_id=parsed.music_asset_id,
-            music_plan_id=str(parsed.music_plan_id) if parsed.music_plan_id else None,
-            music_analysis=parsed.music_analysis, sound_preference=parsed.sound_preference,
-            editorial_mode=parsed.editorial_mode,
+            story_id=str(b["story_id"]), creative_intent_id=str(b["creative_intent_id"]),
+            creative_intent=b["creative_intent"], story_guide=b.get("story_guide", {}),
+            story_coverage=b.get("story_coverage", {}), moments=b["moments"],
+            music_plan=b.get("music_plan", {}), output_format=b.get("output_format", "vertical"),
+            music_asset_id=b.get("music_asset_id"),
+            music_plan_id=str(b["music_plan_id"]) if b.get("music_plan_id") else None,
+            music_analysis=b.get("music_analysis"), sound_preference=b.get("sound_preference"),
+            editorial_mode=b.get("editorial_mode"),
             images=images, creative_brief=env.get("creative_brief"), image_moment_order=order,
             critique_revision=bool(env.get("critique_revision")))
 
