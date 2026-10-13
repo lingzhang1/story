@@ -115,6 +115,10 @@ final class StoryCreationCoordinator {
     /// (insufficient material). `state` keeps carrying only the human message, so existing behavior/tests hold.
     private(set) var lastFailure: StoryCreationError?
 
+    /// MVP multimodal: diagnostics from the most recent planning phase (nil until a run plans). Read for
+    /// device-acceptance verification; carries NO image content.
+    private(set) var lastPlanningDiagnostics: StoryPlanningDiagnostics?
+
     // Seams
     private let planner: EditPlanning
     private let renderer: StoryRendering
@@ -273,7 +277,26 @@ final class StoryCreationCoordinator {
         state = .planning
         var plan: EditPlanV2
         do {
-            plan = try await planner.plan(build.request)
+            if StoryMultimodalPlanning.enabled {
+                // MVP MULTIMODAL: build bounded Tier-1 contact sheets for the included Moments, run the adaptive
+                // visual-budget preflight (deterministic, no model call), then plan WITH visual evidence +
+                // the versioned creative brief. planMultimodal falls back to text-only on any IMAGE-input
+                // failure (never fabricates, never drops a Moment). A1 text covers every Moment regardless.
+                let budgetInputs = Self.visualBudgetInputs(from: build)
+                let budget = await MultimodalVisualBudget.build(budgetInputs)
+                let outcome = try await planner.planMultimodal(
+                    build.request, sheets: budget.sheets,
+                    creativeBrief: StoryMultimodalPlanning.creativeBrief,
+                    creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion)
+                plan = outcome.plan
+                lastPlanningDiagnostics = StoryPlanningDiagnostics(
+                    usedMultimodal: outcome.usedMultimodal, sheetCount: outcome.sheetCount,
+                    imageBytes: outcome.imageBytes, momentsTextOnly: budget.momentsTextOnly,
+                    selectedTier: budget.selectedTier, appliedSteps: budget.appliedSteps,
+                    fallbackReason: outcome.fallbackReason, creativeBriefVersion: outcome.creativeBriefVersion)
+            } else {
+                plan = try await planner.plan(build.request)
+            }
         } catch EditPlannerServiceError.unavailable {
             return finishFailed(.planUnavailable)
         } catch EditPlannerServiceError.infeasible(let reason) {
@@ -370,6 +393,25 @@ final class StoryCreationCoordinator {
     /// Checks: feasible flag; every referenced Moment resolves to a local file; source ranges valid
     /// (end > start when both present); speed in [0.5, 2.0]; per-segment output duration > 0 and the plan's
     /// total feasible vs the summed source material; transitions in {cut,fade,dissolve}; native_audio in
+    /// MVP multimodal: assemble the adaptive-visual-budget inputs for the INCLUDED Moments (those actually in
+    /// the planner request). Source URL is resolved from the Moment's local relativePath via MediaStore;
+    /// richness uses the SAME AU useful_segments the planner sees (events aren't in the request, so eventCount
+    /// is 0 — honest, never fabricated). A Moment with no resolvable file is skipped (it is also not in the
+    /// request). Deterministic.
+    static func visualBudgetInputs(from build: EditPlanRequestBuilder.Build) -> [VisualBudgetInput] {
+        let ranges = build.auUsefulRanges   // [lowercased id: [(a,b)]]
+        var out: [VisualBudgetInput] = []
+        for m in build.includedMedia {
+            guard MediaStore.shared.fileExists(relativePath: m.relativePath) else { continue }
+            let url = MediaStore.shared.absoluteURL(for: m.relativePath)
+            let key = m.momentId.uuidString.lowercased()
+            out.append(VisualBudgetInput(
+                momentId: m.momentId, url: url, durationSeconds: m.durationSeconds,
+                usefulSegmentCount: ranges[key]?.count ?? 0, eventCount: 0))
+        }
+        return out
+    }
+
     /// {keep,duck,mute}.
     static func validate(plan: EditPlanV2,
                          resolver: (String) -> URL?,

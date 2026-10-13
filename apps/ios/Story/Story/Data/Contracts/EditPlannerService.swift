@@ -13,6 +13,36 @@ import Foundation
 
 protocol EditPlanning {
     func plan(_ request: EditPlanRequestDTO) async throws -> EditPlanV2
+    /// Plan with optional bounded contact-sheet visual evidence + a versioned creative brief. Default
+    /// implementation ignores images and calls the text-only path, so a mock/alternate conformer need not
+    /// implement multimodal to remain valid.
+    func planMultimodal(_ request: EditPlanRequestDTO,
+                        sheets: [MomentContactSheet],
+                        creativeBrief: String?,
+                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome
+}
+
+extension EditPlanning {
+    func planMultimodal(_ request: EditPlanRequestDTO,
+                        sheets: [MomentContactSheet],
+                        creativeBrief: String?,
+                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome {
+        let plan = try await plan(request)
+        return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: 0, imageBytes: 0,
+                                     fallbackReason: "multimodal_not_implemented",
+                                     creativeBriefVersion: creativeBriefVersion)
+    }
+}
+
+/// Outcome of a multimodal planning attempt — carries which path actually produced the plan, for diagnostics
+/// and device-acceptance verification (so a device run can PROVE multimodal vs text-only was used).
+struct MultimodalPlanOutcome {
+    let plan: EditPlanV2
+    let usedMultimodal: Bool
+    let sheetCount: Int
+    let imageBytes: Int
+    let fallbackReason: String?     // nil when multimodal succeeded; else why it fell back to text-only
+    let creativeBriefVersion: String?
 }
 
 // MARK: - Request DTO (mirrors the backend EditPlanRequest; snake_case wire)
@@ -121,5 +151,112 @@ final class EditPlannerService: EditPlanning {
     private static func detail(_ data: Data) -> String {
         (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
             ?? String(data: data, encoding: .utf8) ?? "infeasible"
+    }
+
+    // MARK: - MVP multimodal planning (/v1/edit-plan-mm) with graceful text-only fallback
+
+    /// Plan WITH bounded contact-sheet visual evidence. On an IMAGE-INPUT failure (413 payload/size, 415 type,
+    /// an image-mapping 422, or a transport error while sending images) this falls back to the frozen text-only
+    /// /v1/edit-plan path — never fabricating evidence, never dropping a Moment. A 503 (model) or a genuine
+    /// MATERIAL 422 (infeasible footage) is NOT an image problem and is surfaced as-is (no silent retry).
+    func planMultimodal(_ request: EditPlanRequestDTO,
+                        sheets: [MomentContactSheet],
+                        creativeBrief: String?,
+                        creativeBriefVersion: String?) async throws -> MultimodalPlanOutcome {
+        // No sheets -> there is nothing multimodal to send; use the text-only path directly.
+        guard !sheets.isEmpty else {
+            let plan = try await plan(request)
+            return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: 0, imageBytes: 0,
+                                         fallbackReason: "no_sheets", creativeBriefVersion: creativeBriefVersion)
+        }
+        let order = sheets.map { $0.momentId.uuidString }
+        let imageBytes = sheets.reduce(0) { $0 + $1.jpeg.count }
+        do {
+            let plan = try await sendMultipart(request, sheets: sheets, sheetOrder: order,
+                                               creativeBrief: creativeBrief)
+            return MultimodalPlanOutcome(plan: plan, usedMultimodal: true, sheetCount: sheets.count,
+                                         imageBytes: imageBytes, fallbackReason: nil,
+                                         creativeBriefVersion: creativeBriefVersion)
+        } catch let EditPlannerServiceError.badStatus(code) where code == 413 || code == 415 {
+            // Image size/type rejection -> text-only fallback (the server-side preflight backstop fired).
+            let plan = try await plan(request)
+            return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: sheets.count,
+                                         imageBytes: imageBytes, fallbackReason: "image_rejected_\(code)",
+                                         creativeBriefVersion: creativeBriefVersion)
+        } catch let EditPlannerServiceError.transport(err) {
+            // A transport error while sending the larger image payload -> try text-only once.
+            let plan = try await plan(request)
+            return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: sheets.count,
+                                         imageBytes: imageBytes,
+                                         fallbackReason: "transport:\(String(describing: err).prefix(60))",
+                                         creativeBriefVersion: creativeBriefVersion)
+        }
+        // NOTE: .unavailable (503) and .infeasible (422 material) deliberately propagate — not image problems.
+    }
+
+    private func sendMultipart(_ request: EditPlanRequestDTO,
+                               sheets: [MomentContactSheet],
+                               sheetOrder: [String],
+                               creativeBrief: String?) async throws -> EditPlanV2 {
+        let boundary = "story.mm.\(UUID().uuidString)"
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-mm"))
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let bodyJSON: Data
+        let orderJSON: Data
+        do {
+            bodyJSON = try StoryContractCoding.encoder().encode(request)
+            orderJSON = try JSONSerialization.data(withJSONObject: sheetOrder)
+        } catch { throw EditPlannerServiceError.transport(error) }
+
+        var body = Data()
+        func field(_ name: String, _ value: Data, contentType: String? = nil) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n".data(using: .utf8)!)
+            if let contentType { body.append("Content-Type: \(contentType)\r\n".data(using: .utf8)!) }
+            body.append("\r\n".data(using: .utf8)!)
+            body.append(value)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        func fileField(_ name: String, filename: String, _ value: Data) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            body.append(value)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        field("body", bodyJSON, contentType: "application/json")
+        field("sheet_order", orderJSON, contentType: "application/json")
+        if let creativeBrief { field("creative_brief", Data(creativeBrief.utf8)) }
+        // One file part per sheet, in sheetOrder — order is preserved by multipart part ordering.
+        for s in sheets {
+            fileField("sheets", filename: "\(s.momentId.uuidString.lowercased()).jpg", s.jpeg)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+
+        let data: Data
+        let resp: URLResponse
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw EditPlannerServiceError.transport(error) }
+        guard let http = resp as? HTTPURLResponse else { throw EditPlannerServiceError.badStatus(-1) }
+        switch http.statusCode {
+        case 200:
+            do { return try StoryContractCoding.decoder().decode(EditPlanV2.self, from: data) }
+            catch { throw EditPlannerServiceError.decoding(error) }
+        case 422:
+            // Distinguish an IMAGE-mapping 422 (fall back) from a MATERIAL 422 (surface). The server uses
+            // distinct detail text: image-mapping says "contact sheet"/"sheet_order"; material says "infeasible".
+            let d = Self.detail(data).lowercased()
+            if d.contains("sheet") || d.contains("unknown moment id") { throw EditPlannerServiceError.badStatus(415) }
+            throw EditPlannerServiceError.infeasible(Self.detail(data))
+        case 413, 415:
+            throw EditPlannerServiceError.badStatus(http.statusCode)
+        case 503:
+            throw EditPlannerServiceError.unavailable
+        default:
+            throw EditPlannerServiceError.badStatus(http.statusCode)
+        }
     }
 }
