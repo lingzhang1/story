@@ -202,7 +202,7 @@ struct StoryCreatingView: View {
         case .indeterminate(let status):
             creatingBody(status: status, determinate: false, progress: 0)
         case .determinate(let progress):
-            creatingBody(status: "Creating your Story…", determinate: true, progress: progress)
+            creatingBody(status: "Putting your Story together…", determinate: true, progress: progress)
         case .failed(let message):
             failedBody(message: message)
         case .cancelled:
@@ -216,12 +216,12 @@ struct StoryCreatingView: View {
 
     // MARK: - Creating (Screen10Creating look)
 
-    /// Escalating, HONEST patience reminder keyed off real elapsed seconds (no fake progress). Quiet for the
-    /// first ~12s so a fast Story stays clean; then gentle reassurance; then explicit expectation-setting so a
-    /// 1-2 min plan never reads as "stuck". Returns nil when nothing should show yet.
+    /// Escalating, HONEST reassurance keyed off real elapsed seconds (no fake progress). A warm line from the
+    /// very start so the opening seconds never read as a dead screen, then gentle reassurance, then explicit
+    /// expectation-setting so a 1-2 min plan never reads as "stuck".
     private func patienceNote(elapsed: TimeInterval) -> String? {
         switch elapsed {
-        case ..<12:  return nil
+        case ..<12:  return "Sit back — we're shaping your moments into a Story."
         case ..<30:  return "Hang tight — this usually takes a moment."
         case ..<60:  return "Still working. Good edits take a little longer."
         case ..<120: return "Almost there — crafting your Story carefully. This can take a minute or two."
@@ -252,18 +252,18 @@ struct StoryCreatingView: View {
             // Time-based PATIENCE reminder (honest — driven by real elapsed seconds, NOT a fake percentage).
             // Planning can genuinely take 1-2 min (and longer for visual-first + critique), so a static line
             // reads as "stuck". We stay quiet at first, then gently reassure, then explicitly set expectations.
-            if !determinate {
-                TimelineView(.periodic(from: createStartedAt, by: 1)) { ctx in
-                    let elapsed = ctx.date.timeIntervalSince(createStartedAt)
-                    if let note = patienceNote(elapsed: elapsed) {
-                        Text(note)
-                            .font(StoryTheme.body(12))
-                            .foregroundStyle(StoryTheme.cream.opacity(0.3))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                            .transition(.opacity)
-                            .id(note)   // fade between notes as they change
-                    }
+            // Time-based reassurance (honest — driven by real elapsed seconds, NOT a fake percentage). Shown in
+            // every active phase (planning AND rendering), since a long render can also take a minute or two.
+            TimelineView(.periodic(from: createStartedAt, by: 1)) { ctx in
+                let elapsed = ctx.date.timeIntervalSince(createStartedAt)
+                if let note = patienceNote(elapsed: elapsed) {
+                    Text(note)
+                        .font(StoryTheme.body(12))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.3))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .transition(.opacity)
+                        .id(note)   // fade between notes as they change
                 }
             }
 
