@@ -92,6 +92,7 @@ struct StoryCreatingView: View {
     @State private var completedOutput: GeneratedOutputModel?
     /// Guard so the completion hand-off fires exactly once.
     @State private var didHandOffCompletion = false
+    @State private var createStartedAt = Date()   // for the time-based patience reminder (honest elapsed time)
 
     private var phase: CreatingPhase {
         guard let coordinator else { return .indeterminate(status: "Getting your moments ready…") }
@@ -137,6 +138,7 @@ struct StoryCreatingView: View {
             // track -> download), then start MUSIC-AWARE creation; if music is unavailable (provider off,
             // plan/provider failure) fall back to the device-verified no-music path. Music never blocks.
             if coordinator == nil {
+                createStartedAt = Date()   // start the patience timer from the real creation moment
                 let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
                 coordinator = coord
                 if musicIsPreresolved {
@@ -214,6 +216,19 @@ struct StoryCreatingView: View {
 
     // MARK: - Creating (Screen10Creating look)
 
+    /// Escalating, HONEST patience reminder keyed off real elapsed seconds (no fake progress). Quiet for the
+    /// first ~12s so a fast Story stays clean; then gentle reassurance; then explicit expectation-setting so a
+    /// 1-2 min plan never reads as "stuck". Returns nil when nothing should show yet.
+    private func patienceNote(elapsed: TimeInterval) -> String? {
+        switch elapsed {
+        case ..<12:  return nil
+        case ..<30:  return "Hang tight — this usually takes a moment."
+        case ..<60:  return "Still working. Good edits take a little longer."
+        case ..<120: return "Almost there — crafting your Story carefully. This can take a minute or two."
+        default:     return "Thanks for your patience — finishing up your Story. You can keep waiting or cancel."
+        }
+    }
+
     private func creatingBody(status: String, determinate: Bool, progress: Double) -> some View {
         VStack(spacing: 28) {
             Spacer()
@@ -233,6 +248,24 @@ struct StoryCreatingView: View {
             progressBar(determinate: determinate, progress: progress)
                 .frame(height: 1.5)
                 .padding(.top, 4)
+
+            // Time-based PATIENCE reminder (honest — driven by real elapsed seconds, NOT a fake percentage).
+            // Planning can genuinely take 1-2 min (and longer for visual-first + critique), so a static line
+            // reads as "stuck". We stay quiet at first, then gently reassure, then explicitly set expectations.
+            if !determinate {
+                TimelineView(.periodic(from: createStartedAt, by: 1)) { ctx in
+                    let elapsed = ctx.date.timeIntervalSince(createStartedAt)
+                    if let note = patienceNote(elapsed: elapsed) {
+                        Text(note)
+                            .font(StoryTheme.body(12))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.3))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                            .transition(.opacity)
+                            .id(note)   // fade between notes as they change
+                    }
+                }
+            }
 
             Spacer()
 
