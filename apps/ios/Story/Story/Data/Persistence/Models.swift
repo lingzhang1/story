@@ -106,6 +106,14 @@ final class StoryModel {
     // Never overwritten during retries, recreation, or version generation (only acceptCustomize sets it).
     var editingApproachExplicit: String?
 
+    // Async Edit Planning (Phase 2): the in-flight planning job for THIS creation attempt. operation_id is the
+    // idempotency key — persisted BEFORE submitting so a crash/restart/retry reuses the SAME job (no duplicate
+    // inference). job_id is the server's handle for polling + restart recovery. A deliberate "Create Another
+    // Version" mints a NEW operation_id. Cleared when the Story completes or the attempt is abandoned.
+    var planOperationId: String?
+    var planJobId: String?
+    var planJobStatus: String?   // last observed: queued|running|completed|failed|cancelled|expired (advisory UI)
+
     var createdAt: Date
     var updatedAt: Date
 

@@ -154,6 +154,10 @@ enum JSONValue: Codable {
     case array([JSONValue])
     case null
 
+    /// Convenience readers for extracting scalar diagnostics (e.g. job diagnostics planning_mode/sheet_count).
+    var stringValue: String? { if case .string(let s) = self { return s }; return nil }
+    var doubleValue: Double? { if case .number(let n) = self { return n }; return nil }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null; return }

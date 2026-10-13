@@ -121,6 +121,7 @@ final class StoryCreationCoordinator {
 
     // Seams
     private let planner: EditPlanning
+    private let jobClient: EditPlanJobClient
     private let renderer: StoryRendering
     private let context: ModelContext
 
@@ -162,6 +163,7 @@ final class StoryCreationCoordinator {
         planner: EditPlanning,
         renderer: StoryRendering = MediaEngineRenderer(),
         context: ModelContext,
+        jobClient: EditPlanJobClient = EditPlanJobClient(),
         musicDirection: JSONValue? = nil,
         musicPlan: JSONValue? = nil,
         selectedMusicAssetId: String? = nil,
@@ -169,6 +171,7 @@ final class StoryCreationCoordinator {
         soundtrackURL: URL? = nil
     ) {
         self.planner = planner
+        self.jobClient = jobClient
         self.renderer = renderer
         self.context = context
         self.musicDirection = musicDirection
@@ -210,6 +213,11 @@ final class StoryCreationCoordinator {
         guard isCreating else { return }
         cancelRequested = true
         task?.cancel()
+        // Also tell the backend to cancel the in-flight planning job so the worker finalizes `cancelled` and
+        // cleans its staged visual evidence — otherwise a running job would keep burning model time server-side.
+        if let jid = lastStory?.planJobId {
+            Task { await jobClient.cancel(jobId: jid) }
+        }
     }
 
     /// Retry after a recoverable failure. No-op unless we are in `.failed` with a remembered request.
@@ -276,68 +284,87 @@ final class StoryCreationCoordinator {
         // ---- planning: call the Edit Planner; typed failures -> failed; NEVER fabricate a montage ----
         state = .planning
         var plan: EditPlanV2
-        // Phase-3 routing: the user's REQUESTED editing approach, gated by the deployment safety flag.
-        // Visual-first => multimodal (/v1/edit-plan-mm) ONLY when the flag is on; otherwise, and for
-        // Storytelling, use the frozen text-only path. The flag remains the deployment gate: the Customize UI
-        // only OFFERS Visual-first when the flag is on, so an unavailable option is never selectable — but we
-        // defend here too (a persisted visual_first from a prior enabled build must not force multimodal if
-        // the flag is now off).
         let requested = story.effectiveEditingApproach
         let wantMultimodal = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
         do {
+            // ---- ASYNC Edit Planning (Phase 2): submit a job, poll to completion. Removes the ~120s App
+            // Runner ceiling; the worker runs the SAME core. BOTH approaches use this one path. ----
+            // Build visual evidence for visual_first (unchanged budget preflight); text-only sends no sheets.
+            var sheets: [MomentContactSheet] = []
+            var budgetDiag = (tier: "text_only", applied: [String](), textOnly: 0, imageBytes: 0)
             if wantMultimodal {
-                // MVP MULTIMODAL: build bounded Tier-1 contact sheets for the included Moments, run the adaptive
-                // visual-budget preflight (deterministic, no model call), then plan WITH visual evidence +
-                // the versioned creative brief. planMultimodal falls back to text-only on any IMAGE-input
-                // failure (never fabricates, never drops a Moment). A1 text covers every Moment regardless.
-                let budgetInputs = Self.visualBudgetInputs(from: build)
-                let budget = await MultimodalVisualBudget.build(budgetInputs)
-                let outcome = try await planner.planMultimodal(
-                    build.request, sheets: budget.sheets,
-                    creativeBrief: StoryMultimodalPlanning.creativeBrief,
-                    creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion,
-                    critiqueRevision: StoryMultimodalPlanning.critiqueRevisionEnabled)
-                plan = outcome.plan
-                // Fallback transparency: requested stays visual_first; actual is visual_first ONLY if images
-                // actually reached the planner, else storytelling (text-only fallback) — never claim visual
-                // analysis that did not happen.
-                let actual: EditingApproach = outcome.usedMultimodal ? .visualFirst : .storytelling
-                lastPlanningDiagnostics = StoryPlanningDiagnostics(
-                    usedMultimodal: outcome.usedMultimodal, sheetCount: outcome.sheetCount,
-                    imageBytes: outcome.imageBytes, momentsTextOnly: budget.momentsTextOnly,
-                    selectedTier: budget.selectedTier, appliedSteps: budget.appliedSteps,
-                    fallbackReason: outcome.fallbackReason, creativeBriefVersion: outcome.creativeBriefVersion,
-                    requestedApproach: requested, actualApproach: actual)
-                // DIAGNOSTIC BEACON: make the on-device multimodal DECISION visible in the App Runner access log
-                // (GET /health?music=editplan:...). This is the only way to see WHY a run used multimodal or
-                // fell back WITHOUT an attached Xcode debugger — the decision happens on device, before/around
-                // the request, so the server's own logs cannot explain a no-sheets or flag-off outcome. No image
-                // bytes/content, only counts + the fallback reason.
-                MediaEngineV1.beacon(
-                    "editplan: req=\(requested.rawValue) actual=\(actual.rawValue) mm=\(outcome.usedMultimodal) "
-                    + "sheets=\(outcome.sheetCount) budgetSheets=\(budget.sheets.count) "
-                    + "textOnlyMoments=\(budget.momentsTextOnly) tier=\(budget.selectedTier) "
-                    + "fb=\(outcome.fallbackReason ?? "none")")
-            } else {
-                // Storytelling (or Visual-first requested but the flag is off / unavailable): frozen text-only.
-                let reason = requested.requiresMultimodal ? "flag_off_requested_visual_first" : "storytelling_requested"
-                lastPlanningDiagnostics = StoryPlanningDiagnostics(
-                    usedMultimodal: false, sheetCount: 0, imageBytes: 0, momentsTextOnly: 0,
-                    selectedTier: "text_only", appliedSteps: [], fallbackReason:
-                        requested.requiresMultimodal ? "visual_first_unavailable_flag_off" : nil,
-                    creativeBriefVersion: nil, requestedApproach: requested, actualApproach: .storytelling)
-                MediaEngineV1.beacon("editplan: req=\(requested.rawValue) actual=storytelling mm=false (\(reason))")
-                plan = try await planner.plan(build.request)
+                let budget = await MultimodalVisualBudget.build(Self.visualBudgetInputs(from: build))
+                sheets = budget.sheets
+                budgetDiag = (budget.selectedTier, budget.appliedSteps, budget.momentsTextOnly,
+                              budget.sheets.reduce(0) { $0 + $1.jpeg.count })
             }
-        } catch EditPlannerServiceError.unavailable {
-            return finishFailed(.planUnavailable)
-        } catch EditPlannerServiceError.infeasible(let reason) {
-            return finishFailed(.planInfeasible(reason))
-        } catch let EditPlannerServiceError.transport(underlying) {
+            // operation_id = idempotency key. Persist BEFORE submit so a crash/restart/retry/dup-tap reuses the
+            // SAME job (no duplicate inference). Reuse the Story's existing id on recovery; mint one otherwise.
+            if story.planOperationId == nil {
+                story.planOperationId = UUID().uuidString
+                try? context.save()
+            }
+            let opId = story.planOperationId!
+            let brief = wantMultimodal ? StoryMultimodalPlanning.creativeBrief : nil
+            let critique = wantMultimodal && StoryMultimodalPlanning.critiqueRevisionEnabled
+
+            // Submit (or recover an in-flight job_id). A transport error here is safe to retry with the same opId.
+            let jobId: String
+            if let existing = story.planJobId {
+                jobId = existing   // recovery: a job was already submitted for this attempt
+            } else {
+                jobId = try await jobClient.submit(build.request, operationId: opId, approach: requested,
+                                                   sheets: sheets, creativeBrief: brief, critiqueRevision: critique)
+                story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
+            }
+            MediaEngineV1.beacon("editplan-job: submit req=\(requested.rawValue) sheets=\(sheets.count) "
+                + "critique=\(critique) job=\(jobId.prefix(8))")
+
+            // Poll to terminal (bounded backoff; transport errors don't end the poll; cancel stops it).
+            let final = try await jobClient.pollUntilTerminal(
+                jobId: jobId, maxSeconds: 900,
+                shouldCancel: { [weak self] in self?.cancelRequested ?? false },
+                onState: { [weak self] st in
+                    Task { @MainActor in self?.story.planJobStatus = st.status.rawValue } })
+
+            switch final.status {
+            case .completed:
+                guard let p = final.plan else { return finishFailed(.planUnavailable) }
+                plan = p
+                let actualRaw = (final.diagnostics?["planning_mode"]?.stringValue == "multimodal")
+                    ? EditingApproach.visualFirst : .storytelling
+                lastPlanningDiagnostics = StoryPlanningDiagnostics(
+                    usedMultimodal: actualRaw == .visualFirst,
+                    sheetCount: Int(final.diagnostics?["sheet_count"]?.doubleValue ?? 0),
+                    imageBytes: budgetDiag.imageBytes, momentsTextOnly: budgetDiag.textOnly,
+                    selectedTier: budgetDiag.tier, appliedSteps: budgetDiag.applied,
+                    fallbackReason: nil, creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion,
+                    requestedApproach: requested, actualApproach: actualRaw)
+                story.planJobStatus = "completed"; try? context.save()
+            case .failed:
+                // Distinguish the failure classes for honest UX (Phase 3).
+                switch final.failure {
+                case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
+                case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
+                default:                   return finishFailed(.planUnavailable)
+                }
+            case .cancelled:
+                return finishCancelled()
+            case .expired, .queued, .running, .cancelRequested:
+                return finishFailed(.planTransport("planning did not complete (status \(final.status.rawValue))"))
+            }
+        } catch is CancellationError {
+            return finishCancelled()
+        } catch EditPlanJobError.conflict {
+            return finishFailed(.planTransport("this Story is already being created"))
+        } catch EditPlanJobError.pollTimeout {
+            // The job may still be running server-side — do NOT lose it; the Story keeps its job_id for reopen.
+            return finishFailed(.planTransport("still working — reopen to continue"))
+        } catch let EditPlanJobError.transport(underlying) {
             return finishFailed(.planTransport(String(describing: underlying)))
-        } catch EditPlannerServiceError.badStatus(let code) {
+        } catch EditPlanJobError.badStatus(let code) {
             return finishFailed(.planTransport("unexpected status \(code)"))
-        } catch EditPlannerServiceError.decoding(let underlying) {
+        } catch EditPlanJobError.decoding(let underlying) {
             return finishFailed(.planTransport("couldn't read the plan: \(underlying)"))
         } catch {
             return finishFailed(.planTransport(String(describing: error)))
@@ -416,6 +443,10 @@ final class StoryCreationCoordinator {
 
         // ---- completed: persist a REAL GeneratedOutputModel; do NOT overwrite a prior success until now ----
         let output = persist(result: result, plan: plan, story: story, build: build)
+        // The attempt is done — clear the in-flight job handles so a reopened completed Story never re-polls.
+        // (A deliberate new version mints a fresh operation_id on its next create.)
+        story.planOperationId = nil; story.planJobId = nil; story.planJobStatus = "completed"
+        try? context.save()
         state = .completed(output)
     }
 
