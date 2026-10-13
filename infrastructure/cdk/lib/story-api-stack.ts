@@ -211,11 +211,20 @@ export class StoryApiStack extends cdk.Stack {
           imageIdentifier: `${repository.repositoryUri}:latest`,
           imageConfiguration: {
             port: "8080",
+            // NOTE: App Runner runtimeEnvironmentVariables is a FULL REPLACE, not a merge. Every var the
+            // service needs MUST be listed here — omitting one (as an earlier revision did) silently drops it
+            // from the live service. These restore the music provider + frozen prompt pins that were clobbered.
             runtimeEnvironmentVariables: [
               { name: "STORY_JOBS_TABLE", value: jobsTable.tableName },
               { name: "STORY_JOBS_QUEUE_URL", value: jobsQueue.queueUrl },
               { name: "STORY_STAGING_BUCKET", value: stagingBucket.bucketName },
               { name: "STORY_JOBS_API_ENABLED", value: "1" },
+              // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
+              { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
+              { name: "STORY_MUSIC_PROVIDER", value: "mcp" },
+              // Frozen edit-planner prompt pin + model fallback (so the sync + async paths both use v5.2).
+              { name: "STORY_EDIT_PLAN_VERSION", value: "5.2" },
+              { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
             ],
           },
         },
