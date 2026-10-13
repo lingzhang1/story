@@ -9,28 +9,28 @@ import Foundation
 // The creative brief string + version MUST stay in sync with the backend (apps/api MM_CREATIVE_BRIEF /
 // MM_CREATIVE_BRIEF_VERSION). It is injected into the Edit Planner USER message only — never the frozen body.
 enum StoryMultimodalPlanning {
-    /// Master switch. Flip to true only after device acceptance. For on-device testing it can be enabled in
-    /// THREE ways, in priority order:
-    ///   1. Env var STORY_MULTIMODAL_PLANNING=1 — ONLY present when Xcode's debugger launches the app
-    ///      (a scheme env var is NOT injected for a standalone/home-screen/TestFlight launch — this is why a
-    ///      run tapped from the home screen silently reverted to text-only).
-    ///   2. UserDefaults bool "STORY_MULTIMODAL_PLANNING" — PERSISTS across launches. Set it once and every
-    ///      subsequent standalone launch stays multimodal. The standard launch argument
-    ///      `-STORY_MULTIMODAL_PLANNING YES` is read into UserDefaults automatically by the system, so an
-    ///      Xcode scheme "Arguments Passed On Launch" entry survives a detach the way an env var does not.
-    ///   3. compiled default (false).
+    /// Master availability switch for the Visual-first editing approach (contact-sheet planning).
+    ///
+    /// DEFAULT ON (device-accepted on girl_with_dress + hiking: 36 / 32 sheets reached the planner, valid
+    /// plans). No launch argument or scheme env var is required anymore — Visual-first is simply offered on the
+    /// Customize screen, and the per-Story Editing Approach choice decides the path. Storytelling creates stay
+    /// fully text-only (no sheets built, no images sent), so default-ON adds ZERO cost to a Storytelling run.
+    ///
+    /// A single OPTIONAL kill-switch remains for incident response — set env `STORY_MULTIMODAL_PLANNING=0` or
+    /// UserDefaults bool `STORY_MULTIMODAL_PLANNING=false` to force it OFF without a rebuild (hides Visual-first
+    /// and routes everything text-only). Absent any override, it is ON.
     static var enabled: Bool {
-        if ProcessInfo.processInfo.environment["STORY_MULTIMODAL_PLANNING"] == "1" { return true }
+        if ProcessInfo.processInfo.environment["STORY_MULTIMODAL_PLANNING"] == "0" { return false }
         if UserDefaults.standard.object(forKey: flagKey) != nil {
-            return UserDefaults.standard.bool(forKey: flagKey)
+            return UserDefaults.standard.bool(forKey: flagKey)   // explicit override (true or false) wins
         }
         return _enabledDefault
     }
-    /// UserDefaults / launch-argument key for the persisted override (survives non-attached launches).
+    /// UserDefaults / override key for the kill-switch (persists across launches).
     static let flagKey = "STORY_MULTIMODAL_PLANNING"
-    /// Persist the override so a home-screen / TestFlight launch keeps multimodal on. Call from a debug toggle.
+    /// Force the feature on/off at runtime without a rebuild (incident kill-switch / debug toggle).
     static func setPersistentOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: flagKey) }
-    private static let _enabledDefault = false
+    private static let _enabledDefault = true
 
     static let creativeBriefVersion = "shortform_mvp/1"
     static let creativeBrief = """
