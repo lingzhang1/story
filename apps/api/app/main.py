@@ -72,6 +72,7 @@ from edit_planner import (
     MalformedPlanError,
 )
 import edit_planner as _edit_planner_mod
+import edit_plan_jobs as _jobs
 
 
 def _edit_planner_prompt_version() -> str:
@@ -893,6 +894,126 @@ def create_app() -> FastAPI:
         # Offload the blocking Bedrock call off the event loop (this handler is async). Same pattern as AU.
         import anyio as _anyio
         return await _anyio.to_thread.run_sync(_execute_edit_plan, engine, inputs, base, started)
+
+    # ========================================================================================================
+    # ASYNC EDIT PLANNING (owner-approved 2026-10-13) — beats App Runner's ~120s request ceiling by running the
+    # plan/critique/validate pipeline in a Lambda worker. Submit returns a job id FAST (no model call); the
+    # worker (apps/api/app/worker.py) reuses the SAME _execute_edit_plan core. Contract:
+    # specs/.../async-edit-planning-CONTRACT.md. Dev only. The sync endpoints above stay for back-compat.
+    # ========================================================================================================
+    def _job_store() -> "_jobs.JobStore":
+        # Test seam: app.state._job_store_override lets the endpoint tests inject a fake (no AWS). Prod builds
+        # a real JobStore (lazy boto3 clients) from env.
+        ov = getattr(app.state, "_job_store_override", None)
+        return ov if ov is not None else _jobs.JobStore()
+
+    def _dev_access_ok() -> bool:
+        # Adjustment 1: UUIDv5 secrecy is NOT authentication. In dev the job API is gated by an env flag so it
+        # is not open to the world; a real auth principal replaces this when auth lands. Default ON in dev.
+        import os as _os
+        return _os.environ.get("STORY_JOBS_API_ENABLED", "1") == "1"
+
+    @app.post("/v1/edit-plan-jobs", status_code=202)
+    async def submit_edit_plan_job(
+        operation_id: str = Form(..., description="client idempotency key; a NEW version uses a NEW id"),
+        owner: str = Form(default="dev", description="advisory only — NOT trusted as identity (adjustment 1)"),
+        body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
+        sheet_order: str = Form(default="[]", description="JSON array of Moment ids, one per sheet"),
+        creative_brief: str | None = Form(default=None),
+        critique_revision: bool = Form(default=False),
+        approach: str = Form(default="storytelling", description="storytelling|visual_first (diagnostics)"),
+        sheets: list[UploadFile] = File(default=[]),
+    ):
+        """Submit an async Edit Planning job. Returns {job_id,status} promptly (no model call). Idempotent on
+        operation_id; a same-id DIFFERENT-payload submit is 409. Stages derived sheets to encrypted S3, then
+        enqueues for the worker."""
+        import json as _json
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        try:
+            parsed = EditPlanRequest.model_validate_json(body)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"invalid edit-plan body json: {e}")
+        try:
+            order = _json.loads(sheet_order)
+            assert isinstance(order, list) and all(isinstance(x, str) for x in order)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"invalid sheet_order json: {e}")
+        if len(sheets) > _MM_EDIT_MAX_SHEETS:
+            raise HTTPException(status_code=413, detail=f"too many contact sheets (> {_MM_EDIT_MAX_SHEETS})")
+        if len(order) != len(sheets):
+            raise HTTPException(status_code=422, detail="sheet_order length must match sheets count")
+        known_ids = {str(m.get("id")) for m in parsed.moments if isinstance(m, dict)}
+        staged: list[tuple[str, bytes]] = []
+        digests: list[str] = []
+        total = 0
+        for f, mid in zip(sheets, order):
+            if (f.content_type or "").lower() not in _MM_EDIT_ALLOWED_TYPES:
+                raise HTTPException(status_code=415, detail=f"unsupported sheet type: {f.content_type}")
+            if mid not in known_ids:
+                raise HTTPException(status_code=422, detail=f"contact sheet maps to unknown Moment id {mid}")
+            data = await f.read()
+            if len(data) > _MM_EDIT_MAX_SHEET_BYTES:
+                raise HTTPException(status_code=413, detail="a contact sheet exceeds the per-sheet size limit")
+            total += len(data)
+            if total > _MM_EDIT_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="total image payload exceeds the size limit")
+            staged.append((mid, data))
+            digests.append(_jobs.sheet_digest(data))
+
+        store = _job_store()
+        fp = _jobs.payload_fingerprint(body, order, bool(critique_revision), approach,
+                                       creative_brief=creative_brief, sheet_digests=digests)
+        jid = _jobs.job_id_for(operation_id)
+        # Stage BEFORE create so the worker always finds its inputs. Re-staging on a duplicate is harmless
+        # (same prefix, same content). Body carries brief + critique + approach so the worker is self-contained.
+        import json as _j2
+        body_envelope = _j2.dumps({"body": body, "sheet_order": order, "creative_brief": creative_brief,
+                                    "critique_revision": bool(critique_revision), "approach": approach})
+        prefix = store.stage_request(jid, body_envelope, staged)
+        try:
+            job_id, created = store.create_or_get(
+                operation_id=operation_id, owner=owner, approach=approach,
+                critique_requested=bool(critique_revision), staging_prefix=prefix,
+                sheet_order=order, payload_fingerprint=fp)
+        except _jobs.PayloadConflict as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if created:
+            store.enqueue(job_id)
+        log.info("edit_plan_job_submitted", extra={"operation": "edit_plan_job", "job_id": job_id,
+                 "job_created": created, "approach": approach, "sheet_count": len(staged),
+                 "image_payload_bytes": total, "critique_requested": bool(critique_revision)})
+        return {"job_id": job_id, "status": "queued"}
+
+    @app.get("/v1/edit-plan-jobs/{job_id}")
+    def get_edit_plan_job(job_id: str):
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        job = _job_store().get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        out = {k: job.get(k) for k in ("job_id", "status", "approach", "failure_category",
+                                       "failure_detail", "diagnostics")}
+        if job.get("status") == "completed":
+            out["plan"] = job.get("plan")
+        return out
+
+    @app.post("/v1/edit-plan-jobs/{job_id}/cancel")
+    def cancel_edit_plan_job(job_id: str):
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        store = _job_store()
+        if not store.get(job_id):
+            raise HTTPException(status_code=404, detail="job not found")
+        return {"job_id": job_id, "status": store.request_cancel(job_id)}
+
+    @app.post("/v1/edit-plan-jobs/_reconcile")
+    def reconcile_edit_plan_jobs():
+        """Lost-enqueue recovery sweep (concern 6). Called by a scheduled EventBridge rule in CDK; also
+        callable manually in dev. Re-enqueues only never-leased stranded queued jobs, capped."""
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        return {"reenqueued": _job_store().reconcile_lost_enqueue()}
 
     @app.post("/v1/music-plan", response_model=MusicPlanContract, status_code=200)
     def music_plan(

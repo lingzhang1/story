@@ -51,16 +51,28 @@ def job_id_for(operation_id: str) -> str:
     return str(uuid.uuid5(_JOB_NS, operation_id.strip()))
 
 
-def payload_fingerprint(body_json: str, sheet_order: list[str], critique: bool, approach: str) -> str:
-    """Stable hash of the request payload so the SAME operation_id with a DIFFERENT payload is a conflict,
-    not a silent idempotent recovery (concern 2)."""
+def payload_fingerprint(body_json: str, sheet_order: list[str], critique: bool, approach: str,
+                        creative_brief: str | None = None,
+                        sheet_digests: list[str] | None = None) -> str:
+    """Stable hash of the FULL request payload so the SAME operation_id with a DIFFERENT payload is a conflict,
+    not a silent idempotent recovery (concern 2 / adjustment 2). Includes body, sheet order, critique flag,
+    approach, the creative brief, AND a content digest of each staged JPEG (so swapping the images under the
+    same op_id is also detected). sheet_digests are sha256 hex of each sheet's bytes, in sheet_order."""
     import hashlib
     h = hashlib.sha256()
     h.update(body_json.encode("utf-8"))
-    h.update(b"\x00" + json.dumps(sheet_order, sort_keys=True).encode("utf-8"))
-    h.update(b"\x00" + (b"1" if critique else b"0"))
-    h.update(b"\x00" + approach.encode("utf-8"))
+    h.update(b"\x00order\x00" + json.dumps(sheet_order, sort_keys=True).encode("utf-8"))
+    h.update(b"\x00crit\x00" + (b"1" if critique else b"0"))
+    h.update(b"\x00appr\x00" + approach.encode("utf-8"))
+    h.update(b"\x00brief\x00" + (creative_brief or "").encode("utf-8"))
+    h.update(b"\x00sheets\x00" + json.dumps(sheet_digests or [], sort_keys=False).encode("utf-8"))
     return h.hexdigest()
+
+
+def sheet_digest(data: bytes) -> str:
+    """sha256 of one contact-sheet JPEG's bytes — folded into the payload fingerprint (adjustment 2)."""
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
 
 
 # Reconcile: re-enqueue only truly-stranded jobs (concern 6).
