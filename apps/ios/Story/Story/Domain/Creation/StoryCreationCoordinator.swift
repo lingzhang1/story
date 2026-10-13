@@ -276,8 +276,16 @@ final class StoryCreationCoordinator {
         // ---- planning: call the Edit Planner; typed failures -> failed; NEVER fabricate a montage ----
         state = .planning
         var plan: EditPlanV2
+        // Phase-3 routing: the user's REQUESTED editing approach, gated by the deployment safety flag.
+        // Visual-first => multimodal (/v1/edit-plan-mm) ONLY when the flag is on; otherwise, and for
+        // Storytelling, use the frozen text-only path. The flag remains the deployment gate: the Customize UI
+        // only OFFERS Visual-first when the flag is on, so an unavailable option is never selectable — but we
+        // defend here too (a persisted visual_first from a prior enabled build must not force multimodal if
+        // the flag is now off).
+        let requested = story.effectiveEditingApproach
+        let wantMultimodal = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
         do {
-            if StoryMultimodalPlanning.enabled {
+            if wantMultimodal {
                 // MVP MULTIMODAL: build bounded Tier-1 contact sheets for the included Moments, run the adaptive
                 // visual-budget preflight (deterministic, no model call), then plan WITH visual evidence +
                 // the versioned creative brief. planMultimodal falls back to text-only on any IMAGE-input
@@ -289,22 +297,35 @@ final class StoryCreationCoordinator {
                     creativeBrief: StoryMultimodalPlanning.creativeBrief,
                     creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion)
                 plan = outcome.plan
+                // Fallback transparency: requested stays visual_first; actual is visual_first ONLY if images
+                // actually reached the planner, else storytelling (text-only fallback) — never claim visual
+                // analysis that did not happen.
+                let actual: EditingApproach = outcome.usedMultimodal ? .visualFirst : .storytelling
                 lastPlanningDiagnostics = StoryPlanningDiagnostics(
                     usedMultimodal: outcome.usedMultimodal, sheetCount: outcome.sheetCount,
                     imageBytes: outcome.imageBytes, momentsTextOnly: budget.momentsTextOnly,
                     selectedTier: budget.selectedTier, appliedSteps: budget.appliedSteps,
-                    fallbackReason: outcome.fallbackReason, creativeBriefVersion: outcome.creativeBriefVersion)
+                    fallbackReason: outcome.fallbackReason, creativeBriefVersion: outcome.creativeBriefVersion,
+                    requestedApproach: requested, actualApproach: actual)
                 // DIAGNOSTIC BEACON: make the on-device multimodal DECISION visible in the App Runner access log
                 // (GET /health?music=editplan:...). This is the only way to see WHY a run used multimodal or
                 // fell back WITHOUT an attached Xcode debugger — the decision happens on device, before/around
                 // the request, so the server's own logs cannot explain a no-sheets or flag-off outcome. No image
                 // bytes/content, only counts + the fallback reason.
                 MediaEngineV1.beacon(
-                    "editplan: mm=\(outcome.usedMultimodal) sheets=\(outcome.sheetCount) "
-                    + "budgetSheets=\(budget.sheets.count) textOnlyMoments=\(budget.momentsTextOnly) "
-                    + "tier=\(budget.selectedTier) fb=\(outcome.fallbackReason ?? "none")")
+                    "editplan: req=\(requested.rawValue) actual=\(actual.rawValue) mm=\(outcome.usedMultimodal) "
+                    + "sheets=\(outcome.sheetCount) budgetSheets=\(budget.sheets.count) "
+                    + "textOnlyMoments=\(budget.momentsTextOnly) tier=\(budget.selectedTier) "
+                    + "fb=\(outcome.fallbackReason ?? "none")")
             } else {
-                MediaEngineV1.beacon("editplan: mm=flag_off (STORY_MULTIMODAL_PLANNING not enabled)")
+                // Storytelling (or Visual-first requested but the flag is off / unavailable): frozen text-only.
+                let reason = requested.requiresMultimodal ? "flag_off_requested_visual_first" : "storytelling_requested"
+                lastPlanningDiagnostics = StoryPlanningDiagnostics(
+                    usedMultimodal: false, sheetCount: 0, imageBytes: 0, momentsTextOnly: 0,
+                    selectedTier: "text_only", appliedSteps: [], fallbackReason:
+                        requested.requiresMultimodal ? "visual_first_unavailable_flag_off" : nil,
+                    creativeBriefVersion: nil, requestedApproach: requested, actualApproach: .storytelling)
+                MediaEngineV1.beacon("editplan: req=\(requested.rawValue) actual=storytelling mm=false (\(reason))")
                 plan = try await planner.plan(build.request)
             }
         } catch EditPlannerServiceError.unavailable {

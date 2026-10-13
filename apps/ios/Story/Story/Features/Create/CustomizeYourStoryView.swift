@@ -10,8 +10,12 @@ struct CustomizeYourStoryView: View {
     let rec: DurationRecommendation
     let inferredSound: SoundPreference?         // advisory recommendation (nil => none inferred)
     let initialExplicitSound: SoundPreference?  // the user's prior explicit choice, if any
-    /// Returns the chosen duration (seconds) + the user's sound choice (always explicit once they press Create).
-    let onCreate: (Double, SoundPreference, String) -> Void
+    let initialEditingApproach: EditingApproach // the Story's current approach (default .storytelling)
+    /// Whether the Visual-first option can be honored right now (StoryMultimodalPlanning.enabled). When false
+    /// the Editing Approach section is HIDDEN entirely — we never present an option that silently can't run.
+    let visualFirstAvailable: Bool
+    /// Returns chosen duration (seconds), sound choice, length wire, and the chosen editing approach.
+    let onCreate: (Double, SoundPreference, String, EditingApproach) -> Void
     let onCancel: () -> Void
 
     enum LengthChoice: Hashable { case highlights, full, custom
@@ -20,16 +24,22 @@ struct CustomizeYourStoryView: View {
 
     @State private var length: LengthChoice
     @State private var sound: SoundPreference
+    @State private var approach: EditingApproach
     @State private var customSeconds: Double
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
-         onCreate: @escaping (Double, SoundPreference, String) -> Void, onCancel: @escaping () -> Void) {
+         initialEditingApproach: EditingApproach = .default, visualFirstAvailable: Bool = false,
+         onCreate: @escaping (Double, SoundPreference, String, EditingApproach) -> Void, onCancel: @escaping () -> Void) {
         self.rec = rec; self.inferredSound = inferredSound; self.initialExplicitSound = initialExplicitSound
+        self.initialEditingApproach = initialEditingApproach; self.visualFirstAvailable = visualFirstAvailable
         self.onCreate = onCreate; self.onCancel = onCancel
         // Default length: Full Story when a recommended point exists, else Custom.
         _length = State(initialValue: rec.recommendedPointSeconds != nil ? .full : .custom)
         // Default sound: the user's explicit choice if any, else the inferred recommendation, else balanced.
         _sound = State(initialValue: initialExplicitSound ?? inferredSound ?? .balanced)
+        // Default approach: the Story's current approach (defaults to .storytelling). If Visual-first is not
+        // available, force storytelling so a hidden section can never leave a non-honorable selection.
+        _approach = State(initialValue: visualFirstAvailable ? initialEditingApproach : .storytelling)
         let seed = rec.recommendedPointSeconds
             ?? ((rec.evidence.feasibleBandSeconds.first ?? 10) + (rec.evidence.feasibleBandSeconds.last ?? 30)) / 2
         _customSeconds = State(initialValue: seed.rounded())
@@ -95,7 +105,19 @@ struct CustomizeYourStoryView: View {
                     soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
                 }
 
-                Button { onCreate(chosenSeconds, sound, length.wire) } label: {
+                // SECTION C — Editing approach (shown ONLY when Visual-first can actually be honored; the
+                // feature flag is the deployment safety gate, so we never present an option that silently
+                // cannot run). Both approaches preserve the chosen length, music, and original sounds.
+                if visualFirstAvailable {
+                    section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
+                        approachRow(.storytelling)
+                        approachRow(.visualFirst)
+                        Text("Both approaches preserve your chosen length, music, and original sounds.")
+                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
+                    }
+                }
+
+                Button { onCreate(chosenSeconds, sound, length.wire, approach) } label: {
                     Text("Create my Story").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
                         .frame(maxWidth: .infinity).padding(.vertical, 16)
                         .background(StoryTheme.cream).clipShape(Capsule())
@@ -128,6 +150,35 @@ struct CustomizeYourStoryView: View {
         let isRec = (initialExplicitSound == nil && inferredSound == value)
         row(selected: sound == value, title: title,
             detail: detail, trailing: isRec ? "Recommended" : nil) { sound = value }
+    }
+
+    /// A whole-row Editing-Approach option: icon + title + description + a gold supporting line (speed/effort),
+    /// matching the Figma mock. Reuses the same gold-ring + check selected state as the other sections.
+    @ViewBuilder
+    private func approachRow(_ value: EditingApproach) -> some View {
+        let selected = approach == value
+        Button { approach = value } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? StoryTheme.gold : StoryTheme.textMuted)
+                    .font(.system(size: 18))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(value.title).font(StoryTheme.body(16, .medium)).foregroundStyle(StoryTheme.cream)
+                    Text(value.detail).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(value.supporting).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: value.icon).foregroundStyle(selected ? StoryTheme.gold : StoryTheme.textMuted)
+                    .font(.system(size: 16))
+            }
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(StoryTheme.surfaceAlt.opacity(selected ? 0.9 : 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? StoryTheme.gold : StoryTheme.cream.opacity(0.08), lineWidth: 1.5))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
     }
 
     /// A whole-row tappable option with an obvious selected state (gold ring + check).

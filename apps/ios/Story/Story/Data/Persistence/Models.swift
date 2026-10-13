@@ -100,6 +100,12 @@ final class StoryModel {
     // Additive migration (optional + defaulted nil); nil = older Story / not chosen => planner infers as before.
     var editorialMode: String?
 
+    // MVP Customize UX / Editing Approach: the user's chosen creative approach (storytelling|visual_first),
+    // persisted independently of Story Length and Sound. Additive migration (optional + defaulted nil); nil =
+    // older Story / not chosen => EditingApproach.default (storytelling, the device-verified text-only path).
+    // Never overwritten during retries, recreation, or version generation (only acceptCustomize sets it).
+    var editingApproachExplicit: String?
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -124,6 +130,12 @@ final class StoryModel {
     }
     /// True when the user has explicitly chosen (so the UI shows a user selection, not just a recommendation).
     var hasExplicitSoundPreference: Bool { SoundPreference(rawValue: soundPreferenceExplicit ?? "") != nil }
+
+    /// Resolved editing approach the pipeline should use. Tolerant of nil/unknown (older Stories) -> the safe
+    /// default (storytelling / text-only). Independent of Length + Sound.
+    var effectiveEditingApproach: EditingApproach { EditingApproach.fromRaw(editingApproachExplicit) }
+    /// True when the user explicitly chose an editing approach on the Customize screen.
+    var hasExplicitEditingApproach: Bool { EditingApproach(rawValue: editingApproachExplicit ?? "") != nil }
 
     init(
         id: UUID = UUID(),

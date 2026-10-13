@@ -53,4 +53,9 @@ struct StoryPlanningDiagnostics {
     let appliedSteps: [String]
     let fallbackReason: String?
     let creativeBriefVersion: String?
+    // Phase-4 fallback transparency: the user's REQUESTED editing approach vs what ACTUALLY ran. When
+    // Visual-first falls back to text-only, requested stays .visualFirst while actual becomes .storytelling,
+    // and usedMultimodal is false — so we never claim the footage was visually analyzed when it was not.
+    var requestedApproach: EditingApproach = .storytelling
+    var actualApproach: EditingApproach = .storytelling
 }
