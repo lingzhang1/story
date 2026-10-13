@@ -159,6 +159,7 @@ export class StoryApiStack extends cdk.Stack {
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,
         STORY_WORKER_DEADLINE_S: "840",
+        STORY_WORKER_ALLOW_TEST_DELAY: "1",
         STORY_EDIT_PLAN_VERSION: "5.2",
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
       },

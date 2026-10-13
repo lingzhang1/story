@@ -105,6 +105,24 @@ def _run_one(store: _jobs.JobStore, job_id: str) -> str:
             images=images, creative_brief=env.get("creative_brief"), image_moment_order=order,
             critique_revision=bool(env.get("critique_revision")))
 
+        # ACCEPTANCE HOOK (test-only): a per-job artificial delay carried in the envelope (_test_delay_s), used
+        # to deterministically simulate a long (>120s / 180s / 300s) plan WITHOUT real model cost — proving the
+        # async path is decoupled from the old App Runner request ceiling. ONLY honored when the worker env
+        # STORY_WORKER_ALLOW_TEST_DELAY=1 (off in any real use). Bounded by the deadline; checks cancel while waiting.
+        import os as _os
+        delay = 0
+        if _os.environ.get("STORY_WORKER_ALLOW_TEST_DELAY") == "1":
+            try:
+                delay = int(env.get("_test_delay_s") or 0)
+            except Exception:
+                delay = 0
+        if delay > 0:
+            waited = 0
+            while waited < min(delay, EXEC_DEADLINE_S - 30):
+                time.sleep(5); waited += 5
+                if store.is_cancel_requested(job_id):
+                    store.mark_cancelled(job_id); store.delete_staging(prefix); return "cancelled_during_delay"
+
         engine = _build_engine()
         plan = engine.generate(inputs)   # SAME core: v5.2 + validator + fallback + bounded critique
         diag = getattr(engine, "last_diagnostics", {}) or {}

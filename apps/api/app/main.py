@@ -922,6 +922,7 @@ def create_app() -> FastAPI:
         creative_brief: str | None = Form(default=None),
         critique_revision: bool = Form(default=False),
         approach: str = Form(default="storytelling", description="storytelling|visual_first (diagnostics)"),
+        test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it); simulates a long job"),
         sheets: list[UploadFile] = File(default=[]),
     ):
         """Submit an async Edit Planning job. Returns {job_id,status} promptly (no model call). Idempotent on
@@ -969,7 +970,8 @@ def create_app() -> FastAPI:
         # (same prefix, same content). Body carries brief + critique + approach so the worker is self-contained.
         import json as _j2
         body_envelope = _j2.dumps({"body": body, "sheet_order": order, "creative_brief": creative_brief,
-                                    "critique_revision": bool(critique_revision), "approach": approach})
+                                    "critique_revision": bool(critique_revision), "approach": approach,
+                                    "_test_delay_s": int(test_delay_s or 0)})
         prefix = store.stage_request(jid, body_envelope, staged)
         try:
             job_id, created = store.create_or_get(
