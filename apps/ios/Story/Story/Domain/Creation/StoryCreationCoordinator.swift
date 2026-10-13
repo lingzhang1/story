@@ -294,7 +294,17 @@ final class StoryCreationCoordinator {
                     imageBytes: outcome.imageBytes, momentsTextOnly: budget.momentsTextOnly,
                     selectedTier: budget.selectedTier, appliedSteps: budget.appliedSteps,
                     fallbackReason: outcome.fallbackReason, creativeBriefVersion: outcome.creativeBriefVersion)
+                // DIAGNOSTIC BEACON: make the on-device multimodal DECISION visible in the App Runner access log
+                // (GET /health?music=editplan:...). This is the only way to see WHY a run used multimodal or
+                // fell back WITHOUT an attached Xcode debugger — the decision happens on device, before/around
+                // the request, so the server's own logs cannot explain a no-sheets or flag-off outcome. No image
+                // bytes/content, only counts + the fallback reason.
+                MediaEngineV1.beacon(
+                    "editplan: mm=\(outcome.usedMultimodal) sheets=\(outcome.sheetCount) "
+                    + "budgetSheets=\(budget.sheets.count) textOnlyMoments=\(budget.momentsTextOnly) "
+                    + "tier=\(budget.selectedTier) fb=\(outcome.fallbackReason ?? "none")")
             } else {
+                MediaEngineV1.beacon("editplan: mm=flag_off (STORY_MULTIMODAL_PLANNING not enabled)")
                 plan = try await planner.plan(build.request)
             }
         } catch EditPlannerServiceError.unavailable {
