@@ -139,6 +139,25 @@ _AU_ALLOWED_TYPES = {"image/jpeg", "image/jpg"}
 # Story Coverage (Milestone E) — JSON (text-only, no media). Generous moment cap.
 _COV_MAX_MOMENTS = 200
 
+# MVP Multimodal Edit Planner (Tier-1 contact sheets) — one tiled JPEG per Moment attached to the SAME
+# /v1/edit-plan-mm request. Derived evidence only (never source video). Ephemeral: NOT persisted server-side.
+# Limits mirror the AU multipart ceilings and act as a server-side backstop to the device-side adaptive
+# preflight — the device should already fit under these; the server rejects anything that does not.
+_MM_EDIT_MAX_SHEETS = 120                       # one sheet per Moment; 100-Moment stress case + headroom
+_MM_EDIT_MAX_SHEET_BYTES = 1 * 1024 * 1024      # 1 MB per tiled contact-sheet JPEG
+_MM_EDIT_MAX_TOTAL_BYTES = 20 * 1024 * 1024     # 20 MB total image payload ceiling
+_MM_EDIT_ALLOWED_TYPES = {"image/jpeg", "image/jpg"}
+
+# MVP application-level creative brief (VERSIONED). Injected into the Edit Planner USER message only — the
+# frozen v5.2 system body is never touched. Owner-authored 2026-10-13. Bump the version suffix on any edit.
+MM_CREATIVE_BRIEF_VERSION = "shortform_mvp/1"
+MM_CREATIVE_BRIEF = (
+    "When user intent does not require chronology, prioritize visually engaging and meaningful footage. "
+    "Find a compelling opening, construct coherent visual progression, preserve important actions and "
+    "payoffs, and choose shot durations appropriate to the material. Do not force a conventional "
+    "travel-diary structure."
+)
+
 
 class StoryCoverageRequest(BaseModel):
     """POST /v1/story-coverage body. COMPACT structured inputs only — the client sends
@@ -683,7 +702,8 @@ def create_app() -> FastAPI:
         started = time.monotonic()
         base = {"operation": "edit_plan", "correlation_id": correlation_id,
                 "task": "edit_plan.generate", "schema_version": "edit_plan/2",
-                "has_music_analysis": body.music_analysis is not None, "moment_count": len(body.moments)}
+                "has_music_analysis": body.music_analysis is not None, "moment_count": len(body.moments),
+                "planning_mode": "text_only"}
         inputs = EditPlanInputs(
             story_id=str(body.story_id), creative_intent_id=str(body.creative_intent_id),
             creative_intent=body.creative_intent, story_guide=body.story_guide,
@@ -692,6 +712,14 @@ def create_app() -> FastAPI:
             music_plan_id=str(body.music_plan_id) if body.music_plan_id else None,
             music_analysis=body.music_analysis, sound_preference=body.sound_preference,
             editorial_mode=body.editorial_mode)
+        return _execute_edit_plan(engine, inputs, base, started)
+
+    def _execute_edit_plan(engine, inputs, base, started):
+        """Shared planning core for the text-only (/v1/edit-plan) and multimodal (/v1/edit-plan-mm) endpoints:
+        run engine.generate under the identical exception ladder + logging. Keeping ONE core guarantees the
+        multimodal path has the SAME deterministic validation, infeasibility handling, and failure semantics as
+        the frozen text-only path — the only difference between the two is the EditPlanInputs it is handed."""
+        body_moments = inputs.moments
         try:
             plan = engine.generate(inputs)
         except MalformedPlanError as e:
@@ -706,9 +734,9 @@ def create_app() -> FastAPI:
             #   coverage < target  -> genuine MATERIAL infeasibility: 422, client may create a shorter Story.
             #   coverage >= target -> material is sufficient; the model refused anyway = PLANNING DEFECT, not
             #                         material insufficiency. Distinct 422 that must NOT route to shorter-Story.
-            ev = compute_duration_evidence(body.moments)
+            ev = compute_duration_evidence(body_moments)
             cov = ev.get("total_useful_coverage_seconds") or 0.0
-            target = (body.creative_intent or {}).get("target_duration_seconds") or 0.0
+            target = (inputs.creative_intent or {}).get("target_duration_seconds") or 0.0
             material_insufficient = bool(target) and cov < target
             klass = "material_infeasible" if material_insufficient else "planning_defect_unsupported_infeasibility"
             log.warning("edit_plan_infeasible",
@@ -742,8 +770,8 @@ def create_app() -> FastAPI:
                                "truncation_escalations": diag.get("truncation_escalations", 0),
                                "input_tokens": diag.get("input_tokens"),
                                # INPUT SIZE: moment count + the serialized request payload bytes.
-                               "n_moments": len(body.moments),
-                               "request_bytes": len(json.dumps(body.moments, default=str))})
+                               "n_moments": len(body_moments),
+                               "request_bytes": len(json.dumps(body_moments, default=str))})
             raise HTTPException(status_code=503,
                                 detail="edit plan could not be made executable; retry")
         except ProviderError as e:
@@ -760,6 +788,80 @@ def create_app() -> FastAPI:
                    "truncation_escalations": diag.get("truncation_escalations", 0),
                    "last_max_tokens_used": diag.get("last_max_tokens_used")})
         return plan
+
+    @app.post("/v1/edit-plan-mm", response_model=EditPlanV2Contract, status_code=200)
+    async def edit_plan_mm(
+        body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
+        sheet_order: str = Form(..., description="JSON array of Moment ids, one per contact-sheet, in sheets[] order"),
+        creative_brief: str | None = Form(default=None, description="versioned app-level brief; omit for none"),
+        sheets: list[UploadFile] = File(default=[], description="bounded Tier-1 contact-sheet JPEGs, one per Moment"),
+        engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+    ) -> EditPlanV2Contract:
+        """MVP MULTIMODAL Edit Planner. Same frozen edit_plan/2 contract, same deterministic validator, same
+        exception semantics as /v1/edit-plan — it additionally attaches bounded, DERIVED Tier-1 contact-sheet
+        JPEGs (one per Moment) and an optional versioned creative brief to the SAME planning call. Images are
+        EPHEMERAL (never persisted) and are validated against server-side size/count ceilings as a backstop to
+        the device adaptive preflight. On ANY image-input problem the device is expected to retry text-only via
+        /v1/edit-plan; this endpoint never fabricates missing evidence. The frozen v5.2 SYSTEM body is untouched
+        — the brief and the image-mapping line live only in the user message."""
+        import json as _json
+        from model_gateway import ImageInput
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+
+        # --- parse the JSON body as the SAME shape /v1/edit-plan validates (reuse the Pydantic model) --------
+        try:
+            parsed = EditPlanRequest.model_validate_json(body)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"invalid edit-plan body json: {e}")
+        try:
+            order = _json.loads(sheet_order)
+            if not isinstance(order, list) or not all(isinstance(x, str) for x in order):
+                raise ValueError("sheet_order must be a JSON array of Moment id strings")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"invalid sheet_order json: {e}")
+
+        # --- validate the contact sheets (count / per-sheet bytes / total bytes / type) ---------------------
+        if len(sheets) > _MM_EDIT_MAX_SHEETS:
+            raise HTTPException(status_code=413, detail=f"too many contact sheets (> {_MM_EDIT_MAX_SHEETS})")
+        if len(order) != len(sheets):
+            raise HTTPException(status_code=422, detail="sheet_order length must match sheets count")
+        known_ids = {str(m.get("id")) for m in parsed.moments if isinstance(m, dict)}
+        images: list[ImageInput] = []
+        total = 0
+        for f, mid in zip(sheets, order):
+            if (f.content_type or "").lower() not in _MM_EDIT_ALLOWED_TYPES:
+                raise HTTPException(status_code=415, detail=f"unsupported sheet type: {f.content_type}")
+            if mid not in known_ids:
+                # A sheet that maps to no Moment in the body is a client bug — never silently drop a Moment,
+                # and never attach an orphan image.
+                raise HTTPException(status_code=422, detail=f"contact sheet maps to unknown Moment id {mid}")
+            data = await f.read()
+            if len(data) > _MM_EDIT_MAX_SHEET_BYTES:
+                raise HTTPException(status_code=413, detail="a contact sheet exceeds the per-sheet size limit")
+            total += len(data)
+            if total > _MM_EDIT_MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="total image payload exceeds the size limit")
+            images.append(ImageInput(data=data, media_type="image/jpeg"))
+
+        base = {"operation": "edit_plan", "correlation_id": correlation_id,
+                "task": "edit_plan.generate", "schema_version": "edit_plan/2",
+                "has_music_analysis": parsed.music_analysis is not None, "moment_count": len(parsed.moments),
+                "planning_mode": "multimodal" if images else "text_only",
+                "sheet_count": len(images), "image_payload_bytes": total,
+                "creative_brief_present": bool(creative_brief)}
+        inputs = EditPlanInputs(
+            story_id=str(parsed.story_id), creative_intent_id=str(parsed.creative_intent_id),
+            creative_intent=parsed.creative_intent, story_guide=parsed.story_guide,
+            story_coverage=parsed.story_coverage, moments=parsed.moments, music_plan=parsed.music_plan,
+            output_format=parsed.output_format, music_asset_id=parsed.music_asset_id,
+            music_plan_id=str(parsed.music_plan_id) if parsed.music_plan_id else None,
+            music_analysis=parsed.music_analysis, sound_preference=parsed.sound_preference,
+            editorial_mode=parsed.editorial_mode,
+            images=images, creative_brief=creative_brief, image_moment_order=order)
+        # Offload the blocking Bedrock call off the event loop (this handler is async). Same pattern as AU.
+        import anyio as _anyio
+        return await _anyio.to_thread.run_sync(_execute_edit_plan, engine, inputs, base, started)
 
     @app.post("/v1/music-plan", response_model=MusicPlanContract, status_code=200)
     def music_plan(

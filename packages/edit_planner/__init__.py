@@ -17,7 +17,7 @@ OPTIONALLY a selected MusicAsset + MusicAnalysis. Music is OPTIONAL — no-music
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
@@ -279,6 +279,13 @@ class EditPlanInputs:
     music_analysis: dict | None = None  # frozen music_analysis/1 shape; None => no-music planning
     sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
     editorial_mode: str | None = None  # highlights|full|custom; None => infer from duration (back-compat). Advisory; no schema change.
+    # MVP multimodal (additive, no schema/contract change): bounded Tier-1 contact-sheet JPEGs (one per Moment,
+    # in moments[] order) attached to the SAME request. Empty => text-only A1 planning (the frozen fallback).
+    images: list[Any] = field(default_factory=list)  # list[model_gateway.ImageInput]
+    # MVP creative direction (additive): a bounded, versioned application-level brief injected into the USER
+    # message only — NEVER the frozen v5.2 system body. None => no brief (behavior unchanged).
+    creative_brief: str | None = None
+    image_moment_order: list[str] = field(default_factory=list)  # Moment ids matching images[], for the map line
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +380,26 @@ def _build_user(inputs: EditPlanInputs) -> str:
         payload["sound_preference"] = inputs.sound_preference
     if inputs.editorial_mode:
         payload["editorial_mode"] = inputs.editorial_mode
+    # MVP creative direction — injected into the USER message only (frozen v5.2 body untouched).
+    brief_block = ""
+    if inputs.creative_brief:
+        brief_block = ("\n=== CREATIVE DIRECTION ===\n" + inputs.creative_brief.strip()
+                       + "\n=== END CREATIVE DIRECTION ===\n")
+    # MVP multimodal — tell the model that timestamped contact-sheet frames accompany the text, mapped to
+    # Moment ids in this exact order. Present ONLY when images are attached (text-only path omits it entirely).
+    image_block = ""
+    if inputs.images and inputs.image_moment_order:
+        order = "; ".join(inputs.image_moment_order)
+        image_block = (
+            f"\n(Contact-sheet images, one tiled JPEG per Moment, in this order: {order})\n"
+            "VISUAL EVIDENCE: in addition to the text, you receive timestamped contact-sheet frames for each "
+            "Moment, labeled with Moment id and source timestamp. Use them to judge visual distinctness, "
+            "composition, expressiveness and precise source ranges. Frames are evidence for the SAME Moments "
+            "in the JSON — never invent footage not present.\n")
     return ("Plan the EditPlan for THIS Story from the material below. Use only the given Moment ids and their "
             "real/useful ranges. Plan to the Story target duration. Respect native audio.\n"
+            + brief_block
+            + image_block
             + _edit_sound_pref_directive(inputs.sound_preference)
             + _edit_mode_directive(inputs.editorial_mode)
             + "\nINPUT:\n"
@@ -531,7 +556,8 @@ class RealEditPlannerEngine:
                 req = StructuredRequest(
                     task=TASK, schema=SCHEMA, prompt_version=PROMPT_VERSION, system=self._system,
                     user_content=user_content, max_repair_attempts=2,
-                    max_tokens=cap, temperature=0.0)
+                    max_tokens=cap, temperature=0.0,
+                    images=list(inputs.images))   # MVP multimodal: contact sheets ride every call (incl. repair)
                 result = self._gw.generate_structured(req)  # raises StructuredOutputError/ProviderError
                 diag["model_calls"] += 1
                 u = result.usage

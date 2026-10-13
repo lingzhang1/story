@@ -508,3 +508,85 @@ def test_no_escalation_when_not_truncated():
     eng = RealEditPlannerEngine(gw2, max_tokens=8192, max_tokens_ceiling=16384)
     eng.generate(_target12_inputs())
     assert gw2.calls == 1                                # exactly one call, no escalation
+
+
+# ===========================================================================
+# MVP Multimodal Edit Planner — contact sheets + versioned creative brief.
+# The frozen v5.2 SYSTEM body is never touched; images + brief ride the USER
+# message / StructuredRequest.images. Text-only path stays byte-identical.
+# ===========================================================================
+from model_gateway import ImageInput  # noqa: E402
+
+
+def test_engine_attaches_images_and_brief_to_request():
+    gw = FakeModelGateway(response=_good_plan())
+    eng = RealEditPlannerEngine(gw)
+    inp = _inputs(images=[ImageInput(data=b"JPEGBYTES")],
+                  creative_brief="Prioritize visually engaging footage.",
+                  image_moment_order=[M1])
+    eng.generate(inp)
+    req = gw.calls[-1]
+    assert len(req.images) == 1 and req.images[0].data == b"JPEGBYTES"
+    assert "=== CREATIVE DIRECTION ===" in req.user_content
+    assert "Prioritize visually engaging footage." in req.user_content
+    assert f"in this order: {M1}" in req.user_content
+
+
+def test_engine_text_only_request_has_no_images_or_brief():
+    gw = FakeModelGateway(response=_good_plan())
+    RealEditPlannerEngine(gw).generate(_inputs())  # no images / brief
+    req = gw.calls[-1]
+    assert req.images == []
+    assert "CREATIVE DIRECTION" not in req.user_content
+    assert "Contact-sheet images" not in req.user_content
+
+
+def _mm_parts(music=False, moment_ids=None, brief=None):
+    body = _req_body(music=music)
+    ids = moment_ids if moment_ids is not None else [m["id"] for m in body["moments"][:1]]
+    data = {"body": json.dumps(body), "sheet_order": json.dumps(ids)}
+    if brief is not None:
+        data["brief"] = brief
+    return body, ids, data
+
+
+def test_endpoint_mm_success_with_sheets():
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body, ids, data = _mm_parts()
+    if "brief" in data:  # creative_brief is a separate form field named creative_brief
+        data["creative_brief"] = data.pop("brief")
+    files = [("sheets", (f"{mid}.jpg", b"\xff\xd8\xff" + b"x" * 50, "image/jpeg")) for mid in ids]
+    r = client.post("/v1/edit-plan-mm", data=data, files=files)
+    assert r.status_code == 200, r.text
+    assert r.json()["schema_version"] == "edit_plan/2"
+
+
+def test_endpoint_mm_text_only_fallback_no_sheets():
+    # No sheets attached => the SAME frozen planning path, 200 (graceful text-only).
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body = _req_body()
+    r = client.post("/v1/edit-plan-mm",
+                    data={"body": json.dumps(body), "sheet_order": json.dumps([])})
+    assert r.status_code == 200, r.text
+
+
+def test_endpoint_mm_rejects_sheet_for_unknown_moment():
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body = _req_body()
+    bad_id = str(uuid4())
+    files = [("sheets", (f"{bad_id}.jpg", b"\xff\xd8\xffxx", "image/jpeg"))]
+    r = client.post("/v1/edit-plan-mm",
+                    data={"body": json.dumps(body), "sheet_order": json.dumps([bad_id])},
+                    files=files)
+    assert r.status_code == 422
+    assert "unknown Moment id" in r.json()["detail"]
+
+
+def test_endpoint_mm_rejects_order_count_mismatch():
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body = _req_body()
+    files = [("sheets", (f"{M1}.jpg", b"\xff\xd8\xffxx", "image/jpeg"))]
+    r = client.post("/v1/edit-plan-mm",
+                    data={"body": json.dumps(body), "sheet_order": json.dumps([M1, M2])},  # 2 ids, 1 sheet
+                    files=files)
+    assert r.status_code == 422
