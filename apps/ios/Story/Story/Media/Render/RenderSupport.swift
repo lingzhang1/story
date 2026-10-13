@@ -231,7 +231,7 @@ enum EditPlanRequestBuilder {
                 "duration_seconds": .number(dur),
                 "useful_segments": .array(usefulSegmentPairs(from: understanding, duration: dur)),
                 "summary": understandingSummary(understanding),
-            ]))
+            ].merging(Self.evidenceField(understanding)) { _, new in new }))
         }
         guard !moments.isEmpty else { return nil }
         // CreativeIntent WITHOUT inventing a target — carry one ONLY if the Story already has it set.
@@ -279,7 +279,7 @@ enum EditPlanRequestBuilder {
                 "useful_segments": .array(useful),
                 // Pass the understanding summary through so the planner has narrative grounding (optional).
                 "summary": understandingSummary(understanding),
-            ]))
+            ].merging(Self.evidenceField(understanding)) { _, new in new }))
             included.append(media)
         }
 
@@ -405,6 +405,115 @@ enum EditPlanRequestBuilder {
         let cap = 600
         if out.count > cap { out = String(out.prefix(cap)) + "…" }
         return .string(out)
+    }
+
+    // MARK: - A1 richer-evidence forwarding (owner-approved 2026-10-12; multimodal experiment addendum)
+
+    /// Per-Moment bounds for the A1 structured `evidence` object. Chosen so a 100-Moment request stays well
+    /// under a reasonable request budget: subjects ≤ MAX_SUBJECTS, events ≤ MAX_EVENTS each trimmed to
+    /// MAX_EVENT_CHARS, summary ≤ MAX_SUMMARY_CHARS, temporal note ≤ MAX_NOTE_CHARS, and the whole evidence
+    /// object serialized is hard-capped at MAX_EVIDENCE_CHARS as a belt-and-suspenders ceiling. These replace
+    /// the single destructive 600-char prose cap with a STRUCTURED, measured budget that keeps event
+    /// timestamps explicit instead of dropping them.
+    private static let MAX_SUBJECTS = 10
+    private static let MAX_EVENTS = 8
+    private static let MAX_EVENT_CHARS = 90
+    private static let MAX_SUMMARY_CHARS = 320
+    private static let MAX_NOTE_CHARS = 200
+    private static let MAX_EVIDENCE_CHARS = 1400
+
+    /// Arm A1 (owner-approved): a DETERMINISTIC, BOUNDED, STRUCTURED evidence object forwarded to the planner
+    /// ALONGSIDE the legacy `summary`. Unlike `understandingSummary` (which folds everything into one prose
+    /// string capped at 600 chars — truncating subjects/accessories/timings on rich clips), this preserves the
+    /// AU facts the planner needs as structure: fuller subjects, events WITH their source timestamps, and the
+    /// temporal order note. Only real present AU fields are used — never fabricated — de-duplicated, each field
+    /// individually bounded, and the whole object hard-capped. No new model call, no frozen AU-prompt change,
+    /// no EditPlan/2 change (this is an additive request-grounding field the planner already reads as context).
+    /// Returns `.null` when the AU output has no observed block (older/partial records) so the field is omitted.
+    static func richEvidence(from understanding: JSONValue) -> JSONValue {
+        guard case let .object(root) = understanding,
+              case let .object(observed)? = root["observed"] else { return .null }
+
+        func clip(_ s: String, _ n: Int) -> String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.count > n ? String(t.prefix(n)) + "…" : t
+        }
+
+        var obj: [String: JSONValue] = [:]
+
+        if case let .string(summary)? = observed["summary"], !summary.isEmpty {
+            obj["summary"] = .string(clip(summary, MAX_SUMMARY_CHARS))
+        }
+
+        // subjects: de-duplicated (case-insensitive), bounded. These carry outfits/accessories/locations.
+        if case let .array(subjects)? = observed["subjects"] {
+            var seen = Set<String>(); var names: [JSONValue] = []
+            for v in subjects {
+                guard case let .string(s) = v else { continue }
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = t.lowercased()
+                if t.isEmpty || seen.contains(key) { continue }
+                seen.insert(key); names.append(.string(clip(t, 80)))
+                if names.count >= MAX_SUBJECTS { break }
+            }
+            if !names.isEmpty { obj["subjects"] = .array(names) }
+        }
+
+        // events: STRUCTURED {t, t_end?, what} — timestamps kept explicit (the planner can align to action
+        // beats), descriptions trimmed. Ordered as AU produced them; bounded count.
+        if case let .array(events)? = observed["events"] {
+            var evs: [JSONValue] = []
+            for v in events {
+                guard case let .object(e) = v, case let .string(d)? = e["description"], !d.isEmpty else { continue }
+                var ev: [String: JSONValue] = ["what": .string(clip(d, MAX_EVENT_CHARS))]
+                if case let .number(t)? = e["start_time"] { ev["t"] = .number((t * 10).rounded() / 10) }
+                if case let .number(te)? = e["end_time"] { ev["t_end"] = .number((te * 10).rounded() / 10) }
+                evs.append(.object(ev))
+                if evs.count >= MAX_EVENTS { break }
+            }
+            if !evs.isEmpty { obj["events"] = .array(evs) }
+        }
+
+        if case let .string(note)? = observed["temporal_order_note"], !note.isEmpty {
+            obj["temporal_order_note"] = .string(clip(note, MAX_NOTE_CHARS))
+        }
+
+        if obj.isEmpty { return .null }
+
+        // Belt-and-suspenders: if the evidence's total text somehow exceeds the hard ceiling (pathological AU),
+        // drop events from the end until it fits — events are the most verbose and the least load-bearing tail.
+        func textLen(_ o: [String: JSONValue]) -> Int {
+            var n = 0
+            for (_, v) in o {
+                switch v {
+                case .string(let s): n += s.count
+                case .array(let a):
+                    for e in a {
+                        if case let .string(s) = e { n += s.count }
+                        else if case let .object(eo) = e {
+                            for (_, ev) in eo { if case let .string(s) = ev { n += s.count } }
+                        }
+                    }
+                default: break
+                }
+            }
+            return n
+        }
+        var o = obj
+        while textLen(o) > MAX_EVIDENCE_CHARS, case let .array(evs)? = o["events"], !evs.isEmpty {
+            o["events"] = .array(Array(evs.dropLast()))
+            if case let .array(x)? = o["events"], x.isEmpty { o.removeValue(forKey: "events") }
+        }
+        return .object(o)
+    }
+
+    /// Wrap `richEvidence` as a dict to merge into a Moment payload: `["evidence": <obj>]` when present, or an
+    /// EMPTY dict when the AU record has no observed block — so `.merging` is a no-op and the payload is
+    /// byte-identical to the pre-A1 shape (backward compatibility for older/partial AU records and tests).
+    static func evidenceField(_ understanding: JSONValue) -> [String: JSONValue] {
+        let ev = richEvidence(from: understanding)
+        if case .null = ev { return [:] }
+        return ["evidence": ev]
     }
 
     /// The resolved CreativeIntent payload the planner needs, assembled from StoryModel's flattened fields.
