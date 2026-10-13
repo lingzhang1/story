@@ -68,6 +68,18 @@ struct CustomizeYourStoryView: View {
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
                 }
 
+                // SECTION — Editing approach (TOP: the primary creative decision). Shown ONLY when Visual-first
+                // can actually be honored (the feature flag is the deployment safety gate), so an unavailable
+                // option is never presented. Both approaches preserve length, music, and original sounds.
+                if visualFirstAvailable {
+                    section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
+                        approachRow(.storytelling)
+                        approachRow(.visualFirst)
+                        Text("Both approaches preserve your chosen length, music, and original sounds.")
+                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
+                    }
+                }
+
                 // SECTION A — Story Length
                 section(title: "Story length", subtitle: "Choose how much of the experience to show.") {
                     if let hi = highlightsSeconds {
@@ -103,18 +115,6 @@ struct CustomizeYourStoryView: View {
                     soundRow(.immersive, "Immersive", "Bring natural sounds, voices and atmosphere forward")
                     soundRow(.balanced, "Balanced", "Blend original sounds with background music")
                     soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
-                }
-
-                // SECTION C — Editing approach (shown ONLY when Visual-first can actually be honored; the
-                // feature flag is the deployment safety gate, so we never present an option that silently
-                // cannot run). Both approaches preserve the chosen length, music, and original sounds.
-                if visualFirstAvailable {
-                    section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
-                        approachRow(.storytelling)
-                        approachRow(.visualFirst)
-                        Text("Both approaches preserve your chosen length, music, and original sounds.")
-                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
-                    }
                 }
 
                 Button { onCreate(chosenSeconds, sound, length.wire, approach) } label: {
