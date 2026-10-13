@@ -3,6 +3,14 @@ import { Construct } from "constructs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as apprunner from "aws-cdk-lib/aws-apprunner";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
+import * as path from "path";
 
 export interface StoryApiStackProps extends cdk.StackProps {
   /** Deployment environment name (development | staging | production). */
@@ -94,6 +102,96 @@ export class StoryApiStack extends cdk.Stack {
       })
     );
 
+    // --- ASYNC EDIT PLANNING infra (owner-approved 2026-10-13, dev) ------
+    // Beats App Runner's ~120s request ceiling: App Runner submits a job, a Lambda worker runs the SAME
+    // plan/critique/validate core (up to 15 min), iOS polls. Resources: DynamoDB job table (TTL), SQS + DLQ,
+    // private SSE S3 staging for DERIVED contact sheets only (24h lifecycle), the worker Lambda, and an
+    // EventBridge reconcile tick. All names per async-edit-planning-CONTRACT.md.
+
+    // DynamoDB job table — PK job_id; TTL on expires_at (NOT immediate — reads treat past-expiry as expired).
+    const jobsTable = new dynamodb.Table(this, "EditPlanJobsTable", {
+      tableName: `story-${environment}-edit-plan-jobs`,
+      partitionKey: { name: "job_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "expires_at",
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // dev
+    });
+
+    // SQS DLQ + main queue (maxReceiveCount 2 — a poison message lands in the DLQ, never re-drives forever).
+    const dlq = new sqs.Queue(this, "EditPlanJobsDLQ", {
+      queueName: `story-${environment}-edit-plan-jobs-dlq`,
+      retentionPeriod: cdk.Duration.days(14),
+    });
+    const jobsQueue = new sqs.Queue(this, "EditPlanJobsQueue", {
+      queueName: `story-${environment}-edit-plan-jobs`,
+      visibilityTimeout: cdk.Duration.seconds(960), // > worker deadline 840s + margin
+      deadLetterQueue: { queue: dlq, maxReceiveCount: 2 },
+    });
+
+    // Private, encrypted S3 staging for DERIVED JPEG contact sheets + the request body JSON ONLY (never source
+    // video). Explicit delete on terminal; this 24h lifecycle is the backstop. No public access.
+    const stagingBucket = new s3.Bucket(this, "EditPlanStagingBucket", {
+      bucketName: `story-${environment}-edit-plan-staging-${this.account}-${this.region}`,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [{ expiration: cdk.Duration.days(1) }],
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // dev
+      autoDeleteObjects: true, // dev
+    });
+
+    // Worker Lambda — DockerImageFunction built from the SAME repo context (apps/api/Dockerfile.worker) so it
+    // bundles packages/ (edit_planner, model_gateway, edit_plan_jobs, contracts) + prompts/ exactly like the
+    // App Runner image. Conservative reserved concurrency (configurable); 15-min timeout for >120s plans.
+    const worker = new lambda.DockerImageFunction(this, "EditPlanWorker", {
+      functionName: `story-${environment}-edit-plan-worker`,
+      code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, "..", "..", ".."), {
+        file: "apps/api/Dockerfile.worker",
+      }),
+      timeout: cdk.Duration.seconds(900),
+      memorySize: 2048,
+      reservedConcurrentExecutions: Number(process.env.STORY_WORKER_CONCURRENCY ?? "2"),
+      environment: {
+        STORY_JOBS_TABLE: jobsTable.tableName,
+        STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
+        STORY_STAGING_BUCKET: stagingBucket.bucketName,
+        STORY_WORKER_DEADLINE_S: "840",
+        STORY_EDIT_PLAN_VERSION: "5.2",
+        STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
+      },
+    });
+    worker.addEventSource(new lambdaEventSources.SqsEventSource(jobsQueue, {
+      batchSize: 1,
+      reportBatchItemFailures: true,
+    }));
+    // Worker IAM: job table RW, staging get+delete+list (NOT put — only App Runner stages), Bedrock invoke.
+    jobsTable.grantReadWriteData(worker);
+    stagingBucket.grantRead(worker);
+    stagingBucket.grantDelete(worker);
+    worker.addToRolePolicy(new iam.PolicyStatement({
+      sid: "BedrockInvoke", effect: iam.Effect.ALLOW,
+      actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      resources: [`arn:aws:bedrock:*::foundation-model/*`,
+                  `arn:aws:bedrock:*:${this.account}:inference-profile/*`],
+    }));
+
+    // EventBridge reconcile tick (concern 6): every 1 min, hit the dev reconcile route via the worker? No —
+    // reconcile is a DynamoDB scan + enqueue; give the worker a scheduled self-invoke path by invoking the
+    // reconcile through a tiny scheduled rule that sends a sentinel SQS message the worker treats as a sweep.
+    // Minimal: a scheduled rule enqueues a reconcile sentinel; the worker runs reconcile_lost_enqueue.
+    const reconcileRule = new events.Rule(this, "EditPlanReconcileRule", {
+      ruleName: `story-${environment}-edit-plan-reconcile`,
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+    });
+    reconcileRule.addTarget(new targets.LambdaFunction(worker, {
+      event: events.RuleTargetInput.fromObject({ reconcile: true }),
+    }));
+
+    // App Runner instance role: write jobs, STAGE sheets (put only), send to the queue.
+    jobsTable.grantReadWriteData(instanceRole);
+    stagingBucket.grantPut(instanceRole);
+    jobsQueue.grantSendMessages(instanceRole);
+
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
       serviceName: `story-${environment}-api`,
@@ -110,6 +208,12 @@ export class StoryApiStack extends cdk.Stack {
           imageIdentifier: `${repository.repositoryUri}:latest`,
           imageConfiguration: {
             port: "8080",
+            runtimeEnvironmentVariables: [
+              { name: "STORY_JOBS_TABLE", value: jobsTable.tableName },
+              { name: "STORY_JOBS_QUEUE_URL", value: jobsQueue.queueUrl },
+              { name: "STORY_STAGING_BUCKET", value: stagingBucket.bucketName },
+              { name: "STORY_JOBS_API_ENABLED", value: "1" },
+            ],
           },
         },
       },
@@ -139,5 +243,9 @@ export class StoryApiStack extends cdk.Stack {
       description: "App Runner service URL (Story API base URL)",
     });
     new cdk.CfnOutput(this, "Environment", { value: environment });
+    new cdk.CfnOutput(this, "EditPlanJobsTableName", { value: jobsTable.tableName });
+    new cdk.CfnOutput(this, "EditPlanJobsQueueUrl", { value: jobsQueue.queueUrl });
+    new cdk.CfnOutput(this, "EditPlanStagingBucketName", { value: stagingBucket.bucketName });
+    new cdk.CfnOutput(this, "EditPlanWorkerName", { value: worker.functionName });
   }
 }

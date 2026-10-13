@@ -138,8 +138,13 @@ def _plan_to_dict(plan) -> dict:
 
 
 def handler(event, context):
-    """SQS batch handler. Returns partial-batch failures so a single bad message doesn't re-drive the batch."""
+    """SQS batch handler. Returns partial-batch failures so a single bad message doesn't re-drive the batch.
+    Also handles the EventBridge reconcile sentinel {reconcile:true} (concern 6: lost-enqueue recovery)."""
     store = _jobs.JobStore()
+    if isinstance(event, dict) and event.get("reconcile") is True:
+        reenq = store.reconcile_lost_enqueue()
+        print(json.dumps({"msg": "worker_reconcile", "reenqueued": reenq}))
+        return {"reenqueued": reenq}
     failures = []
     for record in event.get("Records", []):
         try:

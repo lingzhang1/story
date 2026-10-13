@@ -1,0 +1,30 @@
+# Story Edit-Plan WORKER Lambda image (async edit planning).
+#
+# Runs apps/api/app/worker.handler on the AWS Lambda Python runtime. Bundles the SAME engine code + prompts as
+# the App Runner API image so the worker executes the IDENTICAL plan/critique/validate core (frozen v5.2,
+# EditPlan/2 validator, Opus->Sonnet fallback). Build context is the REPO ROOT:
+#   docker build -f apps/api/Dockerfile.worker -t story-edit-plan-worker .
+FROM public.ecr.aws/lambda/python:3.12
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Runtime deps (same set the engines need; FastAPI/uvicorn/multipart are NOT needed in the worker, but pydantic
+# + boto3 are — the DTO validation + AWS clients). Keep it lean.
+RUN pip install "pydantic>=2" "boto3"
+
+# The planner resolves prompts at <repo>/prompts and imports top-level packages/contracts. Lay the repo out
+# under the Lambda task root so PYTHONPATH + the prompt resolver both work.
+WORKDIR /var/task
+COPY packages/ /var/task/packages/
+COPY contracts/ /var/task/contracts/
+COPY apps/api/app/ /var/task/app/
+COPY prompts/ /var/task/prompts/
+
+# edit_planner resolves prompts at <package>/../../prompts (i.e. the task root). The COPY layout above puts
+# packages/ and prompts/ as siblings under /var/task, so Path(__file__).parent.parent.parent/'prompts' resolves
+# to /var/task/prompts — no env var needed.
+ENV PYTHONPATH=/var/task:/var/task/packages
+
+# Lambda entrypoint: module app.worker, function handler.
+CMD ["app.worker.handler"]
