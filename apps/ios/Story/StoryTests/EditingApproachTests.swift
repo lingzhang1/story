@@ -11,15 +11,15 @@ final class EditingApproachTests: XCTestCase {
         XCTAssertEqual(EditingApproach.visualFirst.rawValue, "visual_first")
     }
 
-    func testDefaultIsStorytelling() {
-        XCTAssertEqual(EditingApproach.default, .storytelling)
+    func testDefaultIsVisualFirst() {
+        XCTAssertEqual(EditingApproach.default, .visualFirst)
     }
 
     func testMigrationSafeDecode() {
         // Existing Stories: nil raw (never chose) OR an unknown/garbage value -> safe default, never a crash.
-        XCTAssertEqual(EditingApproach.fromRaw(nil), .storytelling)
-        XCTAssertEqual(EditingApproach.fromRaw(""), .storytelling)
-        XCTAssertEqual(EditingApproach.fromRaw("legacy_mode"), .storytelling)
+        XCTAssertEqual(EditingApproach.fromRaw(nil), .default)
+        XCTAssertEqual(EditingApproach.fromRaw(""), .default)
+        XCTAssertEqual(EditingApproach.fromRaw("legacy_mode"), .default)
         // Valid values round-trip.
         XCTAssertEqual(EditingApproach.fromRaw("storytelling"), .storytelling)
         XCTAssertEqual(EditingApproach.fromRaw("visual_first"), .visualFirst)

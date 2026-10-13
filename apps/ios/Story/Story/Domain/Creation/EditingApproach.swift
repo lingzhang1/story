@@ -16,8 +16,9 @@ enum EditingApproach: String, CaseIterable {
     case visualFirst  = "visual_first"
 
     /// Default for a new Story and for any existing Story with no stored preference (backward compatible):
-    /// storytelling = the frozen, device-verified text-only path.
-    static let `default`: EditingApproach = .storytelling
+    /// visual_first = the richer image-aware path (owner decision 2026-10-13; device-accepted). Falls back to
+    /// text-only gracefully if multimodal is unavailable, so this default is safe even under quota pressure.
+    static let `default`: EditingApproach = .visualFirst
 
     /// Tolerant decode of a persisted raw value — unknown / nil => the safe default (migration-safe).
     static func fromRaw(_ raw: String?) -> EditingApproach {
