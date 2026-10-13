@@ -9,12 +9,27 @@ import Foundation
 // The creative brief string + version MUST stay in sync with the backend (apps/api MM_CREATIVE_BRIEF /
 // MM_CREATIVE_BRIEF_VERSION). It is injected into the Edit Planner USER message only — never the frozen body.
 enum StoryMultimodalPlanning {
-    /// Master switch. Flip to true only after device acceptance. Can be overridden at launch for on-device
-    /// testing via the STORY_MULTIMODAL_PLANNING=1 environment/launch argument.
+    /// Master switch. Flip to true only after device acceptance. For on-device testing it can be enabled in
+    /// THREE ways, in priority order:
+    ///   1. Env var STORY_MULTIMODAL_PLANNING=1 — ONLY present when Xcode's debugger launches the app
+    ///      (a scheme env var is NOT injected for a standalone/home-screen/TestFlight launch — this is why a
+    ///      run tapped from the home screen silently reverted to text-only).
+    ///   2. UserDefaults bool "STORY_MULTIMODAL_PLANNING" — PERSISTS across launches. Set it once and every
+    ///      subsequent standalone launch stays multimodal. The standard launch argument
+    ///      `-STORY_MULTIMODAL_PLANNING YES` is read into UserDefaults automatically by the system, so an
+    ///      Xcode scheme "Arguments Passed On Launch" entry survives a detach the way an env var does not.
+    ///   3. compiled default (false).
     static var enabled: Bool {
         if ProcessInfo.processInfo.environment["STORY_MULTIMODAL_PLANNING"] == "1" { return true }
+        if UserDefaults.standard.object(forKey: flagKey) != nil {
+            return UserDefaults.standard.bool(forKey: flagKey)
+        }
         return _enabledDefault
     }
+    /// UserDefaults / launch-argument key for the persisted override (survives non-attached launches).
+    static let flagKey = "STORY_MULTIMODAL_PLANNING"
+    /// Persist the override so a home-screen / TestFlight launch keeps multimodal on. Call from a debug toggle.
+    static func setPersistentOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: flagKey) }
     private static let _enabledDefault = false
 
     static let creativeBriefVersion = "shortform_mvp/1"
