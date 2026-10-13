@@ -32,19 +32,23 @@ enum StoryMultimodalPlanning {
     static func setPersistentOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: flagKey) }
     private static let _enabledDefault = true
 
-    /// Phase-6 / experiment Arm D: run ONE bounded critique->revision pass on a Visual-first plan. SEPARATE,
-    /// OWN flag, DEFAULT OFF — it costs 2 extra model calls per create (each re-sending the ~3 MB image
-    /// payload), so it is the heaviest, most quota-fragile path and must be opted into explicitly for testing.
-    /// Enable with env `STORY_CRITIQUE_REVISION=1` or UserDefaults bool `STORY_CRITIQUE_REVISION=true`.
+    /// Phase-6 / experiment Arm D: run ONE bounded critique->revision pass on a Visual-first plan. Arm D was
+    /// the LARGEST quality lever in the short-form creative-objective experiment (fixes the hook, finds omitted
+    /// /repetitive footage), so for the best-results MVP it is DEFAULT ON. It costs 2 extra model calls per
+    /// create (each re-sending the ~3 MB image payload) and is quota-fragile, so a kill-switch remains:
+    /// env `STORY_CRITIQUE_REVISION=0` or UserDefaults bool `STORY_CRITIQUE_REVISION=false` forces it OFF
+    /// without a rebuild. Absent any override it is ON.
     static var critiqueRevisionEnabled: Bool {
+        if ProcessInfo.processInfo.environment["STORY_CRITIQUE_REVISION"] == "0" { return false }
         if ProcessInfo.processInfo.environment["STORY_CRITIQUE_REVISION"] == "1" { return true }
         if UserDefaults.standard.object(forKey: critiqueFlagKey) != nil {
             return UserDefaults.standard.bool(forKey: critiqueFlagKey)
         }
-        return false
+        return _critiqueDefault
     }
     static let critiqueFlagKey = "STORY_CRITIQUE_REVISION"
     static func setCritiqueOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: critiqueFlagKey) }
+    private static let _critiqueDefault = true
 
     static let creativeBriefVersion = "shortform_mvp/1"
     static let creativeBrief = """

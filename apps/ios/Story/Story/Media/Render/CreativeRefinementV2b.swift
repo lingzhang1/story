@@ -1,14 +1,25 @@
 import Foundation
 import AVFoundation
 
-// MARK: - Opt-in flag (OFF by default until device-accepted)
+// MARK: - Opt-in flag (DEFAULT ON for the best-results MVP; kill-switch retained)
 
-/// Gate for the V2-b deterministic creative-refinement pre-pass. OFF by default so V1 rendering is unchanged;
-/// the owner flips it on (or a DEBUG build / future setting does) to exercise refinement on device. Kept as a
-/// simple static so there is no new settings surface to review in this bounded phase.
+/// Gate for the V2-b deterministic creative-refinement pre-pass. DEFAULT ON so the MVP ships the extra
+/// refinement pass that improves the result. It is deterministic (no model call) and degrades to a no-op when
+/// it has nothing to improve, so default-ON is safe. Kill-switch without a rebuild: env
+/// `STORY_CREATIVE_REFINEMENT=0` or UserDefaults bool `STORY_CREATIVE_REFINEMENT=false` forces it OFF.
 enum StoryCreativeRefinement {
-    /// Default false. Set true in a DEBUG session / test to run the refinement pre-pass.
-    static var enabled: Bool = false
+    static let flagKey = "STORY_CREATIVE_REFINEMENT"
+    private static let _enabledDefault = true
+    /// Default ON. Env/UserDefaults override wins (incident kill-switch).
+    static var enabled: Bool {
+        if ProcessInfo.processInfo.environment[flagKey] == "0" { return false }
+        if ProcessInfo.processInfo.environment[flagKey] == "1" { return true }
+        if UserDefaults.standard.object(forKey: flagKey) != nil {
+            return UserDefaults.standard.bool(forKey: flagKey)
+        }
+        return _enabledDefault
+    }
+    static func setPersistentOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: flagKey) }
     /// Diagnostic breadcrumb from the last refine() call (validation notes / no-op reasons) — for the device
     /// report, never a user-facing surface.
     static var lastOutcomeNotes: [String] = []
