@@ -104,9 +104,20 @@ final class EditPlanJobClient {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         req.httpBody = body
 
+        // Submit in a DETACHED task so a spurious cancellation of the caller's enclosing Task — e.g. SwiftUI
+        // tearing down the view's `.task` on a re-render while the Creating screen is up — cannot abort an
+        // in-flight submit with NSURLError -999 "cancelled" (observed on device). A REAL user cancel does not
+        // rely on this: it goes through the coordinator's explicit cancel() -> backend cancel API. The POST is
+        // small and bounded by the session's own 180s request timeout.
         let data: Data, resp: URLResponse
-        do { (data, resp) = try await session.data(for: req) }
-        catch { throw EditPlanJobError.transport(error) }
+        let sendReq = req
+        do {
+            (data, resp) = try await Task.detached { [session] in try await session.data(for: sendReq) }.value
+        } catch is CancellationError {
+            throw EditPlanJobError.transport(URLError(.cancelled))
+        } catch {
+            throw EditPlanJobError.transport(error)
+        }
         guard let http = resp as? HTTPURLResponse else { throw EditPlanJobError.badStatus(-1) }
         switch http.statusCode {
         case 202, 200:
