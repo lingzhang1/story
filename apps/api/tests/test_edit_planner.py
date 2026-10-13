@@ -211,19 +211,32 @@ def _plan12(d0, d1, **seg_over):
 
 
 # ---- reproduce the two exact production failures (validator level) ----
-def test_repro_failure1_total_off_target():
-    # 5+5+5 = 15s vs target 12 (>20%) — the first device failure.
+def test_asymmetric_duration_policy():
+    # Asymmetric accept policy (owner 2026-10-13): generous overshoot (+50%), strict undershoot (-20%).
     inp = _target12_inputs(moments=_target12_inputs().moments + [
         {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 7.5]]}])
-    p = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
-        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
-         "output_duration_seconds": 5.0, "native_audio": "keep"},
-        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
-         "output_duration_seconds": 5.0, "native_audio": "keep"},
-        {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": 5.0,
-         "output_duration_seconds": 5.0, "native_audio": "keep"}]}
-    errs = _vp(p, inp)
-    assert any("off target" in e for e in errs)
+    def plan3(d0, d1, d2):
+        return {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+            {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": d0,
+             "output_duration_seconds": d0, "native_audio": "keep"},
+            {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": d1,
+             "output_duration_seconds": d1, "native_audio": "keep"},
+            {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": d2,
+             "output_duration_seconds": d2, "native_audio": "keep"}]}
+    # 15s vs 12 target = +25% overshoot -> now ACCEPTED (was rejected under old ±20%). Give the user a video.
+    assert _vp(plan3(5.0, 5.0, 5.0), inp) == []
+    # 18s vs 12 = +50% exactly -> still accepted (at the bound).
+    assert _vp(plan3(6.0, 6.0, 6.0), inp) == []
+    # 20s vs 12 = +67% overshoot -> rejected (beyond the generous upper bound).
+    assert any("upper bound" in e for e in _vp(plan3(7.0, 7.0, 6.0), inp))
+    # 8s vs 12 = -33% undershoot -> rejected (too short feels broken/empty).
+    inp2 = _target12_inputs()
+    short = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 4.0,
+         "output_duration_seconds": 4.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 4.0,
+         "output_duration_seconds": 4.0, "native_audio": "keep"}]}
+    assert any("lower bound" in e or "SHORT" in e for e in _vp(short, inp2))
 
 
 def test_repro_failure2_speed_output_mismatch():

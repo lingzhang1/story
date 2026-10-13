@@ -33,7 +33,12 @@ from model_gateway import ModelGateway, StructuredOutputError, StructuredRequest
 PROMPT_VERSION = "edit_plan/4"  # Editorial Timing significance-weighting amendment (v2/v3 preserved for reproducibility)
 TASK = "edit_plan.generate"
 MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
-DURATION_TOLERANCE = 0.20  # ±20% hard feasibility tolerance (frozen)
+DURATION_TOLERANCE = 0.20  # legacy symmetric tolerance — retained for the repair-prompt wording + back-compat
+# Asymmetric accept policy (owner decision 2026-10-13): generous on OVERSHOOT (a longer video still ships),
+# strict on UNDERSHOOT (a too-short video feels broken). The repair pass still aims at the exact target; these
+# only decide ACCEPT vs reject so the user gets a watchable video instead of "couldn't finish your story".
+DURATION_OVERSHOOT_TOLERANCE = 0.50   # accept up to +50% longer than the requested duration
+DURATION_UNDERSHOOT_TOLERANCE = 0.20  # reject if >20% SHORTER than requested (degenerate / empty-feeling)
 
 # v4 adds ONE "SIGNIFICANCE-WEIGHTED SCREEN TIME" paragraph to the frozen v3 body (which is v2's creative
 # body + the EXECUTABILITY INVARIANTS section). Owner-approved via the Editorial Timing Quality Gate: it
@@ -358,8 +363,20 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     total_out = timeline_total_seconds(segs)  # shared arithmetic (accounts for crossfade overlap)
     target = inputs.creative_intent["target_duration_seconds"]
     declared_infeasible = plan.get("feasible") is False
-    if total_out and not declared_infeasible and abs(total_out - target) / target > DURATION_TOLERANCE:
-        errs.append(f"total output {total_out:.1f}s is >{int(DURATION_TOLERANCE*100)}% off target {target}s")
+    # ASYMMETRIC duration policy (owner decision 2026-10-13): ship the user SOMETHING watchable rather than
+    # failing when the plan is a bit off the requested length. Overshoot is cheap — a longer video is still a
+    # good video — so we tolerate the model running LONG generously (up to +OVERSHOOT). Undershoot is NOT: a
+    # video far SHORTER than requested feels broken/empty, so we keep the tight lower bound. A near-zero /
+    # degenerate plan (the "model gave up" case) is still rejected by the lower bound. The repair pass still
+    # nudges toward the exact target; this only governs when we ACCEPT vs reject.
+    if total_out and not declared_infeasible:
+        over = (total_out - target) / target     # >0 => longer than asked, <0 => shorter
+        if over > DURATION_OVERSHOOT_TOLERANCE:
+            errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
+                        f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
+        elif over < -DURATION_UNDERSHOOT_TOLERANCE:
+            errs.append(f"total output {total_out:.1f}s is >{int(DURATION_UNDERSHOOT_TOLERANCE*100)}% "
+                        f"SHORT of target {target}s (lower bound)")
     if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
         errs.append("feasible=false but no infeasible_reason given")
     return errs
@@ -470,8 +487,10 @@ def _build_repair(inputs: EditPlanInputs, bad_plan: dict, errs: list[str]) -> st
         "speed (speed defaults to 1.0). If you want a segment SHORTER, shorten its source range or raise its "
         "speed; if LONGER, extend the source range (staying within the Moment's real duration and useful "
         "segments) or lower its speed. Never leave output_duration inconsistent with the source span and speed.\n"
-        "- The total timeline duration (sum of output durations, minus any crossfade overlap) MUST be within "
-        f"±{int(DURATION_TOLERANCE*100)}% of target_duration_seconds. Aim AT the target, not the edge. If the "
+        "- The total timeline duration (sum of output durations, minus any crossfade overlap) should AIM AT "
+        f"target_duration_seconds. Running somewhat LONG is acceptable (up to +{int(DURATION_OVERSHOOT_TOLERANCE*100)}%), "
+        f"but do NOT come in more than {int(DURATION_UNDERSHOOT_TOLERANCE*100)}% SHORT of target. Aim at the "
+        "target, not the edge. If the "
         "usable material genuinely cannot reach the target, return feasible=false with a one-line "
         "infeasible_reason and your best shorter plan — do NOT invent footage.\n"
         "- source ranges stay within each Moment's real duration and useful segments; asset_id stays a given "
@@ -730,7 +749,8 @@ class MockEditPlannerEngine:
 
 
 __all__ = [
-    "PROMPT_VERSION", "TASK", "MODEL_ID", "DURATION_TOLERANCE", "SCHEMA",
+    "PROMPT_VERSION", "TASK", "MODEL_ID", "DURATION_TOLERANCE",
+    "DURATION_OVERSHOOT_TOLERANCE", "DURATION_UNDERSHOOT_TOLERANCE", "SCHEMA",
     "SPEED_CONSISTENCY_ABS", "SPEED_CONSISTENCY_REL", "ROUND_SNAP_ABS",
     "EditPlanInputs", "EditPlanInfeasibleError", "MalformedPlanError",
     "SegmentTimeline", "validate_plan", "normalize_plan", "timeline_total_seconds",
