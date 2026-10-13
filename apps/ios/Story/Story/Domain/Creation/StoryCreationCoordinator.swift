@@ -108,6 +108,10 @@ final class StoryCreationCoordinator {
 
     // Observable surface for Batch B.
     private(set) var state: State = .idle
+    /// Honest, consumer-safe sub-line for the planning phase, driven by the REAL backend job status
+    /// (queued -> "Queued for planning", running -> "Planning your Story", and once the critique pass starts
+    /// "Refining the edit"). nil outside planning. No model/HTTP/stage-internal names.
+    private(set) var planningSubstatus: String?
     /// Duplicate-job guard: true while a creation is in flight for this coordinator's Story.
     private(set) var isCreating: Bool = false
     /// The structured error behind the CURRENT `.failed` state (nil otherwise). The UI reads this to decide
@@ -324,7 +328,20 @@ final class StoryCreationCoordinator {
             let final = try await jobClient.pollUntilTerminal(
                 jobId: jobId, maxSeconds: 900,
                 shouldCancel: { [weak self] in self?.cancelRequested ?? false },
-                onState: { st in story.planJobStatus = st.status.rawValue })
+                onState: { [weak self] st in
+                    story.planJobStatus = st.status.rawValue
+                    // Reflect the REAL backend stage in the planning sub-line (honest; backend only distinguishes
+                    // queued vs running — critique happens inside one 'running' invocation and is NOT separately
+                    // observable, so we do not fabricate a 'Refining' stage the server can't report).
+                    self?.planningSubstatus = {
+                        switch st.status {
+                        case .queued:           return "Queued for planning…"
+                        case .running:          return "Planning your Story…"
+                        case .cancelRequested:  return "Cancelling…"
+                        default:                return nil
+                        }
+                    }()
+                })
 
             switch final.status {
             case .completed:
@@ -385,6 +402,7 @@ final class StoryCreationCoordinator {
         if cancelRequested { return finishCancelled() }
 
         // ---- validating: deterministic, BEFORE AVFoundation; renderer never runs on an invalid plan ----
+        planningSubstatus = nil   // planning is done; drop the backend-status sub-line
         state = .validating
         let resolver = MomentResolver.urlResolver(for: build.includedMedia)
         if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
@@ -610,12 +628,14 @@ final class StoryCreationCoordinator {
 
     private func finishFailed(_ error: StoryCreationError) {
         if let rel = partialRelativePath { cleanup(relative: rel) }
+        planningSubstatus = nil
         lastFailure = error
         state = .failed(message: error.errorDescription ?? "Creation failed.")
     }
 
     private func finishCancelled() {
         if let rel = partialRelativePath { cleanup(relative: rel) }
+        planningSubstatus = nil
         state = .cancelled
     }
 

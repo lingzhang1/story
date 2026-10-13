@@ -96,7 +96,13 @@ struct StoryCreatingView: View {
 
     private var phase: CreatingPhase {
         guard let coordinator else { return .indeterminate(status: "Getting your moments ready…") }
-        return CreatingPhase.from(coordinator.state)
+        let p = CreatingPhase.from(coordinator.state)
+        // During planning, prefer the REAL backend job status (queued/running) over the static copy.
+        if case .indeterminate = p, coordinator.state == .planning,
+           let live = coordinator.planningSubstatus {
+            return .indeterminate(status: live)
+        }
+        return p
     }
 
     var body: some View {
