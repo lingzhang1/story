@@ -102,6 +102,10 @@ enum EditPlannerServiceError: Error, LocalizedError {
     case infeasible(String)     // 422 — material can't reach target; carries the server's reason
     case badStatus(Int)
     case decoding(Error)
+    /// An IMAGE-input rejection from /v1/edit-plan-mm (413/415, or an image-mapping 422). Carries the HTTP
+    /// status AND the server's verbatim `detail` so the device can record WHY multimodal fell back instead
+    /// of a generic code — the whole point of the 422 diagnostics. This triggers the text-only fallback.
+    case imageRejected(code: Int, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -110,6 +114,7 @@ enum EditPlannerServiceError: Error, LocalizedError {
         case .infeasible(let r): return "This Story's material can't fill the target: \(r)"
         case .badStatus(let c): return "Unexpected response (\(c))."
         case .decoding: return "The plan response couldn't be read."
+        case .imageRejected(let c, let d): return "Visual evidence rejected (\(c)): \(d)"
         }
     }
 }
@@ -177,11 +182,14 @@ final class EditPlannerService: EditPlanning {
             return MultimodalPlanOutcome(plan: plan, usedMultimodal: true, sheetCount: sheets.count,
                                          imageBytes: imageBytes, fallbackReason: nil,
                                          creativeBriefVersion: creativeBriefVersion)
-        } catch let EditPlannerServiceError.badStatus(code) where code == 413 || code == 415 {
-            // Image size/type rejection -> text-only fallback (the server-side preflight backstop fired).
+        } catch let EditPlannerServiceError.imageRejected(code, detail) {
+            // Image size/type/mapping rejection -> text-only fallback. Record the server's VERBATIM reason
+            // (truncated) so lastPlanningDiagnostics reveals EXACTLY why multimodal fell back — not a generic
+            // code. This is the device half of the 422 diagnostics.
             let plan = try await plan(request)
+            let reason = "image_rejected_\(code): \(detail.prefix(160))"
             return MultimodalPlanOutcome(plan: plan, usedMultimodal: false, sheetCount: sheets.count,
-                                         imageBytes: imageBytes, fallbackReason: "image_rejected_\(code)",
+                                         imageBytes: imageBytes, fallbackReason: reason,
                                          creativeBriefVersion: creativeBriefVersion)
         } catch let EditPlannerServiceError.transport(err) {
             // A transport error while sending the larger image payload -> try text-only once.
@@ -246,13 +254,17 @@ final class EditPlannerService: EditPlanning {
             do { return try StoryContractCoding.decoder().decode(EditPlanV2.self, from: data) }
             catch { throw EditPlannerServiceError.decoding(error) }
         case 422:
-            // Distinguish an IMAGE-mapping 422 (fall back) from a MATERIAL 422 (surface). The server uses
-            // distinct detail text: image-mapping says "contact sheet"/"sheet_order"; material says "infeasible".
-            let d = Self.detail(data).lowercased()
-            if d.contains("sheet") || d.contains("unknown moment id") { throw EditPlannerServiceError.badStatus(415) }
-            throw EditPlannerServiceError.infeasible(Self.detail(data))
+            // Distinguish an IMAGE-mapping 422 (fall back, carrying the reason) from a MATERIAL 422 (surface).
+            // The server uses distinct detail text: image-mapping says "contact sheet"/"sheet_order"/"unknown
+            // Moment id"; material says "infeasible". Carry the VERBATIM detail either way for diagnostics.
+            let full = Self.detail(data)
+            let d = full.lowercased()
+            if d.contains("sheet") || d.contains("unknown moment id") || d.contains("image") {
+                throw EditPlannerServiceError.imageRejected(code: 422, detail: full)
+            }
+            throw EditPlannerServiceError.infeasible(full)
         case 413, 415:
-            throw EditPlannerServiceError.badStatus(http.statusCode)
+            throw EditPlannerServiceError.imageRejected(code: http.statusCode, detail: Self.detail(data))
         case 503:
             throw EditPlannerServiceError.unavailable
         default:

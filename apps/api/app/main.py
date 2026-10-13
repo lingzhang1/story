@@ -809,39 +809,64 @@ def create_app() -> FastAPI:
         correlation_id = str(uuid4())
         started = time.monotonic()
 
+        # DIAGNOSTICS: every multimodal REJECTION is logged with a stable `reject_reason` code + the counts
+        # needed to tell the branches apart in CloudWatch, so a device fallback is never a silent mystery.
+        # The exact `detail` the client receives is logged verbatim too. No image bytes / content are logged.
+        def _reject(status: int, detail: str, reason: str, **extra):
+            log.warning("edit_plan_mm_rejected",
+                        extra={"operation": "edit_plan", "correlation_id": correlation_id,
+                               "task": "edit_plan.generate", "schema_version": "edit_plan/2",
+                               "success": False, "http_status": status, "reject_reason": reason,
+                               "detail": detail[:400], "sheet_part_count": len(sheets),
+                               "sheet_order_len": _order_len, "creative_brief_present": bool(creative_brief),
+                               **extra})
+            raise HTTPException(status_code=status, detail=detail)
+
+        _order_len: int | None = None  # filled once sheet_order parses; None => parse failed before it
+
         # --- parse the JSON body as the SAME shape /v1/edit-plan validates (reuse the Pydantic model) --------
         try:
             parsed = EditPlanRequest.model_validate_json(body)
         except Exception as e:
-            raise HTTPException(status_code=422, detail=f"invalid edit-plan body json: {e}")
+            _reject(422, f"invalid edit-plan body json: {e}", "body_json_invalid")
         try:
             order = _json.loads(sheet_order)
             if not isinstance(order, list) or not all(isinstance(x, str) for x in order):
                 raise ValueError("sheet_order must be a JSON array of Moment id strings")
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=f"invalid sheet_order json: {e}")
+            _reject(422, f"invalid sheet_order json: {e}", "sheet_order_json_invalid")
+        except Exception as e:  # json.loads can raise JSONDecodeError (a ValueError subclass) or others
+            _reject(422, f"invalid sheet_order json: {e}", "sheet_order_json_invalid")
+        _order_len = len(order)
 
         # --- validate the contact sheets (count / per-sheet bytes / total bytes / type) ---------------------
         if len(sheets) > _MM_EDIT_MAX_SHEETS:
-            raise HTTPException(status_code=413, detail=f"too many contact sheets (> {_MM_EDIT_MAX_SHEETS})")
+            _reject(413, f"too many contact sheets (> {_MM_EDIT_MAX_SHEETS})", "too_many_sheets",
+                    limit=_MM_EDIT_MAX_SHEETS)
         if len(order) != len(sheets):
-            raise HTTPException(status_code=422, detail="sheet_order length must match sheets count")
+            _reject(422, "sheet_order length must match sheets count", "order_sheet_count_mismatch")
         known_ids = {str(m.get("id")) for m in parsed.moments if isinstance(m, dict)}
         images: list[ImageInput] = []
         total = 0
         for f, mid in zip(sheets, order):
             if (f.content_type or "").lower() not in _MM_EDIT_ALLOWED_TYPES:
-                raise HTTPException(status_code=415, detail=f"unsupported sheet type: {f.content_type}")
+                _reject(415, f"unsupported sheet type: {f.content_type}", "unsupported_sheet_type",
+                        content_type=str(f.content_type), moment_count=len(parsed.moments))
             if mid not in known_ids:
                 # A sheet that maps to no Moment in the body is a client bug — never silently drop a Moment,
-                # and never attach an orphan image.
-                raise HTTPException(status_code=422, detail=f"contact sheet maps to unknown Moment id {mid}")
+                # and never attach an orphan image. Log a SAMPLE of known ids (never the images) so an
+                # id-mismatch (casing, wrong id source) is diagnosable from the log alone.
+                _reject(422, f"contact sheet maps to unknown Moment id {mid}", "unknown_moment_id",
+                        unknown_id=mid, moment_count=len(parsed.moments),
+                        known_ids_sample=sorted(known_ids)[:3])
             data = await f.read()
             if len(data) > _MM_EDIT_MAX_SHEET_BYTES:
-                raise HTTPException(status_code=413, detail="a contact sheet exceeds the per-sheet size limit")
+                _reject(413, "a contact sheet exceeds the per-sheet size limit", "sheet_too_large",
+                        moment_id=mid, sheet_bytes=len(data), per_sheet_limit=_MM_EDIT_MAX_SHEET_BYTES)
             total += len(data)
             if total > _MM_EDIT_MAX_TOTAL_BYTES:
-                raise HTTPException(status_code=413, detail="total image payload exceeds the size limit")
+                _reject(413, "total image payload exceeds the size limit", "total_payload_too_large",
+                        total_bytes=total, total_limit=_MM_EDIT_MAX_TOTAL_BYTES)
             images.append(ImageInput(data=data, media_type="image/jpeg"))
 
         base = {"operation": "edit_plan", "correlation_id": correlation_id,

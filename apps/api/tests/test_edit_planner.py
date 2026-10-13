@@ -590,3 +590,46 @@ def test_endpoint_mm_rejects_order_count_mismatch():
                     data={"body": json.dumps(body), "sheet_order": json.dumps([M1, M2])},  # 2 ids, 1 sheet
                     files=files)
     assert r.status_code == 422
+
+
+# ---- 422 DIAGNOSTICS: every multimodal rejection logs edit_plan_mm_rejected with a stable reject_reason ----
+# so a device fallback is never a silent mystery — the next device run's CloudWatch names the exact branch.
+def test_mm_rejection_logs_reason_unknown_moment(caplog):
+    import logging
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body = _req_body()
+    bad_id = str(uuid4())
+    files = [("sheets", (f"{bad_id}.jpg", b"\xff\xd8\xffxx", "image/jpeg"))]
+    with caplog.at_level(logging.WARNING):
+        r = client.post("/v1/edit-plan-mm",
+                        data={"body": json.dumps(body), "sheet_order": json.dumps([bad_id])},
+                        files=files)
+    assert r.status_code == 422
+    rec = next((x for x in caplog.records if getattr(x, "message", "") == "edit_plan_mm_rejected"
+                or x.getMessage() == "edit_plan_mm_rejected"), None)
+    assert rec is not None, "expected an edit_plan_mm_rejected diagnostic log"
+    assert getattr(rec, "reject_reason", None) == "unknown_moment_id"
+    assert getattr(rec, "http_status", None) == 422
+    assert getattr(rec, "sheet_part_count", None) == 1
+    assert getattr(rec, "sheet_order_len", None) == 1
+    # The verbatim detail is logged (truncated) so the client-facing reason is reconstructable from the log.
+    assert "unknown Moment id" in getattr(rec, "detail", "")
+    # A sample of KNOWN ids is logged (never the images) so an id-mismatch is diagnosable from the log alone.
+    assert isinstance(getattr(rec, "known_ids_sample", None), list)
+
+
+def test_mm_rejection_logs_reason_count_mismatch(caplog):
+    import logging
+    client = _client(RealEditPlannerEngine(FakeModelGateway(response=_good_plan())))
+    body = _req_body()
+    files = [("sheets", (f"{M1}.jpg", b"\xff\xd8\xffxx", "image/jpeg"))]
+    with caplog.at_level(logging.WARNING):
+        r = client.post("/v1/edit-plan-mm",
+                        data={"body": json.dumps(body), "sheet_order": json.dumps([M1, M2])},
+                        files=files)
+    assert r.status_code == 422
+    rec = next((x for x in caplog.records if x.getMessage() == "edit_plan_mm_rejected"), None)
+    assert rec is not None
+    assert getattr(rec, "reject_reason", None) == "order_sheet_count_mismatch"
+    assert getattr(rec, "sheet_part_count", None) == 1
+    assert getattr(rec, "sheet_order_len", None) == 2
