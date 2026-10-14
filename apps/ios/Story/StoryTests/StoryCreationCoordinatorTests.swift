@@ -140,6 +140,14 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let m1 = momentWithFile(s, rel: "media/rc-happy-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
         let m2 = momentWithFile(s, rel: "media/rc-happy-2.mov", dur: 8); completeAU(m2, useful: [(0, 5)])
 
+        // TEMP DIAGNOSTIC (remove after root-cause): prove how many moments/media/AU the builder actually sees.
+        let diagMoments = s.moments.count
+        let diagMedia = MomentResolver.resolve(moments: s.moments).count
+        let diagAU = ((try? ctx.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []).count
+        XCTAssertEqual(diagMoments, 2, "DIAG story.moments.count — links not resolving?")
+        XCTAssertEqual(diagMedia, 2, "DIAG resolvable media — MomentResolver dropped a file?")
+        XCTAssertEqual(diagAU, 2, "DIAG AU records fetched — unsaved MomentUnderstanding not visible to fetch?")
+
         let plan = validPlan([m1, m2])
         let renderer = FakeRenderer(.ok(okResult()))
         let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)),
