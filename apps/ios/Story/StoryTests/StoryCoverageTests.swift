@@ -81,7 +81,7 @@ final class StoryCoverageTests: XCTestCase {
     @discardableResult
     private func addUnderstoodMoment(to story: StoryModel, summary: String = "a mountain",
                                      usefulStart: Double = 0, usefulEnd: Double = 10) -> UUID {
-        let m = MomentModel(source: .directed); m.story = story; ctx.insert(m)
+        let m = MomentModel(source: .directed); ctx.insert(m); ctx.insert(StoryMomentLink(story: story, moment: m))
         let json = """
         {"moment_id":"\(m.id.uuidString)","schema_version":"moment_understanding/1",
          "observed":{"summary":"\(summary)","subjects":[],"events":[],"temporal_order_note":"",
@@ -96,7 +96,7 @@ final class StoryCoverageTests: XCTestCase {
 
     @discardableResult
     private func addPendingMoment(to story: StoryModel) -> UUID {
-        let m = MomentModel(source: .directed); m.story = story; ctx.insert(m); try? ctx.save(); return m.id
+        let m = MomentModel(source: .directed); ctx.insert(m); ctx.insert(StoryMomentLink(story: story, moment: m)); try? ctx.save(); return m.id
     }
 
     private func guideReady(_ story: StoryModel, _ fake: FakeGuide = FakeGuide()) async -> (StoryGuideDTO, String) {

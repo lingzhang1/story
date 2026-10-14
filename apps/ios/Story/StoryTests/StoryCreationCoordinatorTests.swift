@@ -86,8 +86,8 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         FileManager.default.createFile(atPath: abs.path, contents: Data([0x00]))
         let asset = AssetModel(relativePath: rel, durationSeconds: dur, source: .directed)
         let m = MomentModel(source: .directed, asset: asset)
-        m.story = story
         ctx.insert(m)
+        ctx.insert(StoryMomentLink(story: story, moment: m))
         return m
     }
 

@@ -74,8 +74,8 @@ final class ImportedVideoUnderstandingTests: XCTestCase {
         makeFile(rel)
         let asset = AssetModel(relativePath: rel, durationSeconds: dur, source: source)
         let m = MomentModel(source: source, asset: asset)
-        m.story = story
         ctx.insert(m)
+        ctx.insert(StoryMomentLink(story: story, moment: m))
         try? ctx.save()
         return m
     }
@@ -86,8 +86,8 @@ final class ImportedVideoUnderstandingTests: XCTestCase {
         makeFile(rel)
         let asset = AssetModel(relativePath: rel, durationSeconds: 0, source: .existingMedia)
         let m = MomentModel(source: .existingMedia, asset: asset)
-        m.story = story
         ctx.insert(m)
+        ctx.insert(StoryMomentLink(story: story, moment: m))
         try? ctx.save()
         return m
     }

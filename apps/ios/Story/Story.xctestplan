@@ -1,0 +1,37 @@
+{
+  "configurations" : [
+    {
+      "id" : "B3EE80D6-7F3E-4F29-8F9F-4CCE6A336672",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "commandLineArgumentEntries" : [
+      {
+        "argument" : " -STORY_MODE product"
+      },
+      {
+        "argument" : "-STORY_CRITIQUE_REVISION YES"
+      }
+    ],
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:Story.xcodeproj",
+      "identifier" : "CCABE626306F0D9B0089312F",
+      "name" : "Story"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:Story.xcodeproj",
+        "identifier" : "CCABE635306F0D9C0089312F",
+        "name" : "StoryTests"
+      }
+    }
+  ],
+  "version" : 1
+}
