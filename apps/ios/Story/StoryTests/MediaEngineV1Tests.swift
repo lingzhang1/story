@@ -178,7 +178,8 @@ final class MediaEngineV1Tests: XCTestCase {
         for r in ranges { bset.insert(r.start); bset.insert(r.end) }
         let bounds = bset.sorted()
         // contiguity: each slice end == next slice start; full coverage [0,total]
-        XCTAssertEqual(bounds.first, 0.0); XCTAssertEqual(bounds.last, total, accuracy: 0.001)
+        XCTAssertEqual(bounds.first ?? -1, 0.0, accuracy: 0.001)
+        XCTAssertEqual(bounds.last ?? -1, total, accuracy: 0.001)
         // count live segments per slice; expect pattern solo,overlap,solo,overlap,solo
         func live(_ a: Double, _ b: Double) -> Int {
             ranges.filter { $0.start <= a + 1e-9 && $0.end >= b - 1e-9 }.count
