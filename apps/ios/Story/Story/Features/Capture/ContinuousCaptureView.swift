@@ -92,23 +92,20 @@ struct ContinuousCaptureView: View {
         return "Saves to Moments"
     }
 
-    // MARK: - Bottom: AI pill · recent thumbnail · record button
+    // MARK: - Bottom: AI overlays · recent thumbnail · record button
     private var bottomControls: some View {
         VStack(spacing: 20) {
-            // "Get an AI shot idea" pill — present but AI wiring lands in Increment 4.
-            // Never blocks recording; hidden while recording (Figma shows it absent then).
-            if !model.isRecording {
-                Button {
-                    model.getAIShotIdeaTapped()   // Increment 4 hook (no-op now)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles").font(.system(size: 14))
-                        Text("Get an AI shot idea").font(.system(size: 15, weight: .medium))
-                    }
-                    .foregroundStyle(ink)
-                    .padding(.horizontal, 20).padding(.vertical, 12)
-                    .background(Color(red: 0.09, green: 0.12, blue: 0.12).opacity(0.85), in: Capsule())
-                }
+            // AI Ideas region (Figma V0.2.2). The record button below stays live in
+            // EVERY state — scanning and inference never block recording.
+            switch model.aiState {
+            case .off:
+                if !model.isRecording { aiIdeaPill }
+            case .scanning:
+                scanningPanel
+            case .ideas:
+                ideaCard
+            case .failed(let msg):
+                failedNote(msg)
             }
 
             HStack {
@@ -150,6 +147,140 @@ struct ContinuousCaptureView: View {
             }
         }
     }
+
+    // "Get an AI shot idea" entry pill.
+    private var aiIdeaPill: some View {
+        Button {
+            model.getAIShotIdeaTapped()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").font(.system(size: 14))
+                Text("Get an AI shot idea").font(.system(size: 15, weight: .medium))
+            }
+            .foregroundStyle(ink)
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .background(panelBG, in: Capsule())
+        }
+    }
+
+    // Scanning state (Figma: "SCANNING SCENE / Cancel" + keep-recording hint + Cancel pill).
+    private var scanningPanel: some View {
+        VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("SCANNING SCENE", systemImage: "sparkles")
+                        .font(.system(size: 13, weight: .semibold)).tracking(1)
+                        .foregroundStyle(gold)
+                    Spacer()
+                    Button("Cancel") { model.dismissIdeas() }
+                        .font(.system(size: 14)).foregroundStyle(ink.opacity(0.85))
+                }
+                Text("Slowly look around. You can keep recording.")
+                    .font(.system(size: 15)).foregroundStyle(ink.opacity(0.9))
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
+
+            Button { model.dismissIdeas() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").font(.system(size: 14))
+                    Text("Cancel scan").font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(ink)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .background(panelBG, in: Capsule())
+            }
+        }
+    }
+
+    // Generated shot idea card (Figma: "SHOT IDEA · N SEC / ✕", title, body,
+    // pagination + "Next idea · i of n", "Scan again for another idea").
+    private var ideaCard: some View {
+        VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(ideaEyebrow)
+                        .font(.system(size: 13, weight: .semibold)).tracking(1).foregroundStyle(gold)
+                    Spacer()
+                    Button { model.dismissIdeas() } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ink.opacity(0.7))
+                    }
+                }
+                Text(model.currentIdeaTitle)
+                    .font(.system(size: 22, weight: .regular, design: .serif)).foregroundStyle(ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !model.currentIdeaBody.isEmpty {
+                    Text(model.currentIdeaBody)
+                        .font(.system(size: 15)).foregroundStyle(ink.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.ideaCount > 1 {
+                    Divider().overlay(gold.opacity(0.2)).padding(.vertical, 2)
+                    HStack {
+                        HStack(spacing: 6) {
+                            ForEach(0..<model.ideaCount, id: \.self) { i in
+                                Capsule()
+                                    .fill(i == model.ideaIndex ? gold : ink.opacity(0.25))
+                                    .frame(width: i == model.ideaIndex ? 16 : 6, height: 6)
+                            }
+                        }
+                        Spacer()
+                        Button { model.nextIdea() } label: {
+                            Text("Next idea · \(model.ideaIndex + 1) of \(model.ideaCount) ›")
+                                .font(.system(size: 14, weight: .medium)).foregroundStyle(ink.opacity(0.9))
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
+
+            HStack(spacing: 10) {
+                Button { model.scanAgain() } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles").font(.system(size: 14))
+                        Text("Scan again").font(.system(size: 15, weight: .medium))
+                    }
+                    .foregroundStyle(ink)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(panelBG, in: Capsule())
+                }
+                Button { model.letsShoot() } label: {
+                    Text("Let's shoot").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 22).padding(.vertical, 12)
+                        .background(gold, in: Capsule())
+                }
+            }
+        }
+    }
+
+    private var ideaEyebrow: String {
+        if let s = model.currentIdeaSeconds { return "SHOT IDEA · \(s) SEC" }
+        return "SHOT IDEA"
+    }
+
+    // AI failed/throttled — honest, dismissible. Recording still works.
+    private func failedNote(_ msg: String) -> some View {
+        HStack(spacing: 10) {
+            Text(msg).font(.system(size: 14)).foregroundStyle(ink.opacity(0.9))
+            Spacer()
+            Button("Try again") { model.scanAgain() }
+                .font(.system(size: 14, weight: .medium)).foregroundStyle(gold)
+            Button { model.dismissIdeas() } label: {
+                Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ink.opacity(0.6))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(panelBG, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var panelBG: Color { Color(red: 0.09, green: 0.12, blue: 0.12).opacity(0.9) }
 
     @ViewBuilder
     private var recentThumbnail: some View {

@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import CoreImage
 
 // ContinuousCameraController — the SHARED AVFoundation capture engine for
 // Capture Anywhere (Figma MVP V0.2.2). Unlike the one-shot CameraCaptureView,
@@ -38,7 +39,8 @@ protocol ContinuousCameraControllerDelegate: AnyObject {
     func captureEvent(_ event: ContinuousCaptureEvent)
 }
 
-final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRecordingDelegate {
+final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRecordingDelegate,
+                                        AVCaptureVideoDataOutputSampleBufferDelegate {
     weak var delegate: ContinuousCameraControllerDelegate?
 
     // Strict phase machine — the single source of truth for "can I tap now?".
@@ -48,6 +50,20 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     private let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer?
+
+    // Scene-scan frame grabbing — a SECOND output on the SAME session so an AI
+    // scan can collect frames WITHOUT a separate camera session and WITHOUT
+    // interrupting an in-flight recording (Figma: "you can keep recording").
+    private let videoDataOutput = AVCaptureVideoDataOutput()
+    private let scanQueue = DispatchQueue(label: "com.story.continuous.scan")
+    private let ciContext = CIContext()
+    private var scanning = false
+    private var scanStart: CMTime?
+    private var lastKeptPTS: CMTime?
+    private var scanFrames: [UIImage] = []
+    private var scanCompletion: (([UIImage]) -> Void)?
+    private let scanDuration: Double = 4.0
+    private let scanFrameInterval: Double = 0.35
 
     // The temp URL of the active recording + a token to ensure the AV finish
     // callback is honored exactly once (guards against double delegate calls).
@@ -115,6 +131,17 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         }
         if session.canAddOutput(movieOutput) {
             session.addOutput(movieOutput)
+        }
+        // Second output on the SAME session for AI scan frame grabbing. Frames are
+        // collected in memory only during an explicit scan; the delegate ignores
+        // buffers unless `scanning` is true, so there is no steady-state cost.
+        videoDataOutput.alwaysDiscardsLateVideoFrames = true
+        videoDataOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        videoDataOutput.setSampleBufferDelegate(self, queue: scanQueue)
+        if session.canAddOutput(videoDataOutput) {
+            session.addOutput(videoDataOutput)
         }
         session.commitConfiguration()
 
@@ -235,6 +262,70 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             let duration = (dur.isFinite && dur > 0) ? dur : Date().timeIntervalSince(started)
             self.activeTempURL = nil   // ownership handed to the owner for adoption
             self.delegate?.captureEvent(.recordingFinished(outputFileURL, duration))
+        }
+    }
+
+    // MARK: - Scene scan (AI Ideas) — concurrent with recording
+
+    /// Collect ~scanDuration seconds of throttled frames from the live session and
+    /// deliver them to `completion`. Does NOT touch recording — the user can keep
+    /// recording during a scan. Calling again while scanning restarts the window.
+    func startScan(completion: @escaping ([UIImage]) -> Void) {
+        scanQueue.async { [weak self] in
+            guard let self else { return }
+            self.scanFrames.removeAll()
+            self.scanStart = nil
+            self.lastKeptPTS = nil
+            self.scanCompletion = completion
+            self.scanning = true
+        }
+    }
+
+    /// Abort an in-flight scan without delivering frames (user tapped Cancel scan).
+    func cancelScan() {
+        scanQueue.async { [weak self] in
+            guard let self else { return }
+            self.scanning = false
+            self.scanFrames.removeAll()
+            self.scanStart = nil
+            self.lastKeptPTS = nil
+            self.scanCompletion = nil
+        }
+    }
+
+    private func finishScan() {
+        // Called on scanQueue.
+        guard scanning else { return }
+        scanning = false
+        let frames = scanFrames
+        let completion = scanCompletion
+        scanFrames.removeAll()
+        scanStart = nil
+        lastKeptPTS = nil
+        scanCompletion = nil
+        DispatchQueue.main.async { completion?(frames) }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard scanning else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        if scanStart == nil { scanStart = pts }
+        if let last = lastKeptPTS {
+            let delta = CMTimeGetSeconds(CMTimeSubtract(pts, last))
+            if delta < scanFrameInterval { return }
+        }
+        lastKeptPTS = pts
+        if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            if let cg = ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                scanFrames.append(UIImage(cgImage: cg))
+            }
+        }
+        if let start = scanStart,
+           CMTimeGetSeconds(CMTimeSubtract(pts, start)) >= scanDuration {
+            finishScan()
         }
     }
 

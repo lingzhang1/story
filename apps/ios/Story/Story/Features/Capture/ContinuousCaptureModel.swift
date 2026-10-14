@@ -27,11 +27,26 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     @Published var showError = false
     @Published var errorMessage: String?
 
+    // AI Ideas (optional, user-initiated). The red record button stays live in
+    // every AI state — scanning and inference NEVER block recording.
+    enum AIState: Equatable {
+        case off                      // no AI UI
+        case scanning                 // collecting frames + Director in flight
+        case ideas                    // one or more shot ideas available
+        case failed(String)           // AI failed/throttled — recording still works
+    }
+    @Published var aiState: AIState = .off
+    @Published var ideaIndex = 0                       // which cached idea is shown
+    private(set) var ideas: [DirectorDecisionDTO] = []
+    private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
+
     weak var controller: ContinuousCameraController?
 
     private var context: ModelContext?
     private var captureContext: CaptureContext?
     private let captureSessionId = UUID()
+    private let sceneService = SceneUnderstandingService()
+    private let directorService = StoryDirectorService()
 
     // Dedup + serialization state.
     private var inFlightURLs = Set<String>()      // temp URLs currently being persisted
@@ -44,9 +59,91 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     func toggleRecording() { controller?.toggleRecording() }
 
-    /// AI Ideas hook — fully wired in Increment 4. No-op now so the camera is
-    /// usable without AI and tapping it never blocks recording.
-    func getAIShotIdeaTapped() { /* Increment 4 */ }
+    /// AI Ideas — user-initiated. Starts a scene scan on the LIVE session (does not
+    /// stop any in-progress recording), then runs the Director. Scene-only intent for
+    /// standalone (no stale Story leak), Story intent + guide for .story.
+    func getAIShotIdeaTapped() {
+        guard aiState == .off || isFailed else { return }
+        startScan()
+    }
+
+    /// "Scan again for another idea" — fresh scene evidence, new Director call.
+    func scanAgain() { startScan() }
+
+    /// "Next idea" — advance through the already-available cached ideas (no new call).
+    func nextIdea() {
+        guard !ideas.isEmpty else { return }
+        ideaIndex = (ideaIndex + 1) % ideas.count
+    }
+
+    /// Dismiss the AI overlay entirely; the camera stays ready to record.
+    func dismissIdeas() {
+        controller?.cancelScan()
+        aiState = .off
+        ideas = []
+        ideasOutput = nil
+        ideaIndex = 0
+    }
+
+    /// "Let's shoot" — close the idea overlay and return to a ready-to-record camera.
+    func letsShoot() { dismissIdeas() }
+
+    private var isFailed: Bool { if case .failed = aiState { return true } else { return false } }
+
+    // MARK: - Current idea accessors (for the overlay)
+
+    var currentIdeaTitle: String {
+        ideasOutput?.concept.title ?? "Shot idea"
+    }
+    var currentIdeaBody: String {
+        guard ideaIndex < ideas.count else { return "" }
+        return ideas[ideaIndex].shot?.instruction ?? ideasOutput?.concept.summary ?? ""
+    }
+    var currentIdeaSeconds: Int? {
+        guard ideaIndex < ideas.count else { return nil }
+        if let d = ideas[ideaIndex].shot?.targetDurationSeconds, d > 0 { return Int(d.rounded()) }
+        return nil
+    }
+    var ideaCount: Int { ideas.count }
+
+    private func startScan() {
+        ideas = []; ideasOutput = nil; ideaIndex = 0
+        aiState = .scanning
+        guard let controller else { aiState = .failed("Camera unavailable."); return }
+        controller.startScan { [weak self] frames in
+            Task { @MainActor in await self?.runDirector(frames: frames) }
+        }
+    }
+
+    private func runDirector(frames: [UIImage]) async {
+        guard let captureContext else { aiState = .off; return }
+        guard !frames.isEmpty else { aiState = .failed("Couldn't read the scene. Try again."); return }
+        do {
+            let selected = SceneFrameProcessor.select(from: frames, max: 5)
+            let su = try await sceneService.analyze(
+                frames: selected, captureSessionId: captureSessionId,
+                mode: "shoot_moment", storyId: captureContext.associatedStory?.id)
+            let out = try await directorService.initialize(
+                creativeIntent: captureContext.directorIntent(),
+                sceneUnderstanding: su,
+                targetDurationSeconds: captureContext.targetDurationSeconds,
+                selectedOpportunity: nil)
+            let candidates = out.candidates.isEmpty ? [out.decision] : out.candidates
+            // Only actionable shot ideas belong in the camera overlay.
+            let shots = candidates.filter { $0.action == .captureShot || $0.action == .retryShot }
+            if shots.isEmpty {
+                aiState = .failed("No strong shot here. Try moving or scanning again.")
+            } else {
+                ideas = shots
+                ideasOutput = out
+                ideaIndex = 0
+                aiState = .ideas
+            }
+        } catch {
+            // AI failure / quota exhaustion must NOT disable recording — just report.
+            aiState = .failed("AI ideas are unavailable right now.")
+        }
+    }
 
     // MARK: - ContinuousCameraControllerDelegate
 
