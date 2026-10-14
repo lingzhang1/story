@@ -130,10 +130,10 @@ struct MomentsManageView: View {
     }
 }
 
-private struct MomentManageTile: View {
+struct MomentManageTile: View {
     let moment: MomentModel
     var onTap: () -> Void
-    var onRemove: () -> Void
+    var onRemove: (() -> Void)?
     @State private var thumb: UIImage?
     private var isVideo: Bool { (moment.asset?.durationSeconds ?? 0) > 0 }
     var body: some View {
@@ -157,6 +157,7 @@ private struct MomentManageTile: View {
             .contentShape(Rectangle())
             .onTapGesture { onTap() }
             .overlay(alignment: .topTrailing) {
+                if let onRemove {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
@@ -167,6 +168,7 @@ private struct MomentManageTile: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove this moment")
+                }
             }
             .task { thumb = await MomentThumbnailCache.shared.thumbnail(for: moment) }
     }

@@ -51,11 +51,15 @@ struct HomeView: View {
                 .lineSpacing(2)
                 .padding(.bottom, 22)
 
-            // Create now — frozen future path, disabled (no persistent backing).
-            StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Create now",
-                           sub: "Make something here, in this moment.", enabled: false)
-                .padding(.bottom, 10)
-                .accessibilityHint("Not available yet")
+            // Moments — the global library (Capture Anywhere milestone): browse every moment, select to make
+            // a Story. (Replaces the old disabled "Create now" placeholder.)
+            NavigationLink { MomentsLibraryView() } label: {
+                StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Moments",
+                               sub: "Browse your moments — pick some to make a Story.")
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 10)
 
             // Start a Story — wired to real C1 flow.
             NavigationLink { CreativeDirectionView() } label: {
@@ -93,8 +97,10 @@ struct HomeView: View {
             // Create section — compact image cards (both future/disabled here;
             // Start a Story remains the wired path).
             StoryEyebrow(text: "Create").padding(.bottom, 11)
-            StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Create now",
-                           sub: "", enabled: false, titleSize: 18)
+            NavigationLink { MomentsLibraryView() } label: {
+                StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Moments",
+                               sub: "", titleSize: 18).contentShape(Rectangle())
+            }.buttonStyle(.plain)
                 .padding(.bottom, 8)
                 .accessibilityHint("Not available yet")
             NavigationLink { CreativeDirectionView() } label: {
