@@ -137,6 +137,18 @@ final class StoryModel {
             .compactMap { $0.moment }
     }
 
+    /// Attach a Moment to this Story by appending a link DIRECTLY to momentLinks (not just inserting a link and
+    /// relying on SwiftData's inverse backfill, which is not synchronous for an unsaved context). Returns the
+    /// created link so the caller can ctx.insert it. Idempotent: no-op if the Moment is already linked.
+    @discardableResult
+    func attach(_ moment: MomentModel, orderIndex: Int? = nil) -> StoryMomentLink? {
+        if momentLinks.contains(where: { $0.moment?.id == moment.id }) { return nil }
+        let order = orderIndex ?? ((momentLinks.compactMap { $0.orderIndex }.max() ?? -1) + 1)
+        let link = StoryMomentLink(story: self, moment: moment, orderIndex: order)
+        momentLinks.append(link)   // immediate in-memory inverse — story.moments resolves without a save
+        return link
+    }
+
     var status: StoryStatus {
         get { StoryStatus(rawValue: statusRaw) ?? .active }
         set { statusRaw = newValue.rawValue }

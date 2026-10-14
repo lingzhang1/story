@@ -46,7 +46,7 @@ final class EditPlannerCaseGTests: XCTestCase {
         let asset = AssetModel(relativePath: rel, durationSeconds: dur, source: .directed)
         let m = MomentModel(source: .directed, asset: asset)
         ctx.insert(m)
-        ctx.insert(StoryMomentLink(story: story, moment: m))
+        if let _lnk = story.attach(m) { ctx.insert(_lnk) }
         return m
     }
 
@@ -119,7 +119,7 @@ final class EditPlannerCaseGTests: XCTestCase {
         let s = newStory()
         // A Moment with completed AU but NO local file -> not resolvable -> excluded -> nothing to plan.
         let asset = AssetModel(relativePath: "media/missing-\(UUID()).mov", durationSeconds: 5, source: .directed)
-        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); ctx.insert(StoryMomentLink(story: s, moment: m))
+        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); if let _lnk = s.attach(m) { ctx.insert(_lnk) }
         completeAU(m, useful: [(0, 3)])
         XCTAssertThrowsError(try EditPlanRequestBuilder.build(story: s, context: ctx))
     }

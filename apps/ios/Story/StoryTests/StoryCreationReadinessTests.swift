@@ -96,14 +96,14 @@ final class StoryCreationReadinessTests: XCTestCase {
                                                  withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: abs.path, contents: Data([0x00]))
         let asset = AssetModel(relativePath: rel, durationSeconds: dur, source: .directed)
-        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); ctx.insert(StoryMomentLink(story: story, moment: m))
+        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); if let _lnk = story.attach(m) { ctx.insert(_lnk) }
         return m
     }
 
     @discardableResult
     private func momentNoFile(_ story: StoryModel) -> MomentModel {
         let asset = AssetModel(relativePath: "media/missing-\(UUID()).mov", durationSeconds: 5, source: .directed)
-        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); ctx.insert(StoryMomentLink(story: story, moment: m))
+        let m = MomentModel(source: .directed, asset: asset); ctx.insert(m); if let _lnk = story.attach(m) { ctx.insert(_lnk) }
         return m
     }
 

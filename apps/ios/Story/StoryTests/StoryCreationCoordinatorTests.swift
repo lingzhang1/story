@@ -87,7 +87,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let asset = AssetModel(relativePath: rel, durationSeconds: dur, source: .directed)
         let m = MomentModel(source: .directed, asset: asset)
         ctx.insert(m)
-        ctx.insert(StoryMomentLink(story: story, moment: m))
+        if let _lnk = story.attach(m) { ctx.insert(_lnk) }
         return m
     }
 

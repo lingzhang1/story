@@ -68,10 +68,7 @@ final class StoryRepository: StoryRepositoryProtocol {
     /// link is NOT created (SwiftData has no composite-unique constraint, so we guard here). New links get the
     /// next per-Story orderIndex so selection order is preserved.
     func link(_ moment: MomentModel, to story: StoryModel) throws {
-        let already = story.momentLinks.contains { $0.moment?.id == moment.id }
-        if already { return }
-        let nextOrder = (story.momentLinks.compactMap { $0.orderIndex }.max() ?? -1) + 1
-        let lnk = StoryMomentLink(story: story, moment: moment, orderIndex: nextOrder)
+        guard let lnk = story.attach(moment) else { return }   // nil = already linked (dup prevented)
         context.insert(lnk)
         story.updatedAt = .now
         try context.save()
