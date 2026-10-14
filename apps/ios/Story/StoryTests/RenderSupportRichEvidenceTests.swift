@@ -3,7 +3,7 @@ import XCTest
 
 // A1 richer-AU-forwarding tests (owner-approved 2026-10-12, multimodal experiment addendum).
 //
-// Verifies RenderSupport.richEvidence / evidenceField: the BOUNDED, STRUCTURED evidence object the Edit
+// Verifies EditPlanRequestBuilder.richEvidence / evidenceField: the BOUNDED, STRUCTURED evidence object the Edit
 // Planner now receives ALONGSIDE the legacy `summary`. Pure (JSONValue in -> JSONValue out), no network, no
 // SwiftData, no model. Covers the owner's required cases: missing fields, long clips / long descriptions,
 // multiple events (timestamps kept explicit), payload bounds, and backward compatibility (older/partial AU
@@ -38,15 +38,15 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
 
     // 1. Backward compatibility: an AU record with NO observed block yields NO evidence field.
     func testNoObservedBlockOmitsEvidence() {
-        let ev = RenderSupport.richEvidence(from: au(includeObserved: false))
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(includeObserved: false))
         guard case .null = ev else { return XCTFail("expected .null for missing observed block") }
-        XCTAssertTrue(RenderSupport.evidenceField(au(includeObserved: false)).isEmpty,
+        XCTAssertTrue(EditPlanRequestBuilder.evidenceField(au(includeObserved: false)).isEmpty,
                       "evidenceField must be empty (no-op merge) when observed is absent")
     }
 
     // 2. Missing fields: only present fields appear; nothing fabricated.
     func testMissingFieldsNotFabricated() {
-        let ev = RenderSupport.richEvidence(from: au(summary: "just a summary", subjects: [], events: [], note: nil))
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(summary: "just a summary", subjects: [], events: [], note: nil))
         let o = obj(ev)!
         XCTAssertEqual(o["summary"], .string("just a summary"))
         XCTAssertNil(o["subjects"], "no subjects in -> no subjects out")
@@ -56,7 +56,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
 
     // 3. Event timestamps are kept EXPLICIT and STRUCTURED (not buried in prose).
     func testEventTimestampsStructured() {
-        let ev = RenderSupport.richEvidence(from: au(events: [
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(events: [
             (0.0, 2.0, "woman at railing"),
             (7.5, nil, "camera reveals cityscape"),
         ]))
@@ -74,7 +74,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
     // 4. Subjects de-duplicated (case-insensitive) and bounded.
     func testSubjectsDedupedAndBounded() {
         let many = (0..<20).map { "subject\($0)" } + ["Green Earrings", "green earrings"]
-        let ev = RenderSupport.richEvidence(from: au(subjects: many))
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(subjects: many))
         guard case let .array(subs)? = obj(ev)?["subjects"] else { return XCTFail("subjects missing") }
         XCTAssertLessThanOrEqual(subs.count, 10, "subjects bounded to MAX_SUBJECTS")
         // case-insensitive dedupe: both "Green Earrings" variants cannot both appear
@@ -85,7 +85,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
     // 5. Long clips / many events: event count is bounded.
     func testManyEventsBounded() {
         let events = (0..<30).map { (Double($0) * 5.0, nil as Double?, "event number \($0) happening in the clip") }
-        let ev = RenderSupport.richEvidence(from: au(events: events))
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(events: events))
         guard case let .array(evs)? = obj(ev)?["events"] else { return XCTFail("events missing") }
         XCTAssertLessThanOrEqual(evs.count, 8, "events bounded to MAX_EVENTS")
     }
@@ -95,7 +95,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
         let longWhat = String(repeating: "x", count: 500)
         let longSummary = String(repeating: "s", count: 1000)
         let longNote = String(repeating: "n", count: 1000)
-        let ev = RenderSupport.richEvidence(from: au(summary: longSummary,
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(summary: longSummary,
                                                      events: [(0.0, nil, longWhat)], note: longNote))
         let o = obj(ev)!
         if case let .string(s)? = o["summary"] { XCTAssertLessThanOrEqual(s.count, 321) } else { XCTFail() }
@@ -109,7 +109,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
     func testOverallPayloadBounded() {
         let events = (0..<8).map { (Double($0), nil as Double?, String(repeating: "z", count: 90)) }
         let subjects = (0..<10).map { _ in String(repeating: "q", count: 80) }
-        let ev = RenderSupport.richEvidence(from: au(summary: String(repeating: "a", count: 320),
+        let ev = EditPlanRequestBuilder.richEvidence(from: au(summary: String(repeating: "a", count: 320),
                                                      subjects: subjects, events: events,
                                                      note: String(repeating: "b", count: 200)))
         // sum of string lengths across the structured object must be within the ceiling (1400)
