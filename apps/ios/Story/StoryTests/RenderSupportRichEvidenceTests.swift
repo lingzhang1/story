@@ -48,7 +48,7 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
     func testMissingFieldsNotFabricated() {
         let ev = EditPlanRequestBuilder.richEvidence(from: au(summary: "just a summary", subjects: [], events: [], note: nil))
         let o = obj(ev)!
-        XCTAssertEqual(o["summary"], .string("just a summary"))
+        XCTAssertEqual(o["summary"]?.stringValue, "just a summary")
         XCTAssertNil(o["subjects"], "no subjects in -> no subjects out")
         XCTAssertNil(o["events"], "no events in -> no events out")
         XCTAssertNil(o["temporal_order_note"])
@@ -63,11 +63,11 @@ final class RenderSupportRichEvidenceTests: XCTestCase {
         guard case let .array(evs)? = obj(ev)?["events"] else { return XCTFail("events missing") }
         XCTAssertEqual(evs.count, 2)
         guard case let .object(e0) = evs[0] else { return XCTFail() }
-        XCTAssertEqual(e0["t"], .number(0.0))
-        XCTAssertEqual(e0["t_end"], .number(2.0))
-        XCTAssertEqual(e0["what"], .string("woman at railing"))
+        XCTAssertEqual(e0["t"]?.doubleValue, 0.0)
+        XCTAssertEqual(e0["t_end"]?.doubleValue, 2.0)
+        XCTAssertEqual(e0["what"]?.stringValue, "woman at railing")
         guard case let .object(e1) = evs[1] else { return XCTFail() }
-        XCTAssertEqual(e1["t"], .number(7.5))
+        XCTAssertEqual(e1["t"]?.doubleValue, 7.5)
         XCTAssertNil(e1["t_end"], "missing end_time -> no t_end")
     }
 

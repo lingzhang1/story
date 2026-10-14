@@ -146,7 +146,7 @@ struct StoryCoverageService: StoryCoverageComputing {
 // frozen contracts). JSONValue lets us decode the stored snake_case JSON and
 // re-encode it verbatim into the request body, preserving every field the engine
 // expects without a hand-maintained Swift mirror of each contract.
-enum JSONValue: Codable, Equatable {
+enum JSONValue: Codable {
     case string(String)
     case number(Double)
     case bool(Bool)
