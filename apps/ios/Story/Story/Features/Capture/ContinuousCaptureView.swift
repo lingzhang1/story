@@ -90,21 +90,6 @@ struct ContinuousCaptureView: View {
                 .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
                 .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
-                // Phase 1: a small AI Ideas chip to REOPEN saved ideas (no new inference). Shown
-                // only when ideas are cached but the full card is collapsed, and not while recording.
-                if model.hasCachedIdeas && model.ideasCollapsed && !model.isRecording && model.aiState == .off {
-                    Button { model.reopenIdeas() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles").font(.system(size: 13))
-                            Text("Ideas").font(.system(size: 13, weight: .semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45), in: Capsule())
-                        .overlay(Capsule().stroke(gold.opacity(0.6), lineWidth: 1))
-                    }
-                    .accessibilityLabel("Reopen saved AI ideas")
-                }
             }
             if model.isRecording {
                 recordingIndicator
@@ -211,8 +196,26 @@ struct ContinuousCaptureView: View {
 
                 Spacer()
 
-                // Right spacer to visually center the record button opposite the thumbnail.
-                Color.clear.frame(width: 56, height: 56)
+                // Phase 1 (relocated bottom-right): AI Ideas chip to REOPEN cached ideas with no new
+                // inference. Shown only when ideas are cached and the full card is collapsed, and not
+                // while recording. Occupies the slot opposite the thumbnail so the record button stays centered.
+                Group {
+                    if !model.isRecording && model.hasCachedIdeas && model.ideasCollapsed && model.aiState == .off {
+                        Button { model.reopenIdeas() } label: {
+                            VStack(spacing: 3) {
+                                Image(systemName: "sparkles").font(.system(size: 18))
+                                Text("Ideas").font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(gold.opacity(0.6), lineWidth: 1))
+                        }
+                        .accessibilityLabel("Reopen AI ideas")
+                    } else {
+                        Color.clear.frame(width: 56, height: 56)
+                    }
+                }
             }
         }
     }
@@ -232,33 +235,51 @@ struct ContinuousCaptureView: View {
         }
     }
 
-    // Scanning state (Figma: "SCANNING SCENE" + keep-recording hint + Cancel). This is the
-    // frame-collection phase — distinct from the "thinking" (Director) phase below.
+    // Scanning state: unmistakable "Scanning scene…" with a DETERMINATE progress bar across the fixed
+    // scan window, a keep-recording hint, a "Done" button to end early, and "Cancel AI request". This is
+    // the frame-collection phase — distinct from the "thinking" (Director) phase below.
     private var scanningPanel: some View {
         VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Label("SCANNING SCENE", systemImage: "viewfinder")
                         .font(.system(size: 13, weight: .semibold)).tracking(1)
                         .foregroundStyle(gold)
                     Spacer()
-                    ProgressView().tint(gold).scaleEffect(0.8)
+                    Text("\(Int(model.scanProgress * 100))%")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ink.opacity(0.7))
                 }
+                // Determinate bar — the user can see it progress and when it will end.
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(ink.opacity(0.15)).frame(height: 5)
+                        Capsule().fill(gold)
+                            .frame(width: max(4, geo.size.width * model.scanProgress), height: 5)
+                            .animation(.linear(duration: 0.15), value: model.scanProgress)
+                    }
+                }
+                .frame(height: 5)
                 Text("Slowly look around. You can keep recording.")
-                    .font(.system(size: 15)).foregroundStyle(ink.opacity(0.9))
+                    .font(.system(size: 14)).foregroundStyle(ink.opacity(0.85))
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
 
-            Button { model.cancelAIRequest() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
-                    Text("Cancel AI request").font(.system(size: 15, weight: .medium))
+            HStack(spacing: 10) {
+                Button { model.cancelAIRequest() } label: {
+                    Text("Cancel").font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(ink)
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .background(panelBG, in: Capsule())
                 }
-                .foregroundStyle(ink)
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .background(panelBG, in: Capsule())
+                Button { model.finishScanNow() } label: {
+                    Text("Done scanning").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 22).padding(.vertical, 12)
+                        .background(gold, in: Capsule())
+                }
             }
         }
     }

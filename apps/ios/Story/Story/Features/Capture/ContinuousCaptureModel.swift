@@ -45,6 +45,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     @Published var ideaIndex = 0                       // which cached idea is shown (preserved)
     @Published var ideasCollapsed = false              // full card hidden but ideas retained (chip reopens)
     @Published var recordingElapsed: TimeInterval = 0  // live REC timer (Phase 2)
+    @Published var scanProgress: Double = 0            // 0→1 across the scan window (determinate bar)
     private(set) var ideas: [DirectorDecisionDTO] = []
     private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
     private var recordingTimer: Timer?
@@ -154,17 +155,32 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         aiGeneration &+= 1
         let gen = aiGeneration
         ideas = []; ideasOutput = nil; ideaIndex = 0
+        scanProgress = 0
         aiState = .scanning
         guard let controller else { aiState = .failed("Camera unavailable."); return }
-        controller.startScan { [weak self] frames in
+        controller.startScan(progress: { [weak self] p in
+            Task { @MainActor in
+                guard let self, gen == self.aiGeneration, self.aiState == .scanning else { return }
+                self.scanProgress = p
+            }
+        }, completion: { [weak self] frames in
             Task { @MainActor in
                 guard let self, gen == self.aiGeneration else { return }  // superseded/cancelled
                 // Frames are in; the Director is now thinking.
                 self.aiState = .thinking
                 await self.runDirector(frames: frames, generation: gen)
             }
-        }
+        })
     }
+
+    /// "Done" — end the scan early and use the frames collected so far (proactive end, Phase 3).
+    func finishScanNow() {
+        guard aiState == .scanning else { return }
+        controller?.finishScanNow()
+    }
+
+    /// The scan window length (seconds), for labeling the progress UI.
+    var scanWindowSeconds: Double { controller?.scanWindowSeconds ?? 4.0 }
 
     private func runDirector(frames: [UIImage], generation gen: Int) async {
         guard gen == aiGeneration else { return }                 // stale — drop silently

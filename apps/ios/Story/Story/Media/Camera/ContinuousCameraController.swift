@@ -62,6 +62,7 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     private var lastKeptPTS: CMTime?
     private var scanFrames: [UIImage] = []
     private var scanCompletion: (([UIImage]) -> Void)?
+    private var scanProgress: ((Double) -> Void)?     // 0→1 over the scan window (for the UI progress bar)
     private let scanDuration: Double = 4.0
     private let scanFrameInterval: Double = 0.35
 
@@ -281,6 +282,31 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         }
     }
 
+    /// Collect ~scanDuration seconds of throttled frames from the live session and
+    /// deliver them to `completion`. Does NOT touch recording — the user can keep
+    /// recording during a scan. Calling again while scanning restarts the window.
+    /// `progress` is fired 0→1 across the scan window so the UI can show a determinate bar.
+    func startScan(progress: ((Double) -> Void)? = nil, completion: @escaping ([UIImage]) -> Void) {
+        scanQueue.async { [weak self] in
+            guard let self else { return }
+            self.scanFrames.removeAll()
+            self.scanStart = nil
+            self.lastKeptPTS = nil
+            self.scanCompletion = completion
+            self.scanProgress = progress
+            self.scanning = true
+        }
+    }
+
+    /// The fixed scan window length (seconds), so the owner can label/scale the progress UI.
+    var scanWindowSeconds: Double { scanDuration }
+
+    /// Proactively END the current scan NOW and deliver whatever frames were collected
+    /// (user tapped "Done" before the window elapsed). Safe if ≥1 frame; otherwise reports empty.
+    func finishScanNow() {
+        scanQueue.async { [weak self] in self?.finishScan() }
+    }
+
     /// Abort an in-flight scan without delivering frames (user tapped Cancel scan).
     func cancelScan() {
         scanQueue.async { [weak self] in
@@ -290,6 +316,7 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             self.scanStart = nil
             self.lastKeptPTS = nil
             self.scanCompletion = nil
+            self.scanProgress = nil
         }
     }
 
@@ -303,6 +330,7 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         scanStart = nil
         lastKeptPTS = nil
         scanCompletion = nil
+        scanProgress = nil
         DispatchQueue.main.async { completion?(frames) }
     }
 
@@ -323,9 +351,11 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
                 scanFrames.append(UIImage(cgImage: cg))
             }
         }
-        if let start = scanStart,
-           CMTimeGetSeconds(CMTimeSubtract(pts, start)) >= scanDuration {
-            finishScan()
+        if let start = scanStart {
+            let elapsed = CMTimeGetSeconds(CMTimeSubtract(pts, start))
+            let p = max(0, min(1, elapsed / scanDuration))
+            if let cb = scanProgress { DispatchQueue.main.async { cb(p) } }
+            if elapsed >= scanDuration { finishScan() }
         }
     }
 

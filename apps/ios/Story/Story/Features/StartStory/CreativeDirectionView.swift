@@ -74,10 +74,11 @@ struct CreativeDirectionView: View {
             }
         }
         .navigationDestination(isPresented: $navigate) {
-            // Reached Story Home THROUGH the wizard. Its Back dismisses the WHOLE wizard (this view), which
-            // also pops the pushed Story Home — so the user lands on app Home directly instead of walking back
-            // through describe→feel→context.
-            if let s = resolvedStory { StoryHomeView(story: s, onBack: { dismiss() }) }
+            // Reached Story Home THROUGH the wizard. Back pops Story Home (navigate=false) back to the
+            // wizard's finished "You're all set" step, whose own ← Back exits the wizard cleanly. Using the
+            // wizard's dismiss() here was AMBIGUOUS while this bool-driven destination was on screen (it
+            // routed to the wrong presentation and the Back appeared dead).
+            if let s = resolvedStory { StoryHomeView(story: s, onBack: { navigate = false }) }
         }
         .alert("Couldn't create your Story", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
