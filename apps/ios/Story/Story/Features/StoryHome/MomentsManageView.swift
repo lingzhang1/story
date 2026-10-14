@@ -176,7 +176,7 @@ struct MomentManageTile: View {
 
 // MomentPreviewView — full-screen preview of a single Moment's source media. Video -> AVPlayer (tap to
 // play/pause, autoplays once); still image (duration 0) -> full image. Read-only; never mutates the Moment.
-private struct MomentPreviewView: View {
+struct MomentPreviewView: View {
     let moment: MomentModel
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
