@@ -26,6 +26,8 @@ struct ContinuousCaptureView: View {
 
     @StateObject private var model = ContinuousCaptureModel()
 
+    @State private var showLibrary = false
+
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
     private let ink = Color(red: 0.96, green: 0.94, blue: 0.91)
 
@@ -59,12 +61,20 @@ struct ContinuousCaptureView: View {
         }
         .statusBarHidden(true)
         .onAppear { model.configure(context: context, captureContext: captureContext) }
+        // Phase 1: the recent-Moment thumbnail opens the GLOBAL library in a browse-only
+        // (.recentBrowse) cover PRESENTED OVER the camera — the camera session beneath is
+        // preserved (not torn down), so closing returns straight to a ready camera. No new
+        // camera session is created. Navigation is gated OFF while recording (see thumbnail
+        // button) so an in-flight clip is never interrupted.
+        .fullScreenCover(isPresented: $showLibrary) {
+            NavigationStack { MomentsLibraryView(libraryContext: .recentBrowse) }
+        }
         .alert("Couldn't save that clip", isPresented: $model.showError, actions: {
             Button("OK", role: .cancel) {}
         }, message: { Text(model.errorMessage ?? "Please try again.") })
     }
 
-    // MARK: - Top bar: ✕ close · "Saves to Moments" pill
+    // MARK: - Top bar: ✕ close · "Saves to Moments" pill (or REC + timer while recording)
     private var topBar: some View {
         ZStack {
             HStack {
@@ -77,14 +87,35 @@ struct ContinuousCaptureView: View {
                         .frame(width: 40, height: 40)
                         .background(Color.black.opacity(0.4), in: Circle())
                 }
+                .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
+                .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
             }
-            Text(destinationLabel)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .background(Color.black.opacity(0.35), in: Capsule())
+            if model.isRecording {
+                recordingIndicator
+            } else {
+                Text(destinationLabel)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Color.black.opacity(0.35), in: Capsule())
+            }
         }
+    }
+
+    // Phase 2: prominent REC indicator + elapsed timer (pulsing red dot).
+    private var recordingIndicator: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(red: 0.92, green: 0.22, blue: 0.22))
+                .frame(width: 10, height: 10)
+                .modifier(RecordingPulse())
+            Text("REC").font(.system(size: 13, weight: .bold)).tracking(1).foregroundStyle(.white)
+            Text(model.recordingTimeString)
+                .font(.system(size: 14, weight: .medium, design: .monospaced)).foregroundStyle(.white)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(Color.black.opacity(0.5), in: Capsule())
+        .accessibilityLabel("Recording, \(model.recordingTimeString)")
     }
 
     private var destinationLabel: String {
@@ -96,26 +127,40 @@ struct ContinuousCaptureView: View {
     private var bottomControls: some View {
         VStack(spacing: 20) {
             // AI Ideas region (Figma V0.2.2). The record button below stays live in
-            // EVERY state — scanning and inference never block recording.
-            switch model.aiState {
-            case .off:
-                if !model.isRecording { aiIdeaPill }
-            case .scanning:
-                scanningPanel
-            case .ideas:
-                ideaCard
-            case .failed(let msg):
-                failedNote(msg)
+            // EVERY state — scanning and inference never block recording. While RECORDING,
+            // the AI overlay is hidden entirely (Phase 2: "AI overlay minimized or hidden").
+            if model.isRecording {
+                EmptyView()
+            } else {
+                switch model.aiState {
+                case .off:
+                    aiIdeaPill
+                case .scanning:
+                    scanningPanel
+                case .thinking:
+                    thinkingPanel
+                case .ideas:
+                    ideaCard
+                case .failed(let msg):
+                    failedNote(msg)
+                }
             }
 
             HStack {
                 // Recent Moment thumbnail (bottom-left) — updates after persistence.
+                // Phase 1: opens the global Moments Library (browse-only) OVER the camera;
+                // closing returns here. DISABLED while recording so an in-flight clip is
+                // never interrupted (deferred until the user stops).
                 Button {
-                    dismiss()   // return to the library/story that owns these Moments
+                    guard !model.isRecording else { return }
+                    showLibrary = true
                 } label: {
                     recentThumbnail
                 }
                 .frame(width: 56, height: 56)
+                .disabled(model.isRecording)
+                .opacity(model.isRecording ? 0.4 : 1)
+                .accessibilityLabel("Recent moments")
 
                 Spacer()
 
@@ -163,17 +208,17 @@ struct ContinuousCaptureView: View {
         }
     }
 
-    // Scanning state (Figma: "SCANNING SCENE / Cancel" + keep-recording hint + Cancel pill).
+    // Scanning state (Figma: "SCANNING SCENE" + keep-recording hint + Cancel). This is the
+    // frame-collection phase — distinct from the "thinking" (Director) phase below.
     private var scanningPanel: some View {
         VStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("SCANNING SCENE", systemImage: "sparkles")
+                    Label("SCANNING SCENE", systemImage: "viewfinder")
                         .font(.system(size: 13, weight: .semibold)).tracking(1)
                         .foregroundStyle(gold)
                     Spacer()
-                    Button("Cancel") { model.dismissIdeas() }
-                        .font(.system(size: 14)).foregroundStyle(ink.opacity(0.85))
+                    ProgressView().tint(gold).scaleEffect(0.8)
                 }
                 Text("Slowly look around. You can keep recording.")
                     .font(.system(size: 15)).foregroundStyle(ink.opacity(0.9))
@@ -184,8 +229,38 @@ struct ContinuousCaptureView: View {
 
             Button { model.dismissIdeas() } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "sparkles").font(.system(size: 14))
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
                     Text("Cancel scan").font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(ink)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .background(panelBG, in: Capsule())
+            }
+        }
+    }
+
+    // Thinking state (Phase 2): frames are collected; the Director is generating an idea.
+    // Honest spinner — NO fabricated progress percentage.
+    private var thinkingPanel: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                ProgressView().tint(gold).scaleEffect(0.9)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("FINDING A SHOT IDEA")
+                        .font(.system(size: 13, weight: .semibold)).tracking(1).foregroundStyle(gold)
+                    Text("Reading the scene you just captured.")
+                        .font(.system(size: 14)).foregroundStyle(ink.opacity(0.85))
+                }
+                Spacer()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
+
+            Button { model.dismissIdeas() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                    Text("Cancel").font(.system(size: 15, weight: .medium))
                 }
                 .foregroundStyle(ink)
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -310,4 +385,18 @@ private struct ContinuousCameraHost: UIViewControllerRepresentable {
         return c
     }
     func updateUIViewController(_ controller: ContinuousCameraController, context: Context) {}
+}
+
+// A gentle opacity pulse for the REC dot. Respects Reduce Motion (holds steady when enabled).
+private struct RecordingPulse: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var on = false
+    func body(content: Content) -> some View {
+        content
+            .opacity(reduceMotion ? 1 : (on ? 0.35 : 1))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { on = true }
+            }
+    }
 }

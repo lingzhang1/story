@@ -31,14 +31,22 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     // every AI state — scanning and inference NEVER block recording.
     enum AIState: Equatable {
         case off                      // no AI UI
-        case scanning                 // collecting frames + Director in flight
+        case scanning                 // collecting scene frames from the live session
+        case thinking                 // frames collected; Director is generating an idea
         case ideas                    // one or more shot ideas available
         case failed(String)           // AI failed/throttled — recording still works
     }
     @Published var aiState: AIState = .off
     @Published var ideaIndex = 0                       // which cached idea is shown
+    @Published var recordingElapsed: TimeInterval = 0  // live REC timer (Phase 2)
     private(set) var ideas: [DirectorDecisionDTO] = []
     private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
+    private var recordingTimer: Timer?
+    private var recordingStartedAt: Date?
+    // Monotonic token: every scan/record transition bumps it so a stale Director response
+    // from a cancelled or superseded scan can NEVER reopen the overlay (Phase 2 requirement:
+    // "prevent stale AI responses from reopening overlays during recording").
+    private var aiGeneration = 0
 
     weak var controller: ContinuousCameraController?
 
@@ -78,6 +86,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     /// Dismiss the AI overlay entirely; the camera stays ready to record.
     func dismissIdeas() {
+        aiGeneration &+= 1               // invalidate any in-flight scan/Director response
         controller?.cancelScan()
         aiState = .off
         ideas = []
@@ -107,17 +116,28 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     var ideaCount: Int { ideas.count }
 
     private func startScan() {
+        aiGeneration &+= 1
+        let gen = aiGeneration
         ideas = []; ideasOutput = nil; ideaIndex = 0
         aiState = .scanning
         guard let controller else { aiState = .failed("Camera unavailable."); return }
         controller.startScan { [weak self] frames in
-            Task { @MainActor in await self?.runDirector(frames: frames) }
+            Task { @MainActor in
+                guard let self, gen == self.aiGeneration else { return }  // superseded/cancelled
+                // Frames are in; the Director is now thinking.
+                self.aiState = .thinking
+                await self.runDirector(frames: frames, generation: gen)
+            }
         }
     }
 
-    private func runDirector(frames: [UIImage]) async {
+    private func runDirector(frames: [UIImage], generation gen: Int) async {
+        guard gen == aiGeneration else { return }                 // stale — drop silently
         guard let captureContext else { aiState = .off; return }
-        guard !frames.isEmpty else { aiState = .failed("Couldn't read the scene. Try again."); return }
+        guard !frames.isEmpty else {
+            if gen == aiGeneration { aiState = .failed("Couldn't read the scene. Try again.") }
+            return
+        }
         do {
             let selected = SceneFrameProcessor.select(from: frames, max: 5)
             let su = try await sceneService.analyze(
@@ -128,8 +148,10 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                 sceneUnderstanding: su,
                 targetDurationSeconds: captureContext.targetDurationSeconds,
                 selectedOpportunity: nil)
+            // The user may have started recording or dismissed while we were thinking — if so,
+            // this response is stale and must NOT reopen an overlay (Phase 2).
+            guard gen == aiGeneration else { return }
             let candidates = out.candidates.isEmpty ? [out.decision] : out.candidates
-            // Only actionable shot ideas belong in the camera overlay.
             let shots = candidates.filter { $0.action == .captureShot || $0.action == .retryShot }
             if shots.isEmpty {
                 aiState = .failed("No strong shot here. Try moving or scanning again.")
@@ -140,7 +162,8 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                 aiState = .ideas
             }
         } catch {
-            // AI failure / quota exhaustion must NOT disable recording — just report.
+            // AI failure / quota exhaustion must NOT disable recording — just report, if still current.
+            guard gen == aiGeneration else { return }
             aiState = .failed("AI ideas are unavailable right now.")
         }
     }
@@ -157,16 +180,53 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
             break
         case .recordingStarted:
             isRecording = true
+            // Phase 2: starting a recording SUSPENDS any pending AI work. Bump the generation
+            // so a late Director response cannot reopen the overlay over a live recording, and
+            // collapse the overlay to the minimized REC state.
+            aiGeneration &+= 1
+            controller?.cancelScan()
+            if aiState != .off { aiState = .off; ideas = []; ideasOutput = nil; ideaIndex = 0 }
+            startRecordingTimer()
         case .recordingFinished(let url, let duration):
             isRecording = false
+            stopRecordingTimer()
             persist(tempURL: url, duration: duration)
         case .captureFailed(let message):
             isRecording = false
+            stopRecordingTimer()
             errorMessage = message
             showError = true
         case .interrupted:
             isRecording = false
+            stopRecordingTimer()
         }
+    }
+
+    // MARK: - Recording timer (live REC elapsed, Phase 2)
+
+    private func startRecordingTimer() {
+        recordingStartedAt = Date()
+        recordingElapsed = 0
+        recordingTimer?.invalidate()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let start = self.recordingStartedAt else { return }
+                self.recordingElapsed = Date().timeIntervalSince(start)
+            }
+        }
+    }
+
+    private func stopRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        recordingStartedAt = nil
+        recordingElapsed = 0
+    }
+
+    /// mm:ss elapsed string for the REC indicator.
+    var recordingTimeString: String {
+        let total = Int(recordingElapsed)
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     // MARK: - Persistence (ONE path, serialized, deduped)

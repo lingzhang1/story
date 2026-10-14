@@ -23,6 +23,8 @@ struct StoryHomeView: View {
     @State private var showPreview = false
     @State private var pickerItems = false
     @State private var showMoments = false
+    @State private var showAddMoments = false      // Phase 3: "Add Moments" source chooser
+    @State private var showStoryMomentsPicker = false   // Phase 3: From Story Moments (library .story)
     @State private var confirmLifecycle = false
     /// R-c.1 UX: live import progress so the user sees "Adding your videos…" instead of a frozen Home while
     /// picked videos are copied out of Photos (can be an iCloud download). nil = no import in flight.
@@ -112,8 +114,8 @@ struct StoryHomeView: View {
                 }
                 .padding(.top, 20)
 
-                Button { pickerItems = true } label: {
-                    Text("+ Add photos or videos")
+                Button { showAddMoments = true } label: {
+                    Text("+ Add Moments")
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.gold)
                 }
                 .padding(.top, 16)
@@ -174,7 +176,7 @@ struct StoryHomeView: View {
         }) { launch in
             // Opportunity-driven capture: Story Idea Show-me / Guide possibility Shoot.
             // The scan flow carries selected_opportunity into Director (survives rescan).
-            SceneScanFlowView(story: story, selectedOpportunity: launch.opportunity)
+            SceneScanFlowView(captureContext: .story(story), selectedOpportunity: launch.opportunity)
         }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
@@ -206,6 +208,21 @@ struct StoryHomeView: View {
                 onReopen: { showMenu = false; try? useCases.reopenStory(story) })
                 .presentationDetents([.height(story.status == .active ? 300 : 260)])
                 .presentationBackground(StoryTheme.surfaceAlt)
+        }
+        // Phase 3: "Add Moments" source chooser → From Story Moments (library .story) | From Photos.
+        .sheet(isPresented: $showAddMoments) {
+            AddMomentsSheet(
+                onFromStoryMoments: { showStoryMomentsPicker = true },
+                onFromPhotos: { pickerItems = true })
+                .presentationDetents([.height(300)])
+                .presentationBackground(StoryTheme.surfaceAlt)
+        }
+        .fullScreenCover(isPresented: $showStoryMomentsPicker, onDismiss: {
+            Task { await refreshAfterCapture() }   // new links → recompute coverage/idea
+        }) {
+            NavigationStack {
+                MomentsLibraryView(libraryContext: .story(story))
+            }
         }
     }
 

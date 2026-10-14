@@ -1,17 +1,41 @@
 import SwiftUI
 import SwiftData
 
-// MomentsLibraryView — the GLOBAL Moments library (Capture Anywhere milestone, Phase 4). Shows EVERY Moment
-// across all Stories, newest first, as square tiles. Two modes:
-//   • browse  : tap a tile to preview; "Select" enters multi-select.
-//   • select  : tap tiles to toggle a checkmark; "Create Story" builds a NEW Story from the selected Moments
-//                via the existing creation pipeline (StoryUseCases.createStoryFromMoments → StoryMomentLink,
-//                no media duplication); "Delete" removes the selected Moments from the library (destructive:
-//                deletes their owned media + AU, cascades links).
-// Reuses MomentManageTile + MomentPreviewView from the Story-scoped manage screen — no new tile/preview UI.
+// LibraryContext — the ONE Moments-library component adapts to WHERE it was opened from
+// (Capture UX corrections, Phase 4). Only the primary action + a couple of affordances
+// change; the grid, tiles, preview and multi-select are shared.
+//
+//   • home        : browse + multi-select; primary action = "Create Story (N)".
+//   • story(s)    : browse + multi-select; primary action = "Add to Story (N)". Moments
+//                   already linked to `s` are badged "In Story" and are NOT re-added
+//                   (dup-link prevented). Calls onChanged after linking so the Story refreshes.
+//   • recentBrowse: opened from the camera's recent-Moment thumbnail. Browse-only (tap to
+//                   preview), NO Select / Create / Add — closing returns to the camera.
+enum LibraryContext {
+    case home
+    case story(StoryModel)
+    case recentBrowse
+
+    var allowsSelection: Bool {
+        if case .recentBrowse = self { return false }
+        return true
+    }
+    var associatedStory: StoryModel? {
+        if case .story(let s) = self { return s }
+        return nil
+    }
+}
+
+// MomentsLibraryView — the GLOBAL Moments library. Shows EVERY Moment across all Stories,
+// newest first, grouped in a square grid. Behavior adapts to LibraryContext (above). Reuses
+// MomentManageTile + MomentPreviewView — no new tile/preview UI.
 struct MomentsLibraryView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+
+    var libraryContext: LibraryContext = .home
+    /// Called after Moments are linked to a Story (.story context) so the caller can refresh.
+    var onChanged: (() -> Void)? = nil
 
     @State private var moments: [MomentModel] = []
     @State private var previewMoment: MomentModel?
@@ -19,6 +43,8 @@ struct MomentsLibraryView: View {
     @State private var selected = Set<UUID>()
     @State private var pendingDelete = false
     @State private var createdStory: StoryModel?
+    /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
+    @State private var alreadyInStory = Set<UUID>()
 
     private var useCases: StoryUseCases { StoryUseCases(repository: StoryRepository(context: context)) }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
@@ -36,9 +62,7 @@ struct MomentsLibraryView: View {
                         }
                     }
                     .padding(.top, 18)
-                    Text(selecting
-                         ? "Tap moments to select · Create a Story from them or delete them from your library."
-                         : "Tap a moment to preview · tap Select to pick moments for a new Story.")
+                    Text(hintText)
                         .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
                         .padding(.top, 14)
                 }
@@ -62,21 +86,21 @@ struct MomentsLibraryView: View {
         .onAppear(perform: reload)
     }
 
-    // MARK: - Pieces
+    // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             Button { dismiss() } label: {
-                Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                Text(backGlyph).font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
                     .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("Back")
+            }.buttonStyle(.plain).accessibilityLabel(backLabel)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Moments").font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
-                Text("\(moments.count) in your library")
+                Text(titleText).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                Text(subtitleText)
                     .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
             }
             Spacer()
-            if !moments.isEmpty {
+            if !moments.isEmpty && libraryContext.allowsSelection {
                 Button(selecting ? "Done" : "Select") {
                     withAnimation { selecting.toggle(); if !selecting { selected.removeAll() } }
                 }
@@ -85,30 +109,108 @@ struct MomentsLibraryView: View {
         }
     }
 
-    @ViewBuilder
-    private func tile(_ m: MomentModel) -> some View {
-        if selecting {
-            MomentManageTile(moment: m, onTap: { toggle(m) }, onRemove: nil)
-                .overlay(alignment: .topTrailing) {
-                    Image(systemName: selected.contains(m.id) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selected.contains(m.id) ? StoryTheme.gold : StoryTheme.cream.opacity(0.6))
-                        .padding(6)
-                }
-        } else {
-            MomentManageTile(moment: m, onTap: { previewMoment = m }, onRemove: nil)
+    // Camera thumbnail (.recentBrowse) uses an explicit "camera" affordance so it reads as
+    // "back to the camera", not "up a level".
+    private var backGlyph: String {
+        if case .recentBrowse = libraryContext { return "✕" }
+        return "←"
+    }
+    private var backLabel: String {
+        if case .recentBrowse = libraryContext { return "Back to camera" }
+        return "Back"
+    }
+
+    private var titleText: String {
+        switch libraryContext {
+        case .home, .story: return "Moments"
+        case .recentBrowse: return "Recent Moments"
         }
     }
 
+    private var subtitleText: String {
+        switch libraryContext {
+        case .home:         return "\(moments.count) in your library"
+        case .story(let s): return "Add to \(s.title.displayTitle)"
+        case .recentBrowse: return "\(moments.count) in your library"
+        }
+    }
+
+    private var hintText: String {
+        if case .recentBrowse = libraryContext {
+            return "Tap a moment to preview · close to return to the camera."
+        }
+        if selecting {
+            switch libraryContext {
+            case .story: return "Tap moments to select · add them to this Story."
+            default:     return "Tap moments to select · create a Story from them, or delete them."
+            }
+        }
+        switch libraryContext {
+        case .story: return "Tap a moment to preview · tap Select to add moments to this Story."
+        default:     return "Tap a moment to preview · tap Select to pick moments for a new Story."
+        }
+    }
+
+    // MARK: - Tiles
+
+    @ViewBuilder
+    private func tile(_ m: MomentModel) -> some View {
+        let inStory = alreadyInStory.contains(m.id)
+        if selecting {
+            MomentManageTile(moment: m, onTap: { if !inStory { toggle(m) } }, onRemove: nil)
+                .overlay(alignment: .topTrailing) {
+                    if inStory {
+                        // Already in this Story — badged, not selectable (dup-link prevented).
+                        Text("In Story")
+                            .font(.system(size: 9, weight: .semibold)).tracking(0.5)
+                            .foregroundStyle(StoryTheme.ink)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(StoryTheme.gold.opacity(0.85), in: Capsule())
+                            .padding(5)
+                    } else {
+                        Image(systemName: selected.contains(m.id) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selected.contains(m.id) ? StoryTheme.gold : StoryTheme.cream.opacity(0.6))
+                            .padding(6)
+                    }
+                }
+                .opacity(inStory ? 0.5 : 1)
+        } else {
+            MomentManageTile(moment: m, onTap: { previewMoment = m }, onRemove: nil)
+                .overlay(alignment: .topTrailing) {
+                    if inStory {
+                        Text("In Story")
+                            .font(.system(size: 9, weight: .semibold)).tracking(0.5)
+                            .foregroundStyle(StoryTheme.ink)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(StoryTheme.gold.opacity(0.85), in: Capsule())
+                            .padding(5)
+                    }
+                }
+        }
+    }
+
+    // MARK: - Selection bar (context-specific primary action)
+
     private var selectionBar: some View {
         HStack(spacing: 12) {
-            Button(role: .destructive) { pendingDelete = true } label: {
-                Text("Delete").frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.2), lineWidth: 1.5))
-            }.buttonStyle(.plain).foregroundStyle(StoryTheme.cream.opacity(0.75))
-            Button { createStoryFromSelection() } label: {
-                Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
-            }.buttonStyle(.plain)
+            switch libraryContext {
+            case .home:
+                Button(role: .destructive) { pendingDelete = true } label: {
+                    Text("Delete").frame(maxWidth: .infinity).padding(.vertical, 13)
+                        .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.2), lineWidth: 1.5))
+                }.buttonStyle(.plain).foregroundStyle(StoryTheme.cream.opacity(0.75))
+                Button { createStoryFromSelection() } label: {
+                    Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
+                        .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
+                }.buttonStyle(.plain)
+            case .story:
+                Button { addSelectionToStory() } label: {
+                    Text("Add to Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
+                        .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
+                }.buttonStyle(.plain)
+            case .recentBrowse:
+                EmptyView()
+            }
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
         .background(.ultraThinMaterial)
@@ -127,6 +229,11 @@ struct MomentsLibraryView: View {
 
     private func reload() {
         moments = (try? useCases.allMoments()) ?? []
+        if let s = libraryContext.associatedStory {
+            alreadyInStory = Set(s.momentLinks.compactMap { $0.moment?.id })
+        } else {
+            alreadyInStory = []
+        }
     }
 
     private func toggle(_ m: MomentModel) {
@@ -136,10 +243,19 @@ struct MomentsLibraryView: View {
     private func createStoryFromSelection() {
         let picked = moments.filter { selected.contains($0.id) }
         guard !picked.isEmpty else { return }
-        // Minimal intent for a library-origin Story; the user refines on the Story screen / Customize.
         let story = try? useCases.createStoryFromMoments(
             title: "New Story", direction: "A story from my selected moments.", moments: picked)
         if let story { createdStory = story }
+    }
+
+    private func addSelectionToStory() {
+        guard let story = libraryContext.associatedStory else { return }
+        // Preserve selection order (newest-first grid order of the picked tiles).
+        let picked = moments.filter { selected.contains($0.id) && !alreadyInStory.contains($0.id) }
+        guard !picked.isEmpty else { return }
+        try? useCases.addExistingMoments(picked, to: story)
+        onChanged?()
+        dismiss()
     }
 
     private func deleteSelected() {

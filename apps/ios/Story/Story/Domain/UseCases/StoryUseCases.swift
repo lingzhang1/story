@@ -121,6 +121,22 @@ final class StoryUseCases {
         try repository.removeMoment(moment, from: story)
     }
 
+    /// Link already-existing global Moments into a Story ("Add Moments → From Story Moments").
+    /// No media duplication (reuses the Moment + its AU). The repository's `link` is idempotent —
+    /// a Moment already linked to this Story is skipped, so re-adding never creates a duplicate
+    /// StoryMomentLink. New links take the next per-Story orderIndex, preserving selection order.
+    /// Returns the Moments that were newly linked this call (already-linked ones are excluded).
+    @discardableResult
+    func addExistingMoments(_ moments: [MomentModel], to story: StoryModel) throws -> [MomentModel] {
+        let alreadyLinked = Set(story.momentLinks.compactMap { $0.moment?.id })
+        var newlyLinked: [MomentModel] = []
+        for m in moments where !alreadyLinked.contains(m.id) {
+            try repository.link(m, to: story)
+            newlyLinked.append(m)
+        }
+        return newlyLinked
+    }
+
     /// Explicit library deletion: destroy the Moment, its owned media, and its AU (cascades its links).
     func deleteMomentFromLibrary(_ moment: MomentModel) throws {
         try repository.deleteMomentFromLibrary(moment)

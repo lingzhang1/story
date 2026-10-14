@@ -16,6 +16,8 @@ struct MomentsManageView: View {
     @State private var pendingRemove: MomentModel?
     @State private var previewMoment: MomentModel?
     @State private var pickerItems = false
+    @State private var showAddMoments = false         // Phase 3: source chooser
+    @State private var showStoryMomentsPicker = false // Phase 3: From Story Moments
     @State private var importProgress: ImportProgress?
 
     private var useCases: StoryUseCases {
@@ -61,9 +63,9 @@ struct MomentsManageView: View {
                         .padding(.top, 14)
                 }
 
-                // R-c.1: the SAME import flow as Story Home (shared picker + progress banner).
-                Button { pickerItems = true } label: {
-                    Text("+ Add photos or videos")
+                // Phase 3: unified "Add Moments" — From Story Moments | From iPhone Photos.
+                Button { showAddMoments = true } label: {
+                    Text("+ Add Moments")
                         .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream.opacity(0.75))
                         .frame(maxWidth: .infinity).padding(.vertical, 13)
                         .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.14), lineWidth: 1.5))
@@ -109,6 +111,19 @@ struct MomentsManageView: View {
             Button("Cancel", role: .cancel) { pendingRemove = nil }
         } message: {
             Text("The moment is removed from this Story. This does not delete the original from your library.")
+        }
+        // Phase 3: "Add Moments" chooser + From Story Moments picker.
+        .sheet(isPresented: $showAddMoments) {
+            AddMomentsSheet(
+                onFromStoryMoments: { showStoryMomentsPicker = true },
+                onFromPhotos: { pickerItems = true })
+                .presentationDetents([.height(300)])
+                .presentationBackground(StoryTheme.surfaceAlt)
+        }
+        .fullScreenCover(isPresented: $showStoryMomentsPicker) {
+            NavigationStack {
+                MomentsLibraryView(libraryContext: .story(story))
+            }
         }
     }
 
