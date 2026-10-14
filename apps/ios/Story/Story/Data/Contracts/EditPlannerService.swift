@@ -64,6 +64,11 @@ struct EditPlanRequestDTO: Encodable {
     var musicAnalysis: JSONValue? = nil    // frozen music_analysis/1 for the selected track
     var soundPreference: String? = nil     // immersive|balanced|music_led; nil omitted (no-music parity preserved)
     var editorialMode: String? = nil       // highlights|full|custom; nil omitted (back-compat, planner infers)
+    // Creative Revision Foundation (additive, request-only). When present, carries the version-aware context
+    // {mode, base_version_id, prior_edit_summaries, base_plan?, directives?, soft_direction?}. Lives INSIDE the
+    // request body, so it is part of the frozen request snapshot AND the canonical async fingerprint (body-hashed)
+    // with NO fingerprint-logic change. Omitted when nil => byte-identical to the pre-revision request.
+    var revisionContext: JSONValue? = nil
 
     enum CodingKeys: String, CodingKey {
         case storyId = "story_id"
@@ -78,6 +83,7 @@ struct EditPlanRequestDTO: Encodable {
         case musicAnalysis = "music_analysis"
         case soundPreference = "sound_preference"
         case editorialMode = "editorial_mode"
+        case revisionContext = "revision_context"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -95,6 +101,7 @@ struct EditPlanRequestDTO: Encodable {
         if let musicAnalysis { try c.encode(musicAnalysis, forKey: .musicAnalysis) }
         if let soundPreference { try c.encode(soundPreference, forKey: .soundPreference) }
         if let editorialMode { try c.encode(editorialMode, forKey: .editorialMode) }
+        if let revisionContext { try c.encode(revisionContext, forKey: .revisionContext) }
     }
 }
 

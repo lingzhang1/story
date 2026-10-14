@@ -699,3 +699,87 @@ def test_critique_off_by_default():
     eng.generate(inp)
     assert eng.last_diagnostics.get("critique_attempted") in (None, False)
     assert eng.last_diagnostics.get("model_calls") == 1
+
+
+# ---------------------------------------------------------------------------
+# Creative Revision Foundation — revision_context (additive; USER-message only).
+# ---------------------------------------------------------------------------
+from edit_planner import _build_user, _revision_context_block, diversity_diagnostics  # noqa: E402
+
+
+def test_revision_context_absent_user_message_unchanged():
+    """When revision_context is None, the USER message carries NO version-context block (behavior unchanged)."""
+    msg = _build_user(_inputs())
+    assert "VERSION CONTEXT" not in msg
+
+
+def test_revision_context_explore_injects_objective_and_summaries():
+    ctx = {"mode": "explore", "base_version_id": "v-parent",
+           "prior_edit_summaries": [{"version_id": "v-parent", "segments": [{"asset_id": M1}, {"asset_id": M2}]}]}
+    msg = _build_user(_inputs(revision_context=ctx))
+    assert "=== VERSION CONTEXT ===" in msg
+    assert "base_version_id: v-parent" in msg
+    assert "MEANINGFULLY DIFFERENT" in msg          # explicit alternative-edit objective
+    assert "v-parent" in msg                         # the prior summary is present
+    # frozen system body is untouched: the block lives only in the user message
+    assert "VERSION CONTEXT" not in RealEditPlannerEngine(FakeModelGateway(response=_good_plan()))._system
+
+
+def test_revision_context_history_is_bounded():
+    many = [{"version_id": f"v{i}", "segments": [{"asset_id": M1}]} for i in range(10)]
+    block = _revision_context_block({"mode": "explore", "prior_edit_summaries": many})
+    # bounded to <= 4 summaries injected (defense-in-depth)
+    assert block.count('"version_id"') <= 4
+
+
+def test_revision_context_revise_carries_directives_and_soft():
+    ctx = {"mode": "revise", "base_version_id": "v1",
+           "soft_direction": "more cinematic",
+           "directives": {"include_moment_ids": [M1], "exclude_moment_ids": [], "opening_moment_id": M2}}
+    block = _revision_context_block(ctx)
+    assert "REVISE INTENT (soft): more cinematic" in block
+    assert "REVISE DIRECTIVES (hard):" in block
+    assert "PRESERVE unaffected edits" in block
+
+
+def test_diversity_diagnostics_identical_is_near_identical():
+    parent = {"segments": [{"asset_id": M1}, {"asset_id": M2}]}
+    new = {"segments": [{"asset_id": M1}, {"asset_id": M2}]}
+    d = diversity_diagnostics(parent, new)
+    assert d["moment_set_jaccard"] == 1.0
+    assert d["near_identical"] is True
+    assert d["opening_changed"] is False and d["order_changed"] is False
+
+
+def test_diversity_diagnostics_reordered_detected():
+    parent = {"segments": [{"asset_id": M1}, {"asset_id": M2}]}
+    new = {"segments": [{"asset_id": M2}, {"asset_id": M1}]}   # same set, swapped opening/ending/order
+    d = diversity_diagnostics(parent, new)
+    assert d["moment_set_jaccard"] == 1.0
+    assert d["opening_changed"] is True
+    assert d["ending_changed"] is True
+    assert d["order_changed"] is True
+    assert d["near_identical"] is False
+
+
+def test_diversity_diagnostics_different_set():
+    M3 = str(uuid4())
+    parent = {"segments": [{"asset_id": M1}, {"asset_id": M2}]}
+    new = {"segments": [{"asset_id": M1}, {"asset_id": M3}]}
+    d = diversity_diagnostics(parent, new)
+    assert 0.0 < d["moment_set_jaccard"] < 1.0
+    assert d["near_identical"] is False
+
+
+def test_revision_context_in_request_fingerprint():
+    """revision_context lives in the request body, so the canonical async fingerprint (body-hashed) already
+    covers it — a changed revision_context => different fingerprint, with NO fingerprint-logic change."""
+    from edit_plan_jobs import payload_fingerprint
+    body_a = json.dumps({"story_id": "s", "revision_context": {"mode": "explore", "base_version_id": "v1"}})
+    body_b = json.dumps({"story_id": "s", "revision_context": {"mode": "explore", "base_version_id": "v2"}})
+    fp_a = payload_fingerprint(body_a, [], False, "storytelling", creative_brief=None, sheet_digests=[])
+    fp_b = payload_fingerprint(body_b, [], False, "storytelling", creative_brief=None, sheet_digests=[])
+    assert fp_a != fp_b
+    # identical body => identical fingerprint (transport recovery resumes the same job)
+    fp_a2 = payload_fingerprint(body_a, [], False, "storytelling", creative_brief=None, sheet_digests=[])
+    assert fp_a == fp_a2

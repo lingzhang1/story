@@ -101,7 +101,7 @@ def _run_one(store: _jobs.JobStore, job_id: str) -> str:
             music_asset_id=b.get("music_asset_id"),
             music_plan_id=str(b["music_plan_id"]) if b.get("music_plan_id") else None,
             music_analysis=b.get("music_analysis"), sound_preference=b.get("sound_preference"),
-            editorial_mode=b.get("editorial_mode"),
+            editorial_mode=b.get("editorial_mode"), revision_context=b.get("revision_context"),
             images=images, creative_brief=env.get("creative_brief"), image_moment_order=order,
             critique_revision=bool(env.get("critique_revision")))
 

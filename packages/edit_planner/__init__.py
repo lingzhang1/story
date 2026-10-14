@@ -284,6 +284,12 @@ class EditPlanInputs:
     music_analysis: dict | None = None  # frozen music_analysis/1 shape; None => no-music planning
     sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
     editorial_mode: str | None = None  # highlights|full|custom; None => infer from duration (back-compat). Advisory; no schema change.
+    # Creative Revision Foundation (additive, request-only). When present, carries the version-aware context:
+    #   {mode: "explore"|"revise", base_version_id, prior_edit_summaries: [...], base_plan?, directives?,
+    #    soft_direction?}. Injected into the USER message only (frozen v5.2 system body untouched); None => the
+    #   planner behaves exactly as before. For Explore it supplies bounded prior-edit summaries + an explicit
+    #   alternative-edit objective; Revise (NL V1, later) will additionally carry the exact base_plan.
+    revision_context: dict | None = None
     # MVP multimodal (additive, no schema/contract change): bounded Tier-1 contact-sheet JPEGs (one per Moment,
     # in moments[] order) attached to the SAME request. Empty => text-only A1 planning (the frozen fallback).
     images: list[Any] = field(default_factory=list)  # list[model_gateway.ImageInput]
@@ -408,6 +414,8 @@ def _build_user(inputs: EditPlanInputs) -> str:
     if inputs.creative_brief:
         brief_block = ("\n=== CREATIVE DIRECTION ===\n" + inputs.creative_brief.strip()
                        + "\n=== END CREATIVE DIRECTION ===\n")
+    # Creative Revision Foundation — version-aware context in the USER message only (frozen v5.2 body untouched).
+    revision_block = _revision_context_block(inputs.revision_context)
     # MVP multimodal — tell the model that timestamped contact-sheet frames accompany the text, mapped to
     # Moment ids in this exact order. Present ONLY when images are attached (text-only path omits it entirely).
     image_block = ""
@@ -422,11 +430,107 @@ def _build_user(inputs: EditPlanInputs) -> str:
     return ("Plan the EditPlan for THIS Story from the material below. Use only the given Moment ids and their "
             "real/useful ranges. Plan to the Story target duration. Respect native audio.\n"
             + brief_block
+            + revision_block
             + image_block
             + _edit_sound_pref_directive(inputs.sound_preference)
             + _edit_mode_directive(inputs.editorial_mode)
             + "\nINPUT:\n"
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
+
+
+def _revision_context_block(ctx: dict | None) -> str:
+    """Render the version-aware context as a BOUNDED USER-message block (never the frozen system body).
+
+    EXPLORE: an explicit alternative-edit objective plus compact summaries of the selected parent version and a
+    bounded set of relevant recent versions — selected moment ids, opening/ending moment, ordering, source
+    ranges, shot-duration distribution. The objective asks for a MEANINGFULLY DIFFERENT yet valid edit WITHOUT
+    dropping required material, padding, or arbitrary fragmentation — never a shuffle or a template.
+
+    REVISE (NL V1, later): carried here too, but Revise additionally supplies the exact base_plan; this block
+    states the directive/soft intent. Empty string when ctx is None => behavior unchanged.
+    """
+    if not ctx:
+        return ""
+    import json
+    mode = (ctx.get("mode") or "explore").strip().lower()
+    summaries = ctx.get("prior_edit_summaries") or []
+    # Bound the history we inject (defense-in-depth; the client also bounds it).
+    MAX_SUMMARIES = 4
+    if isinstance(summaries, list) and len(summaries) > MAX_SUMMARIES:
+        summaries = summaries[:MAX_SUMMARIES]
+    lines = ["\n=== VERSION CONTEXT ==="]
+    base_v = ctx.get("base_version_id")
+    if base_v:
+        lines.append(f"base_version_id: {base_v}")
+    if mode == "explore":
+        lines.append(
+            "OBJECTIVE: produce a MEANINGFULLY DIFFERENT yet fully valid alternative edit from the previous "
+            "version(s) below — a different opening, a different ordering, or a different source-range emphasis. "
+            "Do NOT merely shuffle, do NOT follow a fixed template, do NOT drop required material or pad, and do "
+            "NOT fragment a continuous performance just for novelty. If the material genuinely cannot support a "
+            "meaningfully different good edit, return your best valid edit rather than a forced variation.")
+    elif mode == "revise":
+        soft = (ctx.get("soft_direction") or "").strip()
+        if soft:
+            lines.append("REVISE INTENT (soft): " + soft)
+        if ctx.get("directives"):
+            lines.append("REVISE DIRECTIVES (hard): " + json.dumps(ctx.get("directives")))
+        lines.append("Apply the requested changes and PRESERVE unaffected edits where feasible.")
+    if summaries:
+        lines.append("PREVIOUS VERSION(S) (most recent first):")
+        lines.append(json.dumps(summaries, indent=2))
+    lines.append("=== END VERSION CONTEXT ===\n")
+    return "\n".join(lines)
+
+
+def diversity_diagnostics(parent_summary: dict, new_plan: dict) -> dict:
+    """Deterministic, model-free comparison of a NEW plan against the PARENT version's compact summary.
+
+    Returns metrics used by the eval harness (and optionally logged) to decide whether an Explore alternative is
+    MEANINGFULLY different from its parent — NOT to accept/reject automatically (human judgment decides worth):
+      - moment_set_jaccard      : |A∩B| / |A∪B| over selected moment ids (1.0 => identical set)
+      - opening_changed         : parent's opening moment != new opening moment
+      - ending_changed          : parent's ending moment  != new ending moment
+      - order_changed           : the ordered shared-moment sequence differs
+      - shot_count_delta        : new segment count - parent segment count
+      - near_identical          : coarse "basically the same edit" flag (same set, same opening+ending, same order)
+    A near_identical=True Explore result is the failure the owner forbids saving as a creative alternative.
+    """
+    def _moment_seq(summary_or_plan: dict) -> list[str]:
+        segs = summary_or_plan.get("segments") or summary_or_plan.get("moment_sequence") or []
+        out = []
+        for s in segs:
+            if isinstance(s, dict):
+                out.append(str(s.get("asset_id") or s.get("moment_id") or ""))
+            else:
+                out.append(str(s))
+        return [x for x in out if x]
+
+    pseq = _moment_seq(parent_summary)
+    nseq = _moment_seq(new_plan)
+    pset, nset = set(pseq), set(nseq)
+    union = pset | nset
+    jaccard = (len(pset & nset) / len(union)) if union else 1.0
+    p_open = pseq[0] if pseq else None
+    n_open = nseq[0] if nseq else None
+    p_end = pseq[-1] if pseq else None
+    n_end = nseq[-1] if nseq else None
+    # ordered sequence over the SHARED moments only (ignores pure add/remove, isolates reordering)
+    shared = pset & nset
+    p_shared = [m for m in pseq if m in shared]
+    n_shared = [m for m in nseq if m in shared]
+    order_changed = p_shared != n_shared
+    opening_changed = p_open != n_open
+    ending_changed = p_end != n_end
+    near_identical = (jaccard >= 0.999 and not opening_changed and not ending_changed and not order_changed)
+    return {
+        "moment_set_jaccard": round(jaccard, 4),
+        "opening_changed": opening_changed,
+        "ending_changed": ending_changed,
+        "order_changed": order_changed,
+        "shot_count_delta": len(nseq) - len(pseq),
+        "near_identical": near_identical,
+    }
 
 
 def _edit_mode_directive(mode: str | None) -> str:
@@ -754,5 +858,6 @@ __all__ = [
     "SPEED_CONSISTENCY_ABS", "SPEED_CONSISTENCY_REL", "ROUND_SNAP_ABS",
     "EditPlanInputs", "EditPlanInfeasibleError", "MalformedPlanError",
     "SegmentTimeline", "validate_plan", "normalize_plan", "timeline_total_seconds",
+    "diversity_diagnostics",
     "EditPlannerEngine", "RealEditPlannerEngine", "MockEditPlannerEngine",
 ]

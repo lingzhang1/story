@@ -72,9 +72,14 @@ struct StoryCreatingView: View {
     /// resolving the recommended track itself.
     var preresolvedMusic: StoryCreationCoordinator.MusicSelection? = nil
     var musicIsPreresolved: Bool = false
+    /// Creative Revision Foundation: when set, this run is a deliberate "Create another version" (EXPLORE)
+    /// built FROM this parent output — the coordinator re-plans with a version-aware context and sets lineage.
+    /// nil => an ordinary original create (unchanged behavior).
+    var sourceVersion: GeneratedOutputModel? = nil
     /// R-d: when set, "Create a new version" on the just-rendered Result pops back to the preview and re-enters
-    /// the music picker flow (consistent with reopen). When nil, it re-runs no-music on this coordinator.
-    var onRequestRecreate: (() -> Void)? = nil
+    /// the music picker flow (consistent with reopen). Carries the just-rendered output as the Explore parent.
+    /// When nil, it re-runs an Explore from that output on this coordinator.
+    var onRequestRecreate: ((GeneratedOutputModel) -> Void)? = nil
     /// When the render completes, hand the output UP to the parent so it can present Result in place of this
     /// screen (stack stays Home -> Preview -> Result instead of Home -> Preview -> Creating -> Result, which
     /// left the stuck "Finishing up…" screen behind when Result dismissed). When nil, this view falls back to
@@ -123,17 +128,17 @@ struct StoryCreatingView: View {
                     completedOutput = nil
                     DispatchQueue.main.async { dismiss() }
                 },
-                onRecreate: {
+                onRecreate: { src in
                     // "Create a new version". Route back through the preview's Customize + music flow so the
                     // user can re-choose length/sound/track. The parent's handler sets showCreating=false which
                     // pops THIS Creating screen and then presents Customize — so we must NOT also call our own
                     // dismiss() here (the two raced and dropped the Customize sheet, landing on Story Home).
                     completedOutput = nil
                     if let onRequestRecreate {
-                        onRequestRecreate()
+                        onRequestRecreate(src)
                     } else {
                         didHandOffCompletion = false
-                        coordinator?.create(for: story)
+                        coordinator?.createAnotherVersion(for: story, from: src)
                     }
                 })
         }
@@ -149,7 +154,11 @@ struct StoryCreatingView: View {
                 coordinator = coord
                 if musicIsPreresolved {
                     // Picker already chose + resolved the track (or no-music). Render exactly that.
-                    coord.createWithMusic(for: story, music: preresolvedMusic)
+                    if let parent = sourceVersion {
+                        coord.createAnotherVersion(for: story, from: parent, music: preresolvedMusic)
+                    } else {
+                        coord.createWithMusic(for: story, music: preresolvedMusic)
+                    }
                 } else {
                     // Legacy/standalone entry: resolve the recommended track ourselves, else no-music.
                     let resolver = MusicSelectionResolver(context: context)

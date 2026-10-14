@@ -249,7 +249,8 @@ enum EditPlanRequestBuilder {
                       outputFormat: String = "vertical",
                       musicPlan: JSONValue? = nil,
                       musicAssetId: String? = nil,
-                      musicAnalysis: JSONValue? = nil) throws -> Build {
+                      musicAnalysis: JSONValue? = nil,
+                      revisionContext: JSONValue? = nil) throws -> Build {
         // Resolvable local media, keyed by Moment id.
         let media = MomentResolver.resolve(moments: story.moments)
         let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
@@ -315,7 +316,8 @@ enum EditPlanRequestBuilder {
             musicAssetId: musicAssetId,
             musicAnalysis: musicAnalysis,
             soundPreference: story.effectiveSoundPreference.rawValue,   // immersive|balanced|music_led → native_audio bias
-            editorialMode: story.editorialMode)                        // highlights|full|custom → selection breadth (nil = infer)
+            editorialMode: story.editorialMode,                        // highlights|full|custom → selection breadth (nil = infer)
+            revisionContext: revisionContext)                          // Creative Revision Foundation: Explore/Revise version-aware context (nil = unchanged)
 
         return Build(request: req, includedMedia: included, excludedMomentIds: excluded)
     }

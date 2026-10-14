@@ -85,9 +85,10 @@ struct StoryResultView: View {
     /// create-flow bindings AND pops the preview, landing on Story Home in a single tap. Falls back to
     /// `dismiss()` when presented standalone (e.g. a direct reopen or a test host).
     var onHome: (() -> Void)? = nil
-    /// Start a re-create. Injected so the parent can drive the shared Creating screen instead of this
-    /// view pushing its own. Falls back to the local coordinator + `dismiss()` when absent.
-    var onRecreate: (() -> Void)? = nil
+    /// Start a re-create (Create a new version), carrying THIS output as the parent to derive the Explore
+    /// version-aware context from. Injected so the parent drives the shared Creating screen. Falls back to a
+    /// local coordinator + dismiss when absent.
+    var onRecreate: ((GeneratedOutputModel) -> Void)? = nil
 
     private func goHome() {
         if let onHome { onHome() } else { dismiss() }
@@ -319,13 +320,14 @@ struct StoryResultView: View {
     /// coordinator + dismiss when presented standalone.
     private func recreate() {
         if let onRecreate {
-            onRecreate()
+            onRecreate(output)
             return
         }
         if recreateCoordinator == nil {
             recreateCoordinator = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         }
-        recreateCoordinator?.create(for: story)
+        // Local fallback (standalone/test host): Explore from THIS output.
+        recreateCoordinator?.createAnotherVersion(for: story, from: output)
         // Hand off to the Creating screen for live progress.
         dismiss()
     }

@@ -162,6 +162,13 @@ final class StoryCreationCoordinator {
     private var lastOutputFormat: String = "vertical"
     private var lastTargetSeconds: Double?
     private var lastMusic: MusicSelection?
+    // Creative Revision Foundation: a per-run version-aware context + the user-selected parent version. Set
+    // only on a deliberate "Create another version" (Explore). nil => an original create (behavior unchanged).
+    private var pendingRevisionContext: JSONValue?
+    private var pendingParentVersionId: UUID?
+    private var pendingOperationType: String = "original"
+    /// Diversity diagnostics from the most recent Explore run (nil otherwise) — read for device verification.
+    private(set) var lastDiversity: RevisionContextBuilder.Diversity?
 
     init(
         planner: EditPlanning,
@@ -198,6 +205,18 @@ final class StoryCreationCoordinator {
     /// renders with the soundtrack. A nil selection is the exact no-music path.
     func createWithMusic(for story: StoryModel, outputFormat: String = "vertical",
                          targetSeconds: Double? = nil, music: MusicSelection?) {
+        guard !isCreating else { return }
+        // Original create (or a retry of one): clear any Explore version-context so stale context never leaks.
+        pendingRevisionContext = nil
+        pendingParentVersionId = nil
+        pendingOperationType = "original"
+        beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
+    }
+
+    /// Shared run starter used by both an original create and a deliberate another-version. Does NOT touch the
+    /// Explore version-context fields, so the caller controls them (createWithMusic clears, createAnotherVersion sets).
+    private func beginRun(for story: StoryModel, outputFormat: String,
+                          targetSeconds: Double?, music: MusicSelection?) {
         guard !isCreating else { return }
         lastStory = story
         lastOutputFormat = outputFormat
@@ -240,6 +259,25 @@ final class StoryCreationCoordinator {
         createWithMusic(for: story, outputFormat: lastOutputFormat, targetSeconds: targetSeconds, music: lastMusic)
     }
 
+    /// Create another version (Creative Revision Foundation — EXPLORE). Re-plans with a version-aware context
+    /// derived from the user-SELECTED parent output (+ a bounded set of recent versions of this Story), under an
+    /// explicit alternative-edit objective. ADDITIVE: a new GeneratedOutput is appended on success; the parent
+    /// and all prior versions are preserved. A FRESH operation_id is minted (deliberate new execution — never a
+    /// fingerprint bypass). Reuses the SAME planner/validation/render path; music + user settings preserved.
+    func createAnotherVersion(for story: StoryModel, from parent: GeneratedOutputModel,
+                              outputFormat: String = "vertical", targetSeconds: Double? = nil,
+                              music: MusicSelection? = nil) {
+        guard !isCreating else { return }
+        // Deliberate new version => NEW operation_id (clear any carried-over handle so a fresh job is minted).
+        story.planOperationId = nil; story.planJobId = nil
+        let recents = story.generatedOutputs.sorted { $0.createdAt > $1.createdAt }
+        pendingRevisionContext = RevisionContextBuilder.explore(parent: parent, recents: recents)
+        pendingParentVersionId = parent.versionId ?? parent.id
+        pendingOperationType = "another_version"
+        lastDiversity = nil
+        beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
+    }
+
     // MARK: - Pipeline
 
     private func run(story: StoryModel, outputFormat: String, targetSeconds: Double?) async {
@@ -262,7 +300,8 @@ final class StoryCreationCoordinator {
                 story: story, context: context, targetSeconds: targetSeconds, outputFormat: outputFormat,
                 musicPlan: planForBuilder,
                 musicAssetId: assetIdForBuilder,
-                musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON)
+                musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON,
+                revisionContext: pendingRevisionContext)
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
@@ -473,6 +512,14 @@ final class StoryCreationCoordinator {
         }
 
         // ---- completed: persist a REAL GeneratedOutputModel; do NOT overwrite a prior success until now ----
+        // Creative Revision Foundation: for an Explore run, record how different this plan is from the
+        // user-selected parent (deterministic; human judgment decides worth). near_identical is the signal the
+        // UI uses to AVOID silently presenting a basically-identical edit as a creative alternative.
+        if pendingOperationType == "another_version", let parentId = pendingParentVersionId,
+           let parent = story.generatedOutputs.first(where: { ($0.versionId ?? $0.id) == parentId }) {
+            lastDiversity = RevisionContextBuilder.diversity(parent: parent, newPlan: plan)
+        }
+
         let output = persist(result: result, plan: plan, story: story, build: build)
         // The attempt is done — clear the in-flight job handles so a reopened completed Story never re-polls.
         // (A deliberate new version mints a fresh operation_id on its next create.)
@@ -600,9 +647,9 @@ final class StoryCreationCoordinator {
             renderHeight: Double(result.renderSize.height),
             isStale: false,
             soundtrackTitle: pendingMusic?.trackTitle,
-            versionId: nil,                             // original render: versionId defaults to the row id
-            parentVersionId: nil,
-            operationType: "original",
+            versionId: nil,                             // new render: versionId defaults to the row id
+            parentVersionId: pendingParentVersionId,    // Explore: the user-selected parent; nil for original
+            operationType: pendingOperationType,        // "another_version" for Explore; else "original"
             editPlanJSON: planJSON,
             soundtrackRole: pendingMusic?.soundtrackRole,
             nativeAudioPriority: pendingMusic?.nativeAudioPriority,

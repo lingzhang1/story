@@ -23,6 +23,10 @@ struct CreateStoryPreviewView: View {
     // to open the Result screen for an existing good output or start a new render.
     @State private var showCreating = false
     @State private var reopenOutput: GeneratedOutputModel?
+    /// Creative Revision Foundation: the parent output a "Create a new version" (Explore) is derived FROM.
+    /// Set by handleRecreate; threaded into StoryCreatingView so the coordinator re-plans version-aware. nil
+    /// for a first/original create.
+    @State private var recreateSource: GeneratedOutputModel?
     // R-d music picker step. `musicRecommendation` drives the picker sheet; `resolvingMusic` shows a brief
     // "Finding music…" state while recommend() runs; `chosenMusic` is the resolved selection (nil = no-music)
     // handed to the Creating screen, which renders EXACTLY that track (no auto-select, no stale plan).
@@ -72,6 +76,7 @@ struct CreateStoryPreviewView: View {
     /// target it is preserved and we proceed; otherwise we fetch a recommendation and present it (recommendation
     /// -first, no mandatory picker) so the user accepts/overrides before anything downstream runs.
     private func beginCreateFlow() {
+        recreateSource = nil                        // original create — not an Explore version
         if story.intentTargetDurationSeconds != nil {
             beginMusicFlow()                        // explicit duration precedence — skip the duration step
             return
@@ -185,10 +190,11 @@ struct CreateStoryPreviewView: View {
 
     /// "Create a new version" from a REOPENED Result: drop Result and FORCE the create+picker flow (never the
     /// reopen shortcut — otherwise it would bounce straight back to the existing output and never re-create).
-    private func handleRecreate() {
+    private func handleRecreate(from source: GeneratedOutputModel?) {
         reopenOutput = nil
         chosenMusic = nil
         showCreating = false
+        recreateSource = source     // Explore: re-plan FROM this version; nil => plain re-create
         // "Create a new version" is the natural moment to rechoose the length, so re-offer the duration step
         // (recommendation-first) even though this Story already has a target — rather than silently reusing it.
         DispatchQueue.main.async { promptDuration() }
@@ -311,10 +317,12 @@ struct CreateStoryPreviewView: View {
         // renders exactly that track and self-manages its Result. Reopen -> Result directly.
         .navigationDestination(isPresented: $showCreating) {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
-                              onRequestRecreate: handleRecreate)
+                              sourceVersion: recreateSource,
+                              onRequestRecreate: { handleRecreate(from: recreateSource) })
         }
         .navigationDestination(item: $reopenOutput) { output in
-            StoryResultView(story: story, initialOutput: output, onHome: goHome, onRecreate: handleRecreate)
+            StoryResultView(story: story, initialOutput: output, onHome: goHome,
+                            onRecreate: { src in handleRecreate(from: src) })
         }
         .sheet(item: $musicRecommendation) { rec in
             MusicPickerView(recommendation: rec, resolver: musicResolver,
