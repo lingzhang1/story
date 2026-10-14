@@ -10,6 +10,11 @@ struct CreativeDirectionView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
+    /// Phase 3: when Story creation starts from the Moments Library, the selected Moments are
+    /// seeded here. On final confirmation they are linked to the newly-created Story (order
+    /// preserved, no media duplication). Empty for the Home "Start a Story" entry.
+    var seedMoments: [MomentModel] = []
+
     enum Step { case describe, feel, context, blueprint }
     @State private var step: Step = .describe
     @State private var title = ""
@@ -19,6 +24,10 @@ struct CreativeDirectionView: View {
     @State private var errorMessage: String?
     @State private var resolvedStory: StoryModel?       // reflected at Context step
     @State private var navigate = false                 // Start Story -> Story Home
+    /// True once the user confirms (taps Start Story). A wizard dismissed BEFORE this with a
+    /// Story already created at the Context step deletes that unconfirmed Story on disappear, so
+    /// cancelling setup never leaves an orphan "New Story" (Phase 3). Seeded Moments are untouched.
+    @State private var confirmed = false
     @State private var guide: StoryGuideDTO?            // real StoryGuide for "Here's what I'll look for"
     @State private var guideLoading = false
     @State private var guideFailed = false
@@ -55,6 +64,15 @@ struct CreativeDirectionView: View {
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
+        .onDisappear {
+            // Phase 3: if the wizard is leaving with a Story created (at the Context step) but the
+            // user never confirmed (Start Story), discard it so no orphan "New Story" remains. The
+            // seeded Moments are independent and are NOT deleted. A confirmed Story is kept.
+            if !confirmed, let s = resolvedStory {
+                try? useCases.deleteStory(s)
+                resolvedStory = nil
+            }
+        }
         .navigationDestination(isPresented: $navigate) {
             // Reached Story Home THROUGH the wizard. Its Back dismisses the WHOLE wizard (this view), which
             // also pops the pushed Story Home — so the user lands on app Home directly instead of walking back
@@ -249,7 +267,7 @@ struct CreativeDirectionView: View {
                 Text("Capture naturally as you go. A guide, not a checklist — capture what feels right.")
                     .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                StoryPrimaryButton(title: "Start Story") { navigate = true }
+                StoryPrimaryButton(title: "Start Story") { confirmed = true; navigate = true }
             } else {
                 // Guide generation failed (retryable) — the Story is still valid; let the user proceed.
                 Text("You're all set.").font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
@@ -259,7 +277,7 @@ struct CreativeDirectionView: View {
                 if guideFailed {
                     StorySecondaryButton(title: "Try again") { Task { await generateGuide() } }
                 }
-                StoryPrimaryButton(title: "Start Story") { navigate = true }
+                StoryPrimaryButton(title: "Start Story") { confirmed = true; navigate = true }
             }
         }
     }
@@ -294,7 +312,13 @@ struct CreativeDirectionView: View {
         do {
             // Prepend the chosen feeling to the direction so C1 sees it.
             let dir = feeling.map { "\($0). \(description)" } ?? description
-            resolvedStory = try await useCases.startStoryWithRealIntent(title: title, direction: dir)
+            let story = try await useCases.startStoryWithRealIntent(title: title, direction: dir)
+            // Phase 3: attach the library-selected Moments to THIS story once, in selection order
+            // (idempotent + no media duplication). Done here so the Guide/blueprint reasons over them.
+            if !seedMoments.isEmpty {
+                try? useCases.addExistingMoments(seedMoments, to: story)
+            }
+            resolvedStory = story
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription
                 ?? "Something went wrong. Please try again."

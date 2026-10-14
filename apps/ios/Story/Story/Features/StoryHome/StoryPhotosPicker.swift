@@ -18,20 +18,34 @@ import AVFoundation
 /// COPIED items; `failed` counts items that couldn't be read/copied (reported at
 /// the end so the user is never told "done" when some silently dropped).
 struct ImportProgress: Equatable {
+    /// Operation-specific phase for honest, non-percentage feedback (Phase 5).
+    enum Phase: Equatable {
+        case preparing     // selection received; about to read the first item
+        case importing     // copying items out of Photos into MediaStore
+        case analyzing     // files persisted; Asset Understanding enqueued/running
+    }
     var total: Int
     var done: Int
     var failed: Int
     var finished: Bool
-    static let idle = ImportProgress(total: 0, done: 0, failed: 0, finished: true)
+    var phase: Phase = .importing
+    static let idle = ImportProgress(total: 0, done: 0, failed: 0, finished: true, phase: .importing)
 }
 
 /// Pure mapping from import progress to an honest one-line banner. Extracted so it's unit-testable without a
-/// SwiftUI host. Never says "done" while work is in flight, and surfaces partial failures plainly.
+/// SwiftUI host. Never says "done" while work is in flight, surfaces partial failures plainly, and names the
+/// current operation (Preparing / Importing / Analyzing) WITHOUT fabricating a progress percentage.
 enum StoryImportCopy {
     static func line(for p: ImportProgress) -> String {
         if !p.finished {
-            // In flight: "Adding your videos… (k of N)".
-            return p.total > 1 ? "Adding your videos… (\(p.done) of \(p.total))" : "Adding your video…"
+            switch p.phase {
+            case .preparing:
+                return "Preparing selected media…"
+            case .importing:
+                return p.total > 1 ? "Importing… (\(p.done) of \(p.total))" : "Importing your video…"
+            case .analyzing:
+                return "Analyzing moments…"
+            }
         }
         // Finished.
         if p.done == 0 { return "Couldn't add those videos. Please try again." }
@@ -70,14 +84,16 @@ private struct PhotosPickerModifier: ViewModifier {
 
     private func importAll(_ items: [PhotosPickerItem]) async {
         let total = items.count
-        await report(ImportProgress(total: total, done: 0, failed: 0, finished: false))
+        // Phase 5: a brief "Preparing selected media…" before the first copy begins.
+        await report(ImportProgress(total: total, done: 0, failed: 0, finished: false, phase: .preparing))
 
         var results: [(path: String, duration: Double)] = []
         var failed = 0
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else {
                 failed += 1
-                await report(ImportProgress(total: total, done: results.count, failed: failed, finished: false))
+                await report(ImportProgress(total: total, done: results.count, failed: failed,
+                                            finished: false, phase: .importing))
                 continue
             }
             let tmp = FileManager.default.temporaryDirectory
@@ -90,14 +106,16 @@ private struct PhotosPickerModifier: ViewModifier {
             } catch {
                 failed += 1
             }
-            await report(ImportProgress(total: total, done: results.count, failed: failed, finished: false))
+            await report(ImportProgress(total: total, done: results.count, failed: failed,
+                                        finished: false, phase: .importing))
         }
         let final = results
         let finalFailed = failed
         await MainActor.run {
             selection = []
             if !final.isEmpty { onPicked(final) }
-            onProgress(ImportProgress(total: total, done: final.count, failed: finalFailed, finished: true))
+            onProgress(ImportProgress(total: total, done: final.count, failed: finalFailed,
+                                      finished: true, phase: .importing))
         }
     }
 

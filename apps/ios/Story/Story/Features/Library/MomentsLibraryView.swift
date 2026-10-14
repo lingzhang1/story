@@ -42,7 +42,7 @@ struct MomentsLibraryView: View {
     @State private var selecting = false
     @State private var selected = Set<UUID>()
     @State private var pendingDelete = false
-    @State private var createdStory: StoryModel?
+    @State private var setupSelection: MomentSelection?   // Phase 3: selected → Start-a-Story setup
     /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
     @State private var alreadyInStory = Set<UUID>()
 
@@ -75,7 +75,12 @@ struct MomentsLibraryView: View {
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom) { if selecting && !selected.isEmpty { selectionBar } }
         .fullScreenCover(item: $previewMoment) { m in MomentPreviewView(moment: m) }
-        .navigationDestination(item: $createdStory) { s in StoryHomeView(story: s) }
+        .navigationDestination(item: $setupSelection) { sel in
+            // Phase 3: Create Story routes through the EXISTING Start-a-Story setup (name,
+            // description, creative intent), seeding the selected Moments — not a generic
+            // "New Story". One pipeline; cancelling leaves no orphan Story.
+            CreativeDirectionView(seedMoments: sel.moments)
+        }
         .confirmationDialog("Delete \(selected.count) moment\(selected.count == 1 ? "" : "s") from your library?",
                             isPresented: $pendingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteSelected() }
@@ -243,9 +248,9 @@ struct MomentsLibraryView: View {
     private func createStoryFromSelection() {
         let picked = moments.filter { selected.contains($0.id) }
         guard !picked.isEmpty else { return }
-        let story = try? useCases.createStoryFromMoments(
-            title: "New Story", direction: "A story from my selected moments.", moments: picked)
-        if let story { createdStory = story }
+        // Phase 3: hand the selection to the existing Start-a-Story setup instead of minting a
+        // generic "New Story". The wizard creates the Story once (on confirm) and links these.
+        setupSelection = MomentSelection(moments: picked)
     }
 
     private func addSelectionToStory() {
@@ -266,4 +271,11 @@ struct MomentsLibraryView: View {
         selecting = false
         reload()
     }
+}
+
+// Identifiable wrapper so a Moment multi-selection can drive navigationDestination(item:) into
+// the Start-a-Story setup (Phase 3).
+struct MomentSelection: Identifiable {
+    let id = UUID()
+    let moments: [MomentModel]
 }

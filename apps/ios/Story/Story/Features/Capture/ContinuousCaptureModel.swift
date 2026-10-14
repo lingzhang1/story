@@ -29,23 +29,28 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     // AI Ideas (optional, user-initiated). The red record button stays live in
     // every AI state — scanning and inference NEVER block recording.
+    //
+    // Phase 1: generated ideas live in SESSION state (ideas/ideasOutput/ideaIndex) and SURVIVE
+    // record/stop cycles. The on-screen presentation is separate: `aiState` drives the overlay,
+    // and `ideasCollapsed` hides the full card (e.g. while recording) WITHOUT discarding the ideas,
+    // so a small chip can reopen them with NO new inference.
     enum AIState: Equatable {
-        case off                      // no AI UI
+        case off                      // no AI UI, no ideas held
         case scanning                 // collecting scene frames from the live session
         case thinking                 // frames collected; Director is generating an idea
-        case ideas                    // one or more shot ideas available
+        case ideas                    // one or more shot ideas available (and shown)
         case failed(String)           // AI failed/throttled — recording still works
     }
     @Published var aiState: AIState = .off
-    @Published var ideaIndex = 0                       // which cached idea is shown
+    @Published var ideaIndex = 0                       // which cached idea is shown (preserved)
+    @Published var ideasCollapsed = false              // full card hidden but ideas retained (chip reopens)
     @Published var recordingElapsed: TimeInterval = 0  // live REC timer (Phase 2)
     private(set) var ideas: [DirectorDecisionDTO] = []
     private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
     // Monotonic token: every scan/record transition bumps it so a stale Director response
-    // from a cancelled or superseded scan can NEVER reopen the overlay (Phase 2 requirement:
-    // "prevent stale AI responses from reopening overlays during recording").
+    // from a cancelled or superseded scan can NEVER replace newer ideas or reopen an overlay.
     private var aiGeneration = 0
 
     weak var controller: ContinuousCameraController?
@@ -67,15 +72,30 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     func toggleRecording() { controller?.toggleRecording() }
 
-    /// AI Ideas — user-initiated. Starts a scene scan on the LIVE session (does not
-    /// stop any in-progress recording), then runs the Director. Scene-only intent for
-    /// standalone (no stale Story leak), Story intent + guide for .story.
+    /// Whether we hold cached ideas that can be reopened without a new scan (drives the chip).
+    var hasCachedIdeas: Bool { !ideas.isEmpty }
+
+    /// AI Ideas — user-initiated. If ideas are already cached and merely collapsed, REOPEN them
+    /// (no inference). Otherwise start a fresh scene scan on the LIVE session (does not stop any
+    /// in-progress recording), then run the Director.
     func getAIShotIdeaTapped() {
+        if hasCachedIdeas {
+            reopenIdeas()
+            return
+        }
         guard aiState == .off || isFailed else { return }
         startScan()
     }
 
-    /// "Scan again for another idea" — fresh scene evidence, new Director call.
+    /// Reopen the cached ideas overlay WITHOUT running new inference (Phase 1: the upper-right chip).
+    func reopenIdeas() {
+        guard hasCachedIdeas else { return }
+        ideasCollapsed = false
+        aiState = .ideas
+    }
+
+    /// "Rescan" — EXPLICIT fresh scene evidence + new Director call. The only path that replaces
+    /// cached ideas, so old ideas are never silently presented as a newly-scanned scene (Phase 1).
     func scanAgain() { startScan() }
 
     /// "Next idea" — advance through the already-available cached ideas (no new call).
@@ -84,18 +104,26 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         ideaIndex = (ideaIndex + 1) % ideas.count
     }
 
-    /// Dismiss the AI overlay entirely; the camera stays ready to record.
+    /// Dismiss the overlay. If ideas are cached, this COLLAPSES (keeps them for the chip); if a
+    /// scan/think is in flight it cancels and clears. Never discards cached ideas.
     func dismissIdeas() {
+        if hasCachedIdeas {
+            ideasCollapsed = true
+            aiState = .off
+            return
+        }
         aiGeneration &+= 1               // invalidate any in-flight scan/Director response
         controller?.cancelScan()
         aiState = .off
-        ideas = []
-        ideasOutput = nil
-        ideaIndex = 0
     }
 
-    /// "Let's shoot" — close the idea overlay and return to a ready-to-record camera.
-    func letsShoot() { dismissIdeas() }
+    /// Cancel an in-flight AI request (scanning/thinking) explicitly — clears nothing cached.
+    func cancelAIRequest() {
+        aiGeneration &+= 1
+        controller?.cancelScan()
+        aiState = hasCachedIdeas ? .off : .off
+        if hasCachedIdeas { ideasCollapsed = true }
+    }
 
     private var isFailed: Bool { if case .failed = aiState { return true } else { return false } }
 
@@ -114,6 +142,13 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         return nil
     }
     var ideaCount: Int { ideas.count }
+
+    /// A compact one-line reminder of the active idea, for the minimized recording state.
+    var currentIdeaReminder: String? {
+        guard hasCachedIdeas else { return nil }
+        let t = currentIdeaTitle
+        return t.isEmpty ? nil : t
+    }
 
     private func startScan() {
         aiGeneration &+= 1
@@ -159,6 +194,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                 ideas = shots
                 ideasOutput = out
                 ideaIndex = 0
+                ideasCollapsed = false
                 aiState = .ideas
             }
         } catch {
@@ -180,12 +216,22 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
             break
         case .recordingStarted:
             isRecording = true
-            // Phase 2: starting a recording SUSPENDS any pending AI work. Bump the generation
-            // so a late Director response cannot reopen the overlay over a live recording, and
-            // collapse the overlay to the minimized REC state.
+            // Phase 1+2: starting a recording cancels any IN-FLIGHT scan/inference (bump the
+            // generation so a late Director response can't replace newer ideas or reopen the
+            // overlay), and COLLAPSES the full idea card — but PRESERVES cached ideas + the
+            // selected index so they can be reopened after recording with no new scan.
             aiGeneration &+= 1
             controller?.cancelScan()
-            if aiState != .off { aiState = .off; ideas = []; ideasOutput = nil; ideaIndex = 0 }
+            if aiState == .scanning || aiState == .thinking {
+                // No cached result from this in-flight request — just hide the request UI.
+                aiState = hasCachedIdeas ? .off : .off
+                if hasCachedIdeas { ideasCollapsed = true }
+            } else if aiState == .ideas {
+                ideasCollapsed = true          // keep ideas, hide the card
+                aiState = .off
+            } else {
+                aiState = .off
+            }
             startRecordingTimer()
         case .recordingFinished(let url, let duration):
             isRecording = false

@@ -90,6 +90,21 @@ struct ContinuousCaptureView: View {
                 .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
                 .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
+                // Phase 1: a small AI Ideas chip to REOPEN saved ideas (no new inference). Shown
+                // only when ideas are cached but the full card is collapsed, and not while recording.
+                if model.hasCachedIdeas && model.ideasCollapsed && !model.isRecording && model.aiState == .off {
+                    Button { model.reopenIdeas() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles").font(.system(size: 13))
+                            Text("Ideas").font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Color.black.opacity(0.45), in: Capsule())
+                        .overlay(Capsule().stroke(gold.opacity(0.6), lineWidth: 1))
+                    }
+                    .accessibilityLabel("Reopen saved AI ideas")
+                }
             }
             if model.isRecording {
                 recordingIndicator
@@ -126,11 +141,20 @@ struct ContinuousCaptureView: View {
     // MARK: - Bottom: AI overlays · recent thumbnail · record button
     private var bottomControls: some View {
         VStack(spacing: 20) {
-            // AI Ideas region (Figma V0.2.2). The record button below stays live in
-            // EVERY state — scanning and inference never block recording. While RECORDING,
-            // the AI overlay is hidden entirely (Phase 2: "AI overlay minimized or hidden").
+            // AI Ideas region. The record button below stays live in EVERY state — scanning and
+            // inference never block recording. While RECORDING, the full card is hidden; only an
+            // optional compact one-line reminder of the active idea shows (Phase 2).
             if model.isRecording {
-                EmptyView()
+                if let reminder = model.currentIdeaReminder {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles").font(.system(size: 12)).foregroundStyle(gold)
+                        Text(reminder).font(.system(size: 14, weight: .medium)).foregroundStyle(ink)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(panelBG, in: Capsule())
+                    .allowsHitTesting(false)
+                }
             } else {
                 switch model.aiState {
                 case .off:
@@ -227,10 +251,10 @@ struct ContinuousCaptureView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
 
-            Button { model.dismissIdeas() } label: {
+            Button { model.cancelAIRequest() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
-                    Text("Cancel scan").font(.system(size: 15, weight: .medium))
+                    Text("Cancel AI request").font(.system(size: 15, weight: .medium))
                 }
                 .foregroundStyle(ink)
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -257,10 +281,10 @@ struct ContinuousCaptureView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
 
-            Button { model.dismissIdeas() } label: {
+            Button { model.cancelAIRequest() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
-                    Text("Cancel").font(.system(size: 15, weight: .medium))
+                    Text("Cancel AI request").font(.system(size: 15, weight: .medium))
                 }
                 .foregroundStyle(ink)
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -269,8 +293,8 @@ struct ContinuousCaptureView: View {
         }
     }
 
-    // Generated shot idea card (Figma: "SHOT IDEA · N SEC / ✕", title, body,
-    // pagination + "Next idea · i of n", "Scan again for another idea").
+    // Generated shot idea card (Phase 2 simplified controls: Record stays authoritative below;
+    // the card offers Next idea · Rescan · Dismiss — NO "Let's shoot", NO redundant Cancel).
     private var ideaCard: some View {
         VStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
@@ -279,7 +303,7 @@ struct ContinuousCaptureView: View {
                         .font(.system(size: 13, weight: .semibold)).tracking(1).foregroundStyle(gold)
                     Spacer()
                     Button { model.dismissIdeas() } label: {
-                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                        Text("Dismiss").font(.system(size: 13, weight: .medium))
                             .foregroundStyle(ink.opacity(0.7))
                     }
                 }
@@ -313,22 +337,15 @@ struct ContinuousCaptureView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
 
-            HStack(spacing: 10) {
-                Button { model.scanAgain() } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles").font(.system(size: 14))
-                        Text("Scan again").font(.system(size: 15, weight: .medium))
-                    }
-                    .foregroundStyle(ink)
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .background(panelBG, in: Capsule())
+            // Rescan is the ONLY explicit way to replace cached ideas with fresh scene evidence.
+            Button { model.scanAgain() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 14))
+                    Text("Rescan").font(.system(size: 15, weight: .medium))
                 }
-                Button { model.letsShoot() } label: {
-                    Text("Let's shoot").font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 22).padding(.vertical, 12)
-                        .background(gold, in: Capsule())
-                }
+                .foregroundStyle(ink)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .background(panelBG, in: Capsule())
             }
         }
     }

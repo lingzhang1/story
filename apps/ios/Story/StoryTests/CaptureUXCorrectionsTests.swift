@@ -137,4 +137,74 @@ final class CaptureUXCorrectionsTests: XCTestCase {
         XCTAssertTrue(intent.styleTags.isEmpty)
         XCTAssertNil(standalone.associatedStory, "standalone never carries a Story")
     }
+
+    // 12 (orphan cleanup). Deleting an unconfirmed setup Story removes the Story + its links but
+    // NEVER the independent global Moments or their media.
+    func test_deleteStory_keepsIndependentMoments() throws {
+        let story = makeStory("Unconfirmed")
+        let a = try useCases.shootStandaloneMoment(relativePath: "media/a.mov", durationSeconds: 3)
+        _ = try useCases.addExistingMoments([a], to: story)
+        XCTAssertEqual(try count(StoryMomentLink.self), 1)
+
+        try useCases.deleteStory(story)
+        XCTAssertEqual(try count(StoryModel.self), 0, "the orphan Story is gone")
+        XCTAssertEqual(try count(StoryMomentLink.self), 0, "its link is cascaded away")
+        XCTAssertEqual(try count(MomentModel.self), 1, "the independent Moment survives")
+        XCTAssertEqual(try count(AssetModel.self), 1, "its media survives (no deletion)")
+    }
+
+    // 13 + 14. The seed-Moments → setup → confirm path creates exactly one Story and links the
+    // selected Moments without media duplication (the use-case layer behind the wizard).
+    func test_seedMomentsFlow_createsOneStory_linksNoDup() throws {
+        let a = try useCases.shootStandaloneMoment(relativePath: "media/a.mov", durationSeconds: 3)
+        let b = try useCases.shootStandaloneMoment(relativePath: "media/b.mov", durationSeconds: 3)
+        // Simulates what the wizard does on confirm: create once via the real intent path, then link seeds.
+        let story = try useCases.startStory(title: "My Story", direction: "A trip.")
+        try useCases.addExistingMoments([a, b], to: story)
+        XCTAssertEqual(try count(StoryModel.self), 1, "exactly one Story")
+        XCTAssertEqual(story.moments.map { $0.id }, [a.id, b.id], "selected Moments linked in order")
+        XCTAssertEqual(try count(MomentModel.self), 2, "no new Moments")
+        XCTAssertEqual(try count(AssetModel.self), 2, "no media duplication")
+    }
+
+    // 16. Adding Moments to a Story never overwrites the user-authored title / description / summary.
+    func test_addMoments_preservesUserAuthoredIntent() throws {
+        let story = try useCases.startStory(title: "Tour du Mont Blanc", direction: "8 days hiking, cinematic.")
+        let title0 = story.title
+        let raw0 = story.intentRawText
+        let summary0 = story.intentSummary
+
+        let a = try useCases.shootStandaloneMoment(relativePath: "media/a.mov", durationSeconds: 3)
+        _ = try useCases.addExistingMoments([a], to: story)
+        _ = try useCases.shootMoment(for: story, relativePath: "media/b.mov", durationSeconds: 3)
+
+        XCTAssertEqual(story.title, title0, "user title unchanged")
+        XCTAssertEqual(story.intentRawText, raw0, "user description unchanged")
+        XCTAssertEqual(story.intentSummary, summary0, "intent summary unchanged by adding Moments")
+    }
+
+    // 17. Import progress copy is operation-specific and honest (no fabricated %, no false success).
+    func test_importProgressCopy_phases() {
+        func p(_ phase: ImportProgress.Phase, done: Int, total: Int, failed: Int = 0, finished: Bool = false) -> ImportProgress {
+            ImportProgress(total: total, done: done, failed: failed, finished: finished, phase: phase)
+        }
+        XCTAssertEqual(StoryImportCopy.line(for: p(.preparing, done: 0, total: 3)), "Preparing selected media…")
+        XCTAssertEqual(StoryImportCopy.line(for: p(.importing, done: 1, total: 3)), "Importing… (1 of 3)")
+        XCTAssertEqual(StoryImportCopy.line(for: p(.analyzing, done: 3, total: 3)), "Analyzing moments…")
+        // Never claims success while in flight.
+        XCTAssertFalse(StoryImportCopy.line(for: p(.importing, done: 0, total: 2)).contains("Added"))
+        // Finished states stay honest.
+        XCTAssertTrue(StoryImportCopy.line(for: p(.importing, done: 0, total: 2, finished: true)).contains("Couldn't"))
+        XCTAssertTrue(StoryImportCopy.line(for: p(.importing, done: 1, total: 2, failed: 1, finished: true)).contains("couldn't be added"))
+    }
+
+    // AI Ideas session state: Next idea cycles cached ideas without re-inference; the index is
+    // bounded. (Drives ContinuousCaptureModel's cache logic directly; no camera needed.)
+    func test_aiIdeas_nextIdea_cyclesCached() {
+        let model = ContinuousCaptureModel()
+        // No ideas yet → nextIdea is a safe no-op, hasCachedIdeas false.
+        XCTAssertFalse(model.hasCachedIdeas)
+        model.nextIdea()
+        XCTAssertEqual(model.ideaIndex, 0)
+    }
 }

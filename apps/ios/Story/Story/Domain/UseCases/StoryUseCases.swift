@@ -142,6 +142,12 @@ final class StoryUseCases {
         try repository.deleteMomentFromLibrary(moment)
     }
 
+    /// Delete a Story and its own dependents (links/outputs/guide). Independent global Moments survive.
+    /// Used to discard a cancelled, unconfirmed Story-setup wizard so no orphan Story is left behind.
+    func deleteStory(_ story: StoryModel) throws {
+        try repository.deleteStory(story)
+    }
+
     /// Create My Story — produces + persists a mock GeneratedOutput.
     /// Does NOT complete the Story (Create != Complete).
     func createStoryOutput(for story: StoryModel) throws -> GeneratedOutputModel {

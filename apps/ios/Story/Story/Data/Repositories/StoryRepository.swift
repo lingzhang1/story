@@ -17,6 +17,7 @@ protocol StoryRepositoryProtocol {
     func addStandaloneMoment(source: MomentSource, asset: AssetModel, caption: String?) throws -> MomentModel
     func link(_ moment: MomentModel, to story: StoryModel) throws
     func deleteMomentFromLibrary(_ moment: MomentModel) throws
+    func deleteStory(_ story: StoryModel) throws
     func allMoments() throws -> [MomentModel]
     func save() throws
 }
@@ -108,7 +109,17 @@ final class StoryRepository: StoryRepositoryProtocol {
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))
     }
 
-    func addGeneratedOutput(to story: StoryModel, plan: GeneratedOutputPlan) throws -> GeneratedOutputModel {        let output = GeneratedOutputModel(
+    /// Delete a Story and its OWN dependents (links, generated outputs, guide/coverage) via cascade.
+    /// Independent global Moments are NOT touched — a StoryMomentLink is only a join row, so cascading
+    /// the Story's links removes the associations while the Moments + their media survive in the library.
+    /// Used to clean up a Story-setup wizard that is cancelled before confirmation (no orphan Story).
+    func deleteStory(_ story: StoryModel) throws {
+        context.delete(story)
+        try context.save()
+    }
+
+    func addGeneratedOutput(to story: StoryModel, plan: GeneratedOutputPlan) throws -> GeneratedOutputModel {
+        let output = GeneratedOutputModel(
             title: plan.title,
             durationSeconds: plan.durationSeconds,
             momentIds: plan.momentIds
