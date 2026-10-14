@@ -12,6 +12,6 @@ struct ShootMomentView: View {
     @Bindable var story: StoryModel
 
     var body: some View {
-        SceneScanFlowView(story: story)
+        SceneScanFlowView(captureContext: .story(story))
     }
 }

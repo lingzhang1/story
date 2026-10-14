@@ -28,7 +28,11 @@ struct SceneScanFlowView: View {
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
-    @Bindable var story: StoryModel
+
+    /// Capture Anywhere seam (75435fa): the ONLY difference between Home capture and in-Story
+    /// capture. `.standalone` → no Story, library-only, scene-only AI intent (no stale-Story leak).
+    /// `.story(s)` → Story-aware AI intent + exactly one StoryMomentLink per saved Moment.
+    let captureContext: CaptureContext
 
     /// E2-c: the high-level narrative opportunity the user chose (Story Idea -> Show me, or Guide
     /// possibility -> Shoot). nil = the existing direct "Shoot a moment" flow (unchanged). Stored on
@@ -344,7 +348,9 @@ struct SceneScanFlowView: View {
                     .foregroundStyle(.gray).frame(maxWidth: .infinity)
 
                 #if DEBUG
-                if AppMode.current.showsDiagnostics, let su {   // no scene panel on Skip Scan
+                // Diagnostics need a real Story's intent; only shown for Story-context capture
+                // (never standalone — there is no Story to inspect, and no scene panel on Skip Scan).
+                if AppMode.current.showsDiagnostics, let su, let story = captureContext.associatedStory {
                     DirectorDebugPanel(story: story,
                                        creativeIntent: CreativeIntentContractDTO(from: story),
                                        scene: su,
@@ -426,7 +432,7 @@ struct SceneScanFlowView: View {
                 let selected = SceneFrameProcessor.select(from: frames, max: 5)
                 let su = try await sceneService.analyze(
                     frames: selected, captureSessionId: captureSessionId,
-                    mode: mode, storyId: story.id)
+                    mode: mode, storyId: captureContext.associatedStory?.id)
                 await MainActor.run { runDirector(su, scanStart: scanStart) }
             } catch {
                 await MainActor.run {
@@ -444,9 +450,9 @@ struct SceneScanFlowView: View {
         Task {
             do {
                 let out = try await directorService.initialize(
-                    creativeIntent: CreativeIntentContractDTO(from: story),
+                    creativeIntent: captureContext.directorIntent(),
                     sceneUnderstanding: su,
-                    targetDurationSeconds: story.intentTargetDurationSeconds,
+                    targetDurationSeconds: captureContext.targetDurationSeconds,
                     selectedOpportunity: selectedOpportunity)   // nil for the direct flow; survives rescan
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
                 await MainActor.run {
@@ -500,8 +506,19 @@ struct SceneScanFlowView: View {
         let useCases = StoryUseCases(repository: StoryRepository(context: context))
         do {
             let relativePath = try MediaStore.shared.adoptCapturedFile(tempURL: tempURL)
-            let moment = try useCases.shootMoment(for: story, relativePath: relativePath,
+            // Capture Anywhere: ONE persistence path, context picks the association.
+            //  • .story  → shootMoment(for:) creates the Moment AND exactly one StoryMomentLink
+            //              (capture order preserved by the repo), identical to the pre-seam behavior.
+            //  • standalone → shootStandaloneMoment creates a library-only global Moment, NO link,
+            //              no hidden Story. Media is owned by the MomentModel either way.
+            let moment: MomentModel
+            if let story = captureContext.associatedStory {
+                moment = try useCases.shootMoment(for: story, relativePath: relativePath,
                                                   durationSeconds: duration)
+            } else {
+                moment = try useCases.shootStandaloneMoment(relativePath: relativePath,
+                                                            durationSeconds: duration)
+            }
             pendingCaptureURL = nil
             // Milestone D §6: enqueue an Asset Understanding job AFTER the Moment is
             // persisted. Moment creation NEVER blocks on AU; the job runs opportunistically
