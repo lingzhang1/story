@@ -273,9 +273,13 @@ struct MomentsLibraryView: View {
     }
 }
 
-// Identifiable wrapper so a Moment multi-selection can drive navigationDestination(item:) into
-// the Start-a-Story setup (Phase 3).
-struct MomentSelection: Identifiable {
+// Identifiable + Hashable wrapper so a Moment multi-selection can drive navigationDestination(item:)
+// into the Start-a-Story setup (Phase 3). navigationDestination(item:) requires Hashable; we hash by
+// the stable UUID id (the moments array itself is reference types and need not participate).
+struct MomentSelection: Identifiable, Hashable {
     let id = UUID()
     let moments: [MomentModel]
+
+    static func == (lhs: MomentSelection, rhs: MomentSelection) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
