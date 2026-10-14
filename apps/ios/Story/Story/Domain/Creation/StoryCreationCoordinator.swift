@@ -125,7 +125,7 @@ final class StoryCreationCoordinator {
 
     // Seams
     private let planner: EditPlanning
-    private let jobClient: EditPlanJobClient
+    private let jobClient: EditPlanJobClienting
     private let renderer: StoryRendering
     private let context: ModelContext
 
@@ -167,7 +167,7 @@ final class StoryCreationCoordinator {
         planner: EditPlanning,
         renderer: StoryRendering = MediaEngineRenderer(),
         context: ModelContext,
-        jobClient: EditPlanJobClient = EditPlanJobClient(),
+        jobClient: EditPlanJobClienting = EditPlanJobClient(),
         musicDirection: JSONValue? = nil,
         musicPlan: JSONValue? = nil,
         selectedMusicAssetId: String? = nil,
@@ -317,7 +317,7 @@ final class StoryCreationCoordinator {
             if let existing = story.planJobId {
                 jobId = existing   // recovery: a job was already submitted for this attempt
             } else {
-                jobId = try await jobClient.submit(build.request, operationId: opId, approach: requested,
+                jobId = try await jobClient.submit(build.request, operationId: opId, owner: "dev", approach: requested,
                                                    sheets: sheets, creativeBrief: brief, critiqueRevision: critique)
                 story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
             }

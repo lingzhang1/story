@@ -40,6 +40,48 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         }
     }
 
+    /// A job client that resolves the ASYNC create path synchronously in tests (the coordinator plans via the
+    /// job client now, not the sync planner). Mirrors FakePlanner.Behavior into a terminal EditPlanJobState so
+    /// the coordinator reaches .completed/.failed without any network. `.transport` throws so the poll surfaces
+    /// a transport error (used by the 503/retry test).
+    @MainActor
+    private final class FakeJobClient: EditPlanJobClienting {
+        enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport }
+        var behavior: Behavior
+        private(set) var submitCount = 0
+        private(set) var lastRequest: EditPlanRequestDTO?
+        init(_ b: Behavior) { behavior = b }
+
+        func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
+                    approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
+                    critiqueRevision: Bool) async throws -> String {
+            submitCount += 1
+            lastRequest = request
+            return "fake-job-\(operationId)"
+        }
+
+        func pollUntilTerminal(jobId: String, maxSeconds: Int,
+                               shouldCancel: @MainActor () -> Bool,
+                               onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState {
+            if shouldCancel() { throw CancellationError() }
+            switch behavior {
+            case .ok(let p):
+                return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
+                                        failure: nil, failureDetail: nil, diagnostics: nil)
+            case .failInfeasible(let r):
+                return EditPlanJobState(jobId: jobId, status: .failed, plan: nil,
+                                        failure: .materialInfeasible, failureDetail: r, diagnostics: nil)
+            case .failUnavailable:
+                return EditPlanJobState(jobId: jobId, status: .failed, plan: nil,
+                                        failure: .providerError, failureDetail: "unavailable", diagnostics: nil)
+            case .throwTransport:
+                throw EditPlanJobError.transport(URLError(.timedOut))
+            }
+        }
+
+        func cancel(jobId: String) async { /* no-op in tests */ }
+    }
+
     /// A renderer that records whether it was called + the inputs it saw, and returns a canned result
     /// (or throws, or blocks until cancel). NEVER touches AVFoundation. Reference type so flags survive.
     private final class FakeRenderer: StoryRendering, @unchecked Sendable {
@@ -140,17 +182,9 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let m1 = momentWithFile(s, rel: "media/rc-happy-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
         let m2 = momentWithFile(s, rel: "media/rc-happy-2.mov", dur: 8); completeAU(m2, useful: [(0, 5)])
 
-        // TEMP DIAGNOSTIC (remove after root-cause): prove how many moments/media/AU the builder actually sees.
-        let diagMoments = s.moments.count
-        let diagMedia = MomentResolver.resolve(moments: s.moments).count
-        let diagAU = ((try? ctx.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []).count
-        XCTAssertEqual(diagMoments, 2, "DIAG story.moments.count — links not resolving?")
-        XCTAssertEqual(diagMedia, 2, "DIAG resolvable media — MomentResolver dropped a file?")
-        XCTAssertEqual(diagAU, 2, "DIAG AU records fetched — unsaved MomentUnderstanding not visible to fetch?")
-
         let plan = validPlan([m1, m2])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)), jobClient: FakeJobClient(.ok(plan)),
                                              renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
@@ -179,7 +213,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let s = newStory()
         let m = momentWithFile(s, rel: "media/rc-503.mov", dur: 6); completeAU(m, useful: [(0, 4)])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .fail(.unavailable)),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .fail(.unavailable)), jobClient: FakeJobClient(.failUnavailable),
                                              renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
@@ -215,7 +249,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                                       sourceEndSeconds: 3, outputDurationSeconds: 3,
                                                       speed: 1.0, nativeAudio: "keep", musicAlignment: nil)])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), renderer: renderer, context: ctx)
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), jobClient: FakeJobClient(.ok(bad)), renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
 
@@ -232,7 +266,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                                       sourceEndSeconds: 4, outputDurationSeconds: 2,
                                                       speed: 3.0, nativeAudio: "keep", musicAlignment: nil)])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), renderer: renderer, context: ctx)
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), jobClient: FakeJobClient(.ok(bad)), renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
         guard case .failed = coord.state else { return XCTFail("expected .failed, got \(coord.state)") }
@@ -249,7 +283,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                                       nativeAudio: "keep", musicAlignment: nil,
                                                       transition: Transition(type: "wipe", durationSeconds: 0.3))])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), renderer: renderer, context: ctx)
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(bad)), jobClient: FakeJobClient(.ok(bad)), renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
         guard case .failed = coord.state else { return XCTFail("expected .failed, got \(coord.state)") }
@@ -294,7 +328,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let s = newStory()
         let m = momentWithFile(s, rel: "media/rc-dup.mov", dur: 8); completeAU(m, useful: [(0, 5)])
         let renderer = FakeRenderer(.blockUntilCancel)      // keep the first run in-flight
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))), jobClient: FakeJobClient(.ok(validPlan([m]))),
                                              renderer: renderer, context: ctx)
         coord.create(for: s)
         // let it get into the blocking render
@@ -315,7 +349,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let s = newStory()
         let m = momentWithFile(s, rel: "media/rc-cancel.mov", dur: 8); completeAU(m, useful: [(0, 5)])
         let renderer = FakeRenderer(.blockUntilCancel)
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))), jobClient: FakeJobClient(.ok(validPlan([m]))),
                                              renderer: renderer, context: ctx)
         coord.create(for: s)
         try? await Task.sleep(nanoseconds: 20_000_000)
@@ -333,7 +367,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     func test_noUsableMoments_failsHonestly() async throws {
         let s = newStory()   // no Moments at all
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([]))),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([]))), jobClient: FakeJobClient(.ok(validPlan([]))),
                                              renderer: renderer, context: ctx)
         coord.create(for: s)
         await awaitSettled(coord)
@@ -401,7 +435,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let s = newStory()
         let m = momentWithFile(s, rel: "media/rc-nomusic.mov", dur: 8); completeAU(m, useful: [(0, 5)])
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))), jobClient: FakeJobClient(.ok(validPlan([m]))),
                                              renderer: renderer, context: ctx)   // no music params -> all nil
         coord.create(for: s)
         await awaitSettled(coord)
@@ -417,7 +451,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         let analysis = MusicAnalysisV1(durationSeconds: 20, bpm: 120, tempoReliable: true,
                                        beats: [0, 0.5], downbeats: [0], highlightWindow: nil)
         let renderer = FakeRenderer(.ok(okResult()))
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(validPlan([m]))), jobClient: FakeJobClient(.ok(validPlan([m]))),
                                              renderer: renderer, context: ctx,
                                              musicAnalysis: analysis, soundtrackURL: soundtrack)
         coord.create(for: s)

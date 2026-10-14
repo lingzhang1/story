@@ -54,7 +54,21 @@ enum EditPlanJobError: Error, LocalizedError {
     }
 }
 
-final class EditPlanJobClient {
+/// Injectable seam for the async job client so the coordinator can be unit-tested with a fake that resolves
+/// synchronously (the async rewrite moved planning from the sync planner onto this client; without a protocol
+/// the coordinator tests hit the real network and stall in .planning).
+@MainActor
+protocol EditPlanJobClienting {
+    func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
+                approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
+                critiqueRevision: Bool) async throws -> String
+    func pollUntilTerminal(jobId: String, maxSeconds: Int,
+                           shouldCancel: @MainActor () -> Bool,
+                           onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState
+    func cancel(jobId: String) async
+}
+
+final class EditPlanJobClient: EditPlanJobClienting {
     private let baseURL: URL
     private let session: URLSession
     init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
