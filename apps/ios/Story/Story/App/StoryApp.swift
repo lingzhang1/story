@@ -24,18 +24,24 @@ struct StoryApp: App {
             // Default store location (unchanged) so existing on-device Stories keep loading.
             container = try ModelContainer(for: schema)
         } catch {
-            // A schema change can make an OLD on-device store fail lightweight migration. Rather than
-            // fatalError (which bricks the app on every launch until reinstall), log loudly and recover by
-            // recreating the default store. A hard migration failure already makes the old store unreadable,
-            // so recreation is the only way forward; if it ALSO fails, that is genuinely unrecoverable.
-            MediaEngineV1.beacon("ModelContainer migration FAILED: \(String(describing: error).prefix(200)) — recreating store")
-            for ext in ["", "-shm", "-wal"] {
-                try? FileManager.default.removeItem(at: URL(fileURLWithPath: storeURL.path + ext))
-            }
+            // NON-DESTRUCTIVE migration failure (owner rule: never delete user data to recover). A schema
+            // change can make an OLD on-device store fail migration — but we must NOT delete .store/-shm/-wal,
+            // because that silently discards the user's Stories, Moments and rendered videos. Instead we keep
+            // the existing store intact (so a FIXED build can retry the migration) and surface the failure
+            // loudly. We boot a SEPARATE, clearly-named fallback store so the app is usable (not bricked) while
+            // the real store is preserved for recovery; nothing is written back over the user's data.
+            MediaEngineV1.beacon("ModelContainer migration FAILED (store PRESERVED, NOT deleted): \(String(describing: error).prefix(200))")
+            let preservedPath = storeURL.path
+            MediaEngineV1.beacon("Preserved store remains at \(preservedPath) — install a fixed build to retry migration; no user data was removed.")
             do {
-                container = try ModelContainer(for: schema)
+                // A distinct recovery store — never the user's default.store — so the original is untouched.
+                let fallbackURL = URL.applicationSupportDirectory.appending(path: "recovery-fallback.store")
+                let config = ModelConfiguration(url: fallbackURL)
+                container = try ModelContainer(for: schema, configurations: config)
             } catch {
-                fatalError("Failed to create ModelContainer even after store reset: \(error)")
+                // Even the clean fallback store could not be created — genuinely unrecoverable, but the user's
+                // original default.store is STILL on disk and intact for a future fixed build.
+                fatalError("Failed to create fallback ModelContainer (original store preserved at \(preservedPath)): \(error)")
             }
         }
         MediaStore.shared.ensureMediaDirectory()
