@@ -57,7 +57,6 @@ enum EditPlanJobError: Error, LocalizedError {
 /// Injectable seam for the async job client so the coordinator can be unit-tested with a fake that resolves
 /// synchronously (the async rewrite moved planning from the sync planner onto this client; without a protocol
 /// the coordinator tests hit the real network and stall in .planning).
-@MainActor
 protocol EditPlanJobClienting {
     func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
                 approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,

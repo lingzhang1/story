@@ -44,7 +44,6 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     /// job client now, not the sync planner). Mirrors FakePlanner.Behavior into a terminal EditPlanJobState so
     /// the coordinator reaches .completed/.failed without any network. `.transport` throws so the poll surfaces
     /// a transport error (used by the 503/retry test).
-    @MainActor
     private final class FakeJobClient: EditPlanJobClienting {
         enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport }
         var behavior: Behavior
