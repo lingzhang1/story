@@ -13,6 +13,11 @@ protocol StoryRepositoryProtocol {
                    asset: AssetModel, caption: String?) throws -> MomentModel
     func removeMoment(_ moment: MomentModel, from story: StoryModel) throws
     func addGeneratedOutput(to story: StoryModel, plan: GeneratedOutputPlan) throws -> GeneratedOutputModel
+    // Global Moments (Capture Anywhere + Library)
+    func addStandaloneMoment(source: MomentSource, asset: AssetModel, caption: String?) throws -> MomentModel
+    func link(_ moment: MomentModel, to story: StoryModel) throws
+    func deleteMomentFromLibrary(_ moment: MomentModel) throws
+    func allMoments() throws -> [MomentModel]
     func save() throws
 }
 
@@ -88,8 +93,7 @@ final class StoryRepository: StoryRepositoryProtocol {
     /// EXPLICIT library deletion: destroy the Moment, its owned media (asset cascade) and — via the caller —
     /// its AU record. Cascade removes all its links, so it disappears from every Story that used it. The
     /// caller is expected to have warned the user if the Moment is still linked anywhere.
-    func deleteMomentFromLibrary(_ moment: MomentModel) throws {
-        // Delete the Moment-scoped AU record (keyed by momentId) if present.
+    func deleteMomentFromLibrary(_ moment: MomentModel) throws {        // Delete the Moment-scoped AU record (keyed by momentId) if present.
         let mid = moment.id
         if let au = try context.fetch(FetchDescriptor<MomentUnderstandingModel>(
             predicate: #Predicate { $0.momentId == mid })).first {
@@ -97,6 +101,11 @@ final class StoryRepository: StoryRepositoryProtocol {
         }
         context.delete(moment)   // cascades asset + links
         try context.save()
+    }
+
+    func allMoments() throws -> [MomentModel] {
+        try context.fetch(FetchDescriptor<MomentModel>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))
     }
 
     func addGeneratedOutput(to story: StoryModel, plan: GeneratedOutputPlan) throws -> GeneratedOutputModel {        let output = GeneratedOutputModel(

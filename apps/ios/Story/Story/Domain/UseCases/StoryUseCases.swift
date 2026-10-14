@@ -94,6 +94,38 @@ final class StoryUseCases {
             to: story, source: .directed, asset: asset, caption: nil)
     }
 
+    // MARK: - Global Moments (Capture Anywhere + Library)
+
+    /// Capture a STANDALONE Moment into the global library (no Story). Mirrors shootMoment's asset creation.
+    func shootStandaloneMoment(relativePath: String, durationSeconds: Double) throws -> MomentModel {
+        let asset = AssetModel(relativePath: relativePath, durationSeconds: durationSeconds, source: .directed)
+        return try repository.addStandaloneMoment(source: .directed, asset: asset, caption: nil)
+    }
+
+    /// Every Moment in the global library, newest first.
+    func allMoments() throws -> [MomentModel] {
+        try repository.allMoments()
+    }
+
+    /// Create a NEW Story and link the selected global Moments into it (per-selection order preserved).
+    /// Reuses the existing Story creation + the StoryMomentLink association — no media duplication.
+    func createStoryFromMoments(title: String, direction: String, moments: [MomentModel]) throws -> StoryModel {
+        let intent = storyEngine.deriveCreativeIntent(from: direction)
+        let story = try repository.createStory(title: title, intent: intent)
+        for m in moments { try repository.link(m, to: story) }
+        return story
+    }
+
+    /// Remove a Moment from one Story (deletes the link only; Moment + media survive).
+    func unlinkMoment(_ moment: MomentModel, from story: StoryModel) throws {
+        try repository.removeMoment(moment, from: story)
+    }
+
+    /// Explicit library deletion: destroy the Moment, its owned media, and its AU (cascades its links).
+    func deleteMomentFromLibrary(_ moment: MomentModel) throws {
+        try repository.deleteMomentFromLibrary(moment)
+    }
+
     /// Create My Story — produces + persists a mock GeneratedOutput.
     /// Does NOT complete the Story (Create != Complete).
     func createStoryOutput(for story: StoryModel) throws -> GeneratedOutputModel {
