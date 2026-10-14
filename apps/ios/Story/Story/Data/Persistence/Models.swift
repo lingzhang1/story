@@ -117,12 +117,25 @@ final class StoryModel {
     var createdAt: Date
     var updatedAt: Date
 
-    // Cascade: deleting a Story removes its Moments and Outputs.
-    @Relationship(deleteRule: .cascade, inverse: \MomentModel.story)
-    var moments: [MomentModel] = []
+    // GLOBAL MOMENTS: a Story no longer OWNS Moments. It references them through StoryMomentLink join rows.
+    // Deleting a Story cascades its LINKS (and its outputs) only — never the Moments or their media.
+    @Relationship(deleteRule: .cascade, inverse: \StoryMomentLink.story)
+    var momentLinks: [StoryMomentLink] = []
 
     @Relationship(deleteRule: .cascade, inverse: \GeneratedOutputModel.story)
     var generatedOutputs: [GeneratedOutputModel] = []
+
+    /// The Story's Moments, in per-Story order, resolved through the links. Read-only convenience so existing
+    /// call sites (`story.moments`) keep working after the global-Moments migration. Nil-moment links (a Moment
+    /// deleted out from under a link) are skipped. Ordering: `orderIndex` asc, then link `addedAt`.
+    var moments: [MomentModel] {
+        momentLinks
+            .sorted { a, b in
+                let (ai, bi) = (a.orderIndex ?? Int.max, b.orderIndex ?? Int.max)
+                return ai != bi ? ai < bi : a.addedAt < b.addedAt
+            }
+            .compactMap { $0.moment }
+    }
 
     var status: StoryStatus {
         get { StoryStatus(rawValue: statusRaw) ?? .active }
@@ -201,13 +214,18 @@ final class AssetModel {
 @Model
 final class MomentModel {
     @Attribute(.unique) var id: UUID
-    var story: StoryModel?
     var caption: String?
     var sourceRaw: String
     var createdAt: Date
 
+    // Moment OWNS its media: deleting the Moment deletes its asset file. Independent of any Story.
     @Relationship(deleteRule: .cascade)
     var asset: AssetModel?
+
+    // GLOBAL MOMENTS: a Moment can be referenced by MANY Stories through links. Deleting the Moment cascades
+    // its links (removing it from those Stories) but a Story deletion never reaches here.
+    @Relationship(deleteRule: .cascade, inverse: \StoryMomentLink.moment)
+    var links: [StoryMomentLink] = []
 
     var source: MomentSource {
         get { MomentSource(rawValue: sourceRaw) ?? .directed }
@@ -226,6 +244,29 @@ final class MomentModel {
         self.caption = caption
         self.asset = asset
         self.createdAt = createdAt
+    }
+}
+
+// GLOBAL MOMENTS join entity. One row = "this Moment is in this Story, at this per-Story order".
+// Owned by BOTH ends via cascade-from-parent (StoryModel.momentLinks / MomentModel.links): deleting either a
+// Story OR a Moment removes the link, but never the OTHER end's durable data (Moments/media survive a Story
+// delete; a Story's outputs are separate). Duplicate (story,moment) pairs are prevented at the write layer
+// (SwiftData has no composite-unique constraint), see MomentLibrary.link(_:to:).
+@Model
+final class StoryMomentLink {
+    @Attribute(.unique) var id: UUID
+    var story: StoryModel?
+    var moment: MomentModel?
+    var addedAt: Date
+    /// Per-Story ordering of this Moment (ascending). nil sorts last.
+    var orderIndex: Int?
+
+    init(id: UUID = UUID(), story: StoryModel?, moment: MomentModel?, addedAt: Date = .now, orderIndex: Int? = nil) {
+        self.id = id
+        self.story = story
+        self.moment = moment
+        self.addedAt = addedAt
+        self.orderIndex = orderIndex
     }
 }
 

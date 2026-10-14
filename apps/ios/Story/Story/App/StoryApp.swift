@@ -11,7 +11,7 @@ struct StoryApp: App {
 
     init() {
         let schema = Schema([
-            StoryModel.self, MomentModel.self,
+            StoryModel.self, MomentModel.self, StoryMomentLink.self,
             AssetModel.self, GeneratedOutputModel.self,
             LocalIdentityModel.self,
             MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
