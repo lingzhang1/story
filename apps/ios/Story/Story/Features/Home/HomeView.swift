@@ -1,21 +1,23 @@
 import SwiftUI
 import SwiftData
 
-// Home — the frozen Figma entry point (ScreenHome). Two layouts:
-//  • no active Story: "What would you like to make?" + the three make-paths.
-//  • with Stories: a "Your Stories" list, active first then completed.
-// Create Now is a frozen future path (DIRECT-one-off) with no persistent-Story
-// backing yet → intentionally disabled. Use-existing (analyze) is disabled
-// (AssetUnderstanding). Start a Story is wired to the real C1 flow.
-// See ui-capability-matrix.md.
+// Home — Figma MVP V0.2.2 (Capture Anywhere). Hierarchy:
+//   Primary:   Capture a Moment (opens the shared camera immediately) · Start a Story
+//   Secondary: Moments (global library) · Stories (projects/films list)
+// Dark cinematic styling preserved. The obsolete disabled "Create now" and
+// "Use existing photos/videos" entries are removed (owner decision V0.2.2).
 struct HomeView: View {
     @Environment(\.modelContext) private var context
     @Query private var stories: [StoryModel]
+    @Query private var moments: [MomentModel]
+
+    @State private var showCapture = false
+    @State private var showStories = false
 
     // Active Stories first (most recent first), then completed below.
     private var sortedStories: [StoryModel] {
         stories.sorted { a, b in
-            if a.status != b.status { return a.status == .active }   // active above completed
+            if a.status != b.status { return a.status == .active }
             return a.createdAt > b.createdAt
         }
     }
@@ -24,12 +26,44 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    StoryEyebrow(text: "Story").padding(.top, 32).padding(.bottom, 22)
+                    header
 
-                    if sortedStories.isEmpty {
-                        noActiveStoryLayout
-                    } else {
-                        activeStoryLayout
+                    // ── Primary 1: Capture a Moment — opens the shared camera immediately,
+                    //    no Story / CreativeIntent / AI call required to open it.
+                    Button { showCapture = true } label: {
+                        StoryImageCard(image: "ph_lake", eyebrow: "Right now",
+                                       title: "Capture a Moment",
+                                       sub: "Capture something worth remembering. Get an AI shot idea whenever you want.",
+                                       icon: "camera.fill")
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 14)
+
+                    // ── Primary 2: Start a Story — existing C1 flow, unchanged.
+                    NavigationLink { CreativeDirectionView() } label: {
+                        StoryImageCard(image: "ph_alpine", eyebrow: "Over time",
+                                       title: "Start a Story",
+                                       sub: "Collect moments, tell your story, and create a film.",
+                                       icon: "film.fill")
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 14)
+
+                    // ── Secondary destinations: Moments · Stories
+                    HStack(spacing: 12) {
+                        NavigationLink { MomentsLibraryView() } label: {
+                            secondaryCard(icon: "photo.on.rectangle", count: moments.count,
+                                          title: "Moments", sub: "Your captured memories")
+                        }
+                        .buttonStyle(.plain)
+
+                        Button { showStories = true } label: {
+                            secondaryCard(icon: "film", count: stories.count,
+                                          title: "Stories", sub: "Your projects and films")
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -37,140 +71,44 @@ struct HomeView: View {
             }
             .storyBackground()
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showStories) { StoriesListView() }
         }
         .tint(StoryTheme.gold)
+        .fullScreenCover(isPresented: $showCapture) {
+            // Standalone capture — NO Story association, library-only. The scene-only
+            // AI intent carries no prior Story (no stale-context leak).
+            ContinuousCaptureView(captureContext: .standalone(direction: nil))
+        }
     }
 
-    // ── No active Story: creation-first (Figma: title + 2 image cards + link).
-    //    NOTE: Figma shows NO "Your Stories" list in this state.
-    private var noActiveStoryLayout: some View {
+    private var header: some View {
+        HStack {
+            StoryEyebrow(text: "Story")
+            Spacer()
+        }
+        .padding(.top, 32).padding(.bottom, 22)
+    }
+
+    // Compact secondary destination card (icon + count row, title, sub).
+    private func secondaryCard(icon: String, count: Int, title: String, sub: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("What would you like to make?")
-                .font(StoryTheme.display(28))
-                .foregroundStyle(StoryTheme.cream)
-                .lineSpacing(2)
-                .padding(.bottom, 22)
-
-            // Moments — the global library (Capture Anywhere milestone): browse every moment, select to make
-            // a Story. (Replaces the old disabled "Create now" placeholder.)
-            NavigationLink { MomentsLibraryView() } label: {
-                StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Moments",
-                               sub: "Browse your moments — pick some to make a Story.")
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 10)
-
-            // Start a Story — wired to real C1 flow.
-            NavigationLink { CreativeDirectionView() } label: {
-                StoryImageCard(image: "ph_alpine", eyebrow: "Over time", title: "Start a Story",
-                               sub: "Capture an experience as it unfolds.")
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 22)
-
-            // Use existing (analyze) — disabled (AssetUnderstanding).
-            Text("Use photos & videos I already have")
-                .font(StoryTheme.body(13))
-                .foregroundStyle(StoryTheme.cream.opacity(0.28))
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 32)
-                .accessibilityHint("Not available yet")
-        }
-    }
-
-    // ── Active Story: Continue hero + Create section + Your Stories list.
-    private var activeStoryLayout: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            let active = sortedStories.filter { $0.status == .active }
-            let completed = sortedStories.filter { $0.status == .completed }
-
-            // Continue — primary hero for the most recent active Story.
-            if let hero = active.first {
-                StoryEyebrow(text: "Continue").padding(.bottom, 11)
-                NavigationLink { StoryHomeView(story: hero) } label: { heroCard(hero) }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 32)
-            }
-
-            // Create section — compact image cards (both future/disabled here;
-            // Start a Story remains the wired path).
-            StoryEyebrow(text: "Create").padding(.bottom, 11)
-            NavigationLink { MomentsLibraryView() } label: {
-                StoryImageCard(image: "ph_city", eyebrow: "Right now", title: "Moments",
-                               sub: "", titleSize: 18).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-                .padding(.bottom, 8)
-                .accessibilityHint("Not available yet")
-            NavigationLink { CreativeDirectionView() } label: {
-                StoryImageCard(image: "ph_alpine", eyebrow: "Over time", title: "Start a Story",
-                               sub: "", titleSize: 18)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 16)
-
-            // Your Stories — remaining active + completed below.
-            StoryEyebrow(text: "Your Stories").padding(.bottom, 11)
-            VStack(spacing: 8) {
-                ForEach(Array(active.dropFirst()) + completed) { story in
-                    NavigationLink { StoryHomeView(story: story) } label: {
-                        storyRow(story).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    // Continue hero card: mosaic strip + body (title / state / Continue →).
-    private func heroCard(_ story: StoryModel) -> some View {
-        VStack(spacing: 0) {
-            StoryMosaicStrip(height: 110)
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(story.title.displayTitle).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
-                    Text(momentSub(story)).font(StoryTheme.body(11))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.5))
-                }
-                Spacer()
-                Text("Continue →").font(StoryTheme.body(13))
-                    .foregroundStyle(StoryTheme.cream.opacity(0.38))
-            }
-            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 16)
-            .frame(maxWidth: .infinity)
-            .background(StoryTheme.cream.opacity(0.03))
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(StoryTheme.cream.opacity(0.09), lineWidth: 1))
-        .contentShape(Rectangle())
-    }
-
-    private func momentSub(_ story: StoryModel) -> String {
-        let n = story.moments.count
-        return n == 0 ? "Your Story is taking shape" : "\(n) moment\(n == 1 ? "" : "s")"
-    }
-
-    private func storyRow(_ story: StoryModel) -> some View {
-        VStack(spacing: 0) {
-            StoryMosaicStrip(height: 56, startIndex: story.status == .completed ? 3 : 0)
             HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(story.title.displayTitle).font(StoryTheme.display(14))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
-                    Text("\(story.status == .completed ? "Completed · " : "")\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
-                        .font(StoryTheme.body(10)).foregroundStyle(StoryTheme.cream.opacity(0.2))
-                }
+                Image(systemName: icon)
+                    .font(.system(size: 18)).foregroundStyle(StoryTheme.cream.opacity(0.7))
                 Spacer()
-                Text(story.status == .completed ? "View →" : "Open →")
-                    .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.2))
+                Text("\(count)")
+                    .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream.opacity(0.5))
             }
-            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 12)
-            .frame(maxWidth: .infinity)
-            .background(StoryTheme.cream.opacity(0.02))
+            .padding(.bottom, 18)
+            Text(title).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+            Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(StoryTheme.cream.opacity(0.07), lineWidth: 1))
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
+        .background(StoryTheme.cream.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.08), lineWidth: 1))
+        .contentShape(Rectangle())
     }
 }

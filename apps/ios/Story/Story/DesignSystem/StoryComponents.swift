@@ -95,6 +95,7 @@ struct StoryImageCard: View {
     let sub: String
     var enabled: Bool = true
     var titleSize: CGFloat = 21
+    var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
         Color.clear
             .aspectRatio(16.0/9.0, contentMode: .fit)
@@ -110,6 +111,16 @@ struct StoryImageCard: View {
                             .init(color: .clear, location: 1)],
                     startPoint: .bottom, endPoint: .top)
             )
+            .overlay(alignment: .topLeading) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(StoryTheme.cream)
+                        .frame(width: 38, height: 38)
+                        .background(StoryTheme.ink.opacity(0.4), in: Circle())
+                        .padding(14)
+                }
+            }
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 2) {
                     StoryEyebrow(text: eyebrow)
