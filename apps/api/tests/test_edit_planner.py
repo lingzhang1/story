@@ -1128,3 +1128,46 @@ def test_interpret_revision_maps_numbers_to_ids_and_flags_unresolved():
     r2 = interpret_revision("include moment 9", numbered, gw2)
     assert r2.directives == {}
     assert any("9" in u for u in r2.unresolved)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — deterministic revision fast path (zero model calls).
+# ---------------------------------------------------------------------------
+def test_deterministic_transform_reorders_and_prunes():
+    from edit_planner.deterministic_revision import apply_deterministic_revision as A
+    def seg(o, a): return {"order": o, "asset_id": a, "source_start_seconds": 0.0,
+                           "source_end_seconds": 4.0, "output_duration_seconds": 4.0, "native_audio": "keep"}
+    base = {"schema_version": "edit_plan/2", "feasible": True,
+            "segments": [seg(0, "a"), seg(1, "b"), seg(2, "c"), seg(3, "d")]}
+    def ids(p): return [s["asset_id"] for s in sorted(p["segments"], key=lambda s: s["order"])]
+    assert ids(A(base, {"opening": "c"})) == ["c", "a", "b", "d"]
+    assert ids(A(base, {"exclude": ["b"]})) == ["a", "c", "d"]
+    assert ids(A(base, {"opening": "a", "order_adjacent": [["c", "a"]]})) == ["a", "c", "b", "d"]
+    assert ids(A(base, {"ending": "a"})) == ["b", "c", "d", "a"]
+    # must_include a Moment not in the base plan cannot be done by reorder -> None (fall back to AI)
+    assert A(base, {"must_include": ["zz"]}) is None
+    # order renumbered 0..n-1
+    assert [s["order"] for s in sorted(A(base, {"opening": "c"})["segments"], key=lambda s: s["order"])] == [0, 1, 2, 3]
+
+
+def test_engine_deterministic_fast_path_zero_model_calls():
+    # A revise carrying base_plan + a structural directive and NO soft_direction must resolve with 0 model calls.
+    a, b = M1, M2
+    def seg(o, aid): return {"order": o, "asset_id": aid, "source_start_seconds": 1.0,
+                             "source_end_seconds": 7.0, "output_duration_seconds": 6.0, "native_audio": "keep"}
+    # base plan must itself be duration-valid for the target (reorder keeps total unchanged); use a target
+    # that matches the base so the fast-path result passes the duration gate.
+    base_plan = {"schema_version": "edit_plan/2", "target_duration_seconds": 12.0, "feasible": True,
+                 "segments": [seg(0, a), seg(1, b)]}
+    rc = {"mode": "revise", "base_version_id": "v1", "base_plan": base_plan,
+          "directives": {"opening": b}}   # make B the opening
+    # A gateway that FAILS if called — proves the fast path never calls the model.
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("model must NOT be called on the deterministic fast path")
+    eng = RealEditPlannerEngine(_Boom())
+    plan = eng.generate(_inputs(revision_context=rc, creative_intent={"target_duration_seconds": 12.0, "desired_feeling": ["calm"]}))
+    assert eng.last_diagnostics["revision_path"] == "deterministic"
+    assert eng.last_diagnostics["model_calls"] == 0
+    assert str(plan.segments[0].asset_id) == b   # opening honored

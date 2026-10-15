@@ -988,6 +988,28 @@ class RealEditPlannerEngine:
                 diag["output_tokens"] += (u.output_tokens or 0)
             return str((result.data or {}).get("critique", "") or "")
 
+        # 0: DETERMINISTIC REVISION FAST PATH (Phase 5). When this is a revise carrying the exact base_plan and
+        # ONLY hard structural directives (exclude / opening / ending / order_*), try to satisfy it by pure
+        # reorder+prune of the base plan — ZERO model calls. Adopt the result only if the deterministic
+        # validator passes AND there is no soft_direction (a creative request still needs the model). Any miss
+        # falls through to normal planning (the targeted single-call path, since critique stays off by default).
+        rc = inputs.revision_context or {}
+        if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
+                and rc.get("directives") and not (rc.get("soft_direction") or "").strip()):
+            from .deterministic_revision import apply_deterministic_revision
+            fast = apply_deterministic_revision(rc["base_plan"], rc["directives"])
+            if fast is not None:
+                fast, fnotes = normalize_plan(fast, inputs)
+                if not validate_plan(fast, inputs) and fast.get("feasible") is not False:
+                    diag["final"] = "executable"
+                    diag["revision_path"] = "deterministic"
+                    diag["model_calls"] = 0
+                    diag["first_pass_executable"] = True
+                    diag["normalize_notes"] = fnotes
+                    self.last_diagnostics = diag
+                    return _to_contract(fast, inputs)
+            diag["revision_path"] = "deterministic_fallthrough"
+
         # 1-3: initial generation, safe normalization, executability validation.
         plan = _call(_build_user(inputs))
         raw_errs = validate_plan(plan, inputs)
