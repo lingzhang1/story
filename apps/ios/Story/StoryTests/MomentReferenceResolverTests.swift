@@ -148,4 +148,107 @@ final class MomentReferenceResolverTests: XCTestCase {
         XCTAssertFalse(res.needsClarification)
         XCTAssertTrue(res.directives.wireDictionary().isEmpty)
     }
+
+    // ---- Phase 6: the owner's 16 instruction cases (deterministic path coverage) ----
+    // Cases needing creative/free-text interpretation (12 "blue-dress clip", 9/10 pacing soft) or the AI
+    // interpreter (compound ambiguity) are validated on the backend interpreter path, noted inline.
+
+    private func num5() -> (StoryMomentNumbering, [UUID]) { numbering(8) }
+
+    func test_case1_use_moment5_to_start() {
+        let (n, ids) = num5()
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped("Use Moment 5 to start."),
+            ordering: MomentReferenceResolver.parseOrdering("Use Moment 5 to start."),
+            implicitFollow: MomentReferenceResolver.parseImplicitFollow("Use Moment 5 to start."), in: n)
+        XCTAssertEqual(r.directives.opening, ids[4])
+    }
+
+    func test_case2_start_with_moment5() {
+        let (n, ids) = num5()
+        let r = MomentReferenceResolver.resolve(typed: MomentReferenceResolver.parseTyped("Start with Moment 5."), in: n)
+        XCTAssertEqual(r.directives.opening, ids[4])
+    }
+
+    func test_case3_use_moment5_to_start_and_moment2_follow() {
+        let (n, ids) = num5()
+        let t = "Use Moment 5 to start and Moment 2 follow."
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped(t),
+            ordering: MomentReferenceResolver.parseOrdering(t),
+            implicitFollow: MomentReferenceResolver.parseImplicitFollow(t), in: n)
+        XCTAssertEqual(r.directives.opening, ids[4])
+        XCTAssertEqual(r.directives.orderAdjacent, [[ids[1], ids[4]]])   // 2 immediately after 5
+    }
+
+    func test_case4_start_with_moment5_then_moment2() {
+        let (n, ids) = num5()
+        let t = "Start with Moment 5, then Moment 2."
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped(t),
+            ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        XCTAssertEqual(r.directives.opening, ids[4])
+        XCTAssertEqual(r.directives.orderAdjacent, [[ids[1], ids[4]]])
+    }
+
+    func test_case5_moment2_immediately_after_moment5() {
+        let (n, ids) = num5()
+        let t = "Put Moment 2 immediately after Moment 5."
+        let r = MomentReferenceResolver.resolve(ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        XCTAssertEqual(r.directives.orderAdjacent, [[ids[1], ids[4]]])
+    }
+
+    func test_case6_moment2_somewhere_after_moment5() {
+        let (n, ids) = num5()
+        let t = "Show Moment 2 somewhere after Moment 5."
+        let r = MomentReferenceResolver.resolve(ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        XCTAssertEqual(r.directives.orderAfter, [[ids[1], ids[4]]])
+        XCTAssertTrue(r.directives.orderAdjacent.isEmpty)
+    }
+
+    func test_case7_include_moment8() {
+        let (n, ids) = num5()
+        let r = MomentReferenceResolver.resolve(typed: MomentReferenceResolver.parseTyped("Include Moment 8."), in: n)
+        XCTAssertEqual(r.directives.mustInclude, [ids[7]])
+    }
+
+    func test_case8_exclude_moment4() {
+        let (n, ids) = num5()
+        let r = MomentReferenceResolver.resolve(typed: MomentReferenceResolver.parseTyped("Exclude Moment 4."), in: n)
+        XCTAssertEqual(r.directives.exclude, [ids[3]])
+    }
+
+    func test_case9_make_cuts_faster_is_no_hard_directive() {
+        let (n, _) = num5()
+        // Pure pacing: no hard directive (goes to soft_direction on the planner path).
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped("Make the cuts faster."),
+            ordering: MomentReferenceResolver.parseOrdering("Make the cuts faster."), in: n)
+        XCTAssertTrue(r.directives.isEmpty)
+    }
+
+    func test_case10_opening_plus_pacing() {
+        let (n, ids) = num5()
+        let t = "Start with Moment 5 and make the cuts faster."
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped(t),
+            ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        XCTAssertEqual(r.directives.opening, ids[4])   // hard part captured; pacing stays soft (raw text)
+    }
+
+    func test_case14_unknown_moment_number_unresolved() {
+        let (n, _) = num5()
+        let r = MomentReferenceResolver.resolve(typed: MomentReferenceResolver.parseTyped("Include Moment 99."), in: n)
+        XCTAssertTrue(r.needsClarification)
+        XCTAssertTrue(r.directives.isEmpty)
+    }
+
+    func test_case16_unsupported_mixed_with_supported() {
+        let (n, ids) = num5()
+        // "make it dreamier" (unsupported) + "exclude Moment 4" (supported): supported part still resolves;
+        // the unsupported clause is handled by the backend interpreter's `unsupported` list, not dropped here.
+        let r = MomentReferenceResolver.resolve(
+            typed: MomentReferenceResolver.parseTyped("Make it dreamier and exclude Moment 4."), in: n)
+        XCTAssertEqual(r.directives.exclude, [ids[3]])
+    }
 }
