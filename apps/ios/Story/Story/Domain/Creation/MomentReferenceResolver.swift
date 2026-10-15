@@ -70,8 +70,15 @@ struct ResolvedDirectives: Equatable {
     var exclude: [UUID] = []
     var opening: UUID? = nil
     var ending: UUID? = nil
+    /// [after, before] pairs: `after` appears somewhere after `before`.
+    var orderAfter: [[UUID]] = []
+    /// [after, before] pairs: `after` appears IMMEDIATELY after `before`.
+    var orderAdjacent: [[UUID]] = []
 
-    var isEmpty: Bool { mustInclude.isEmpty && exclude.isEmpty && opening == nil && ending == nil }
+    var isEmpty: Bool {
+        mustInclude.isEmpty && exclude.isEmpty && opening == nil && ending == nil
+        && orderAfter.isEmpty && orderAdjacent.isEmpty
+    }
 
     /// Encode to the backend wire shape (lowercased uuid strings). Omits empty slots so an absent directive is
     /// simply not present (behavior-unchanged on the backend).
@@ -81,6 +88,8 @@ struct ResolvedDirectives: Equatable {
         if !exclude.isEmpty { d["exclude"] = exclude.map { $0.uuidString } }
         if let o = opening { d["opening"] = o.uuidString }
         if let e = ending { d["ending"] = e.uuidString }
+        if !orderAfter.isEmpty { d["order_after"] = orderAfter.map { $0.map { $0.uuidString } } }
+        if !orderAdjacent.isEmpty { d["order_adjacent"] = orderAdjacent.map { $0.map { $0.uuidString } } }
         return d
     }
 
@@ -93,6 +102,12 @@ struct ResolvedDirectives: Equatable {
         if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString) }) }
         if let op = opening { o["opening"] = .string(op.uuidString) }
         if let en = ending { o["ending"] = .string(en.uuidString) }
+        if !orderAfter.isEmpty {
+            o["order_after"] = .array(orderAfter.map { .array($0.map { .string($0.uuidString) }) })
+        }
+        if !orderAdjacent.isEmpty {
+            o["order_adjacent"] = .array(orderAdjacent.map { .array($0.map { .string($0.uuidString) }) })
+        }
         return .object(o)
     }
 
@@ -101,11 +116,19 @@ struct ResolvedDirectives: Equatable {
         guard let json, let data = json.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         func ids(_ v: Any?) -> [UUID] { ((v as? [String]) ?? []).compactMap { UUID(uuidString: $0) } }
+        func pairs(_ v: Any?) -> [[UUID]] {
+            ((v as? [[String]]) ?? []).compactMap { p in
+                let us = p.compactMap { UUID(uuidString: $0) }
+                return us.count == 2 ? us : nil
+            }
+        }
         var d = ResolvedDirectives()
         d.mustInclude = ids(obj["must_include"])
         d.exclude = ids(obj["exclude"])
         d.opening = (obj["opening"] as? String).flatMap { UUID(uuidString: $0) }
         d.ending = (obj["ending"] as? String).flatMap { UUID(uuidString: $0) }
+        d.orderAfter = pairs(obj["order_after"])
+        d.orderAdjacent = pairs(obj["order_adjacent"])
         return d.isEmpty ? nil : d
     }
 
@@ -178,12 +201,76 @@ enum MomentReferenceResolver {
         return withPos.sorted { $0.pos < $1.pos }.map { $0.ref }
     }
 
+    /// Parse ORDERING relations between two typed Moment numbers. Returns (after, before, adjacent) triples:
+    /// `after` should come after `before`; `adjacent` means immediately after. Deterministic, bounded to the
+    /// clear phrasings — anything looser is left to the structured-AI interpretation step (Phase 2).
+    ///   "start with M5 then M2"      -> (2, 5, adjacent)   ("then" = immediately next)
+    ///   "M5, M2 follows"             -> (2, 5, adjacent)
+    ///   "M2 immediately after M5"    -> (2, 5, adjacent)
+    ///   "M2 right after M5"          -> (2, 5, adjacent)
+    ///   "M2 after M5" / "M2 somewhere after M5" -> (2, 5, non-adjacent)
+    static func parseOrdering(_ text: String) -> [(after: Int, before: Int, adjacent: Bool)] {
+        guard !text.isEmpty else { return [] }
+        let ns = text as NSString
+        var out: [(Int, Int, Bool)] = []
+        func scan(_ pattern: String, adjacent: Bool, swap: Bool = false) {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return }
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                guard m.numberOfRanges > 2,
+                      let x = Int(ns.substring(with: m.range(at: 1))),
+                      let y = Int(ns.substring(with: m.range(at: 2))) else { continue }
+                // swap=false: first number is `after`? depends on pattern; callers set it so (after, before).
+                let after = swap ? y : x
+                let before = swap ? x : y
+                out.append((after, before, adjacent))
+            }
+        }
+        // "moment A immediately/right after moment B"  => A after B, adjacent
+        scan(#"moment\s+#?(\d+)\s+(?:immediately|right|directly)\s+(?:after|following)\s+moment\s+#?(\d+)"#, adjacent: true)
+        // "moment A after moment B" (plain / somewhere) => A after B, non-adjacent
+        scan(#"moment\s+#?(\d+)\s+(?:somewhere\s+)?after\s+moment\s+#?(\d+)"#, adjacent: false)
+        // "moment B, then moment A" / "moment B then A"  => A after B, adjacent  (swap: first is `before`)
+        scan(#"moment\s+#?(\d+)\s*,?\s+then\s+(?:moment\s+)?#?(\d+)"#, adjacent: true, swap: true)
+        // "moment B, moment A follows/next" => A after B, adjacent (swap: first is before)
+        scan(#"moment\s+#?(\d+)[,\s]+(?:then\s+)?(?:moment\s+)?#?(\d+)\s+(?:follows?|follow|next|afterwards?|comes\s+next)"#, adjacent: true, swap: true)
+        // "moment B ... moment A follow(s)" with an opening/start antecedent: "<start X> and moment A follow"
+        // The antecedent is the opening Moment named earlier. Handled by resolveImplicitFollow (below) when a
+        // bare "moment A follow(s)" has no explicit before-number — it attaches to the opening directive.
+        // de-dupe
+        var seen = Set<String>(); var uniq: [(Int, Int, Bool)] = []
+        for t in out {
+            let k = "\(t.0)-\(t.1)-\(t.2)"
+            if !seen.contains(k) { seen.insert(k); uniq.append(t) }
+        }
+        return uniq
+    }
+
+    /// Numbers in a bare "moment A follow(s)/next" clause that has NO explicit "before" number — the user means
+    /// A follows whatever was just named (typically the opening). The caller attaches these to the opening
+    /// directive. Only returns a number when no explicit ordering already covers it.
+    static func parseImplicitFollow(_ text: String) -> [Int] {
+        guard !text.isEmpty else { return [] }
+        let ns = text as NSString
+        var nums: [Int] = []
+        // "moment A follow" / "moment A follows" / "moment A next" NOT preceded directly by another "moment N"
+        if let re = try? NSRegularExpression(
+            pattern: #"moment\s+#?(\d+)\s+(?:to\s+)?(?:follow|follows|next|comes\s+next|afterwards?)"#,
+            options: [.caseInsensitive]) {
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                if m.numberOfRanges > 1, let n = Int(ns.substring(with: m.range(at: 1))) { nums.append(n) }
+            }
+        }
+        return nums
+    }
+
     /// Resolve parsed typed references + any visually-selected chip ids against a STABLE numbering snapshot.
     /// `chipSlots` are references already carrying a stable UUID (from the visual picker), so they bypass the
     /// number lookup entirely. Opening/ending are single-valued: the LAST one wins (a later instruction
     /// overrides an earlier one) — surfaced, never silently merged.
     static func resolve(typed: [ParsedReference],
                         chips: [(slot: DirectiveSlot, id: UUID)] = [],
+                        ordering: [(after: Int, before: Int, adjacent: Bool)] = [],
+                        implicitFollow: [Int] = [],
                         in numbering: StoryMomentNumbering) -> ResolutionResult {
         var d = ResolvedDirectives()
         var unresolved: [UnresolvedReference] = []
@@ -212,6 +299,31 @@ enum MomentReferenceResolver {
                 continue
             }
             add(c.slot, c.id)
+        }
+        for o in ordering {
+            guard let aid = numbering.id(forNumber: o.after) else {
+                unresolved.append(.init(reason: .numberOutOfRange(o.after), matchedText: "Moment \(o.after)")); continue
+            }
+            guard let bid = numbering.id(forNumber: o.before) else {
+                unresolved.append(.init(reason: .numberOutOfRange(o.before), matchedText: "Moment \(o.before)")); continue
+            }
+            let pair = [aid, bid]
+            if o.adjacent {
+                if !d.orderAdjacent.contains(pair) { d.orderAdjacent.append(pair) }
+            } else {
+                if !d.orderAfter.contains(pair) { d.orderAfter.append(pair) }
+            }
+        }
+        // Implicit "moment A follows" with no explicit antecedent attaches to the opening (A immediately after
+        // the opening Moment). Only when an opening is set and A resolves and A != opening.
+        if let openId = d.opening {
+            for n in implicitFollow {
+                guard let aid = numbering.id(forNumber: n) else {
+                    unresolved.append(.init(reason: .numberOutOfRange(n), matchedText: "Moment \(n)")); continue
+                }
+                let pair = [aid, openId]
+                if aid != openId && !d.orderAdjacent.contains(pair) { d.orderAdjacent.append(pair) }
+            }
         }
         return ResolutionResult(directives: d, unresolved: unresolved)
     }

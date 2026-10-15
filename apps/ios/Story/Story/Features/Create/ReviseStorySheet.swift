@@ -91,7 +91,9 @@ struct ReviseStorySheet: View {
         let n = numbering
         let typed = MomentReferenceResolver.parseTyped(instruction)
         let chipRefs = chips.map { (slot: DirectiveSlot.include, id: $0.id) }
-        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, in: n)
+        let ordering = MomentReferenceResolver.parseOrdering(instruction)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(instruction)
+        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering, implicitFollow: implicit, in: n)
         if result.needsClarification {
             clarification = clarificationMessage(result.unresolved, numbering: n)
             return   // never submit a revision with unresolved references

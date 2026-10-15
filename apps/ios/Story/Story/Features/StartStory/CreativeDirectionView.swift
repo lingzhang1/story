@@ -196,7 +196,9 @@ struct CreativeDirectionView: View {
         // Chips default to the INCLUDE slot (a visually-picked Moment is "use this"); typed verbs set opening/
         // ending/exclude explicitly. A later typed opening/ending still overrides.
         let chipRefs = referenceChips.map { (slot: DirectiveSlot.include, id: $0.id) }
-        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, in: numbering)
+        let ordering = MomentReferenceResolver.parseOrdering(description)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(description)
+        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering, implicitFollow: implicit, in: numbering)
         if result.needsClarification {
             referenceClarification = clarificationMessage(result.unresolved, numbering: numbering)
         } else {
