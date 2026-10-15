@@ -110,16 +110,26 @@ struct StoryCoverageV2Service: StoryCoverageV2Computing {
         do { bodyData = try StoryContractCoding.encoder().encode(request) }
         catch { throw StoryCoverageServiceError.decoding(error) }
         let bodyString = String(data: bodyData, encoding: .utf8) ?? "{}"
-        let operationId = Self.operationId(for: bodyString)
+        // The op-id MUST be stable across opens for the SAME Story evidence, else every open creates a NEW job
+        // (duplicate inference + the UI never recovers a result). The body JSON key order is NOT guaranteed
+        // stable (JSONValue wraps Swift dictionaries), so hash a CANONICAL re-serialization with sorted keys
+        // instead of the raw body bytes.
+        let operationId = Self.operationId(for: bodyData)
 
         let jobId = try await submit(operationId: operationId, body: bodyString)
         return try await pollToResult(jobId: jobId)
     }
 
-    /// Deterministic operation id = sha256 of the canonical request body. Captures every output-affecting
-    /// input (guide, intent, scope, the completed MU set, pending count) because they are all in the body.
-    static func operationId(for bodyString: String) -> String {
-        let digest = SHA256.hash(data: Data(bodyString.utf8))
+    /// Deterministic operation id = sha256 of a CANONICAL (sorted-keys) re-serialization of the request body.
+    /// Captures every output-affecting input (guide, intent, scope, the completed MU set, pending count) and
+    /// is INVARIANT to JSON key ordering, so the same Story evidence always yields the same id across opens.
+    static func operationId(for bodyData: Data) -> String {
+        var canonical = bodyData
+        if let obj = try? JSONSerialization.jsonObject(with: bodyData),
+           let sorted = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) {
+            canonical = sorted
+        }
+        let digest = SHA256.hash(data: canonical)
         return "coverage_v2:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 

@@ -563,7 +563,21 @@ enum StoryContractCoding {
     /// (snake_case handled per-type via CodingKeys; ISO-8601 timestamps).
     static func decoder() -> JSONDecoder {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // The backend emits ISO-8601 with FRACTIONAL seconds (e.g. 2026-10-15T20:01:17.701578Z). The stock
+        // .iso8601 strategy uses ISO8601DateFormatter's default options, which do NOT parse fractional
+        // seconds and THROW — silently failing the whole DTO decode (this is why a completed coverage result
+        // was discarded and the Guide never marked). Accept both fractional and whole-second forms.
+        d.dateDecodingStrategy = .custom { decoder in
+            let s = try decoder.singleValueContainer().decode(String.self)
+            let withFrac = ISO8601DateFormatter()
+            withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let dt = withFrac.date(from: s) { return dt }
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            if let dt = plain.date(from: s) { return dt }
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath, debugDescription: "unparseable ISO-8601 date: \(s)"))
+        }
         return d
     }
 
