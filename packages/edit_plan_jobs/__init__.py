@@ -34,6 +34,18 @@ _JOB_NS = uuid.UUID("6f1d2c3a-0b7e-5a4d-9c8b-1e2f3a4b5c6d")
 
 TERMINAL = {"completed", "failed", "cancelled", "expired"}
 
+# Operation discriminator (owner safeguard 1). The job store is shared across operations; each item carries
+# an explicit operation_type so a worker dispatches on it and NEVER reinterprets a Coverage payload as an
+# EditPlan input. edit_plan is the historical default (items written before this field existed are treated
+# as edit_plan on read). An unknown value must fail safely at the worker, not be guessed.
+OP_EDIT_PLAN = "edit_plan"
+OP_COVERAGE_V2 = "coverage_v2"
+KNOWN_OPERATIONS = {OP_EDIT_PLAN, OP_COVERAGE_V2}
+
+
+class UnknownOperation(Exception):
+    """A job item carries an operation_type the worker does not know how to run — fail safe, never guess."""
+
 
 class PayloadConflict(Exception):
     """Same operation_id submitted with a DIFFERENT payload — a client bug, not a legitimate retry (concern 2)."""
@@ -73,6 +85,35 @@ def sheet_digest(data: bytes) -> str:
     """sha256 of one contact-sheet JPEG's bytes — folded into the payload fingerprint (adjustment 2)."""
     import hashlib
     return hashlib.sha256(data).hexdigest()
+
+
+def coverage_operation_id(*, story_id: str, owner: str, guide_fingerprint: str, intent_fingerprint: str,
+                          moment_evidence: list[tuple[str, str]], pending_count: int,
+                          mapper_prompt_version: str, judge_prompt_version: str,
+                          engine_version: str = "story_coverage/2") -> str:
+    """Canonical Coverage operation id (owner safeguard 2). Deterministic over EVERY output-affecting input:
+    story identity + trusted owner scope, the Guide and CreativeIntent snapshots (by fingerprint), the
+    eligible completed-Moment evidence AND its versions, the pending count, and the engine + both prompt
+    versions. Identical snapshots -> identical id -> the SAME job is recovered; any relevant change -> a new
+    id -> a new job. moment_evidence = [(moment_id, evidence_version), ...]; sorted here so ordering never
+    affects identity. This is NOT random — routine recompute of an unchanged Story reuses the same id."""
+    ev = ";".join(f"{mid}@{ver}" for mid, ver in sorted(moment_evidence))
+    return (f"{OP_COVERAGE_V2}:{story_id}:{owner}:g={guide_fingerprint}:i={intent_fingerprint}:"
+            f"ev=[{ev}]:pending={int(pending_count)}:"
+            f"eng={engine_version}:m={mapper_prompt_version}:j={judge_prompt_version}")
+
+
+def coverage_payload_fingerprint(body_json: str, operation_id: str) -> str:
+    """Stable hash of the FULL Coverage request body (owner safeguard 2: preserve same-op payload-conflict
+    protection). Separate from the edit-plan payload_fingerprint so the two operations never entangle. The
+    op-id is folded in so an id/body mismatch is also a conflict."""
+    import hashlib
+    h = hashlib.sha256()
+    h.update(b"coverage_v2\x00")
+    h.update(operation_id.encode("utf-8"))
+    h.update(b"\x00body\x00")
+    h.update(body_json.encode("utf-8"))
+    return h.hexdigest()
 
 
 # Reconcile: re-enqueue only truly-stranded jobs (concern 6).
@@ -170,6 +211,7 @@ class JobStore:
             "status": {"S": "queued"}, "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
             "expires_at": {"N": str(now + JOB_TTL_SECONDS)}, "attempt_count": {"N": "0"},
             "lease_until": {"N": "0"}, "lease_token": {"S": ""}, "approach": {"S": approach},
+            "operation_type": {"S": OP_EDIT_PLAN},
             "critique_requested": {"BOOL": bool(critique_requested)},
             "payload_fingerprint": {"S": payload_fingerprint},
             "request_ref": {"M": {
@@ -195,12 +237,58 @@ class JobStore:
     def enqueue(self, job_id: str) -> None:
         self._sqs_c().send_message(QueueUrl=self.cfg.queue_url, MessageBody=json.dumps({"job_id": job_id}))
 
+    # --- Coverage/2 job lifecycle (shares the SAME store; its own payload + result schema) -----------
+    def create_or_get_coverage(self, *, operation_id: str, owner: str, body_json: str,
+                               payload_fingerprint: str, staging_prefix: str = "") -> tuple[str, bool]:
+        """Idempotent create for a Coverage/2 job (owner safeguards 1 & 2). Mirrors create_or_get but stamps
+        operation_type=coverage_v2 and carries the Coverage body (inlined when small, else staged in S3 — the
+        Coverage payload is compact structured JSON, never contact sheets). Same conditional-put idempotency,
+        same PayloadConflict protection. Returns (job_id, created)."""
+        jid = job_id_for(operation_id)
+        now = _now()
+        inline = not staging_prefix
+        request_ref: dict[str, Any] = {"has_body": {"BOOL": True}, "inline": {"BOOL": inline}}
+        if inline:
+            request_ref["body_json"] = {"S": body_json}
+        else:
+            request_ref["staging_prefix"] = {"S": staging_prefix}
+        item = {
+            "job_id": {"S": jid}, "operation_id": {"S": operation_id}, "owner": {"S": owner},
+            "status": {"S": "queued"}, "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
+            "expires_at": {"N": str(now + JOB_TTL_SECONDS)}, "attempt_count": {"N": "0"},
+            "lease_until": {"N": "0"}, "lease_token": {"S": ""},
+            "operation_type": {"S": OP_COVERAGE_V2},
+            "payload_fingerprint": {"S": payload_fingerprint},
+            "request_ref": {"M": request_ref},
+        }
+        try:
+            self._ddb_c().put_item(
+                TableName=self.cfg.table, Item=item,
+                ConditionExpression="attribute_not_exists(job_id)")
+            return jid, True
+        except Exception as e:
+            if "ConditionalCheckFailed" in type(e).__name__ or "ConditionalCheckFailed" in str(e):
+                existing = self.get(jid)
+                if existing and existing.get("payload_fingerprint") not in (None, payload_fingerprint):
+                    raise PayloadConflict(
+                        f"operation_id already used with a different payload (job {jid})")
+                return jid, False
+            raise
+
+    def complete_coverage(self, job_id: str, result: dict, diagnostics: dict, lease_token: str) -> bool:
+        """Publish a Coverage result. Stored under a DISTINCT `result` key (never `plan`) so a Coverage result
+        is never read back as an EditPlan. Conditional on running + matching lease_token (no stale publish)."""
+        return self._set_status(job_id, "completed", require=["running"], lease_token=lease_token,
+                                extra={"result": {"M": _ser(result)}, "diagnostics": {"M": _ser(diagnostics)}})
+
     def get(self, job_id: str) -> Optional[dict]:
         resp = self._ddb_c().get_item(TableName=self.cfg.table, Key={"job_id": {"S": job_id}})
         it = resp.get("Item")
         if not it:
             return None
         d = _deser(it)
+        # Legacy items (written before operation_type existed) are edit_plan by construction.
+        d.setdefault("operation_type", OP_EDIT_PLAN)
         # Concern 5: DynamoDB TTL is NOT immediate deletion (reaped within ~48h). A non-terminal job past
         # its expires_at is reported as `expired` on READ, so callers never see a stale queued/running row.
         if d.get("status") not in TERMINAL and _now() > int(d.get("expires_at", 0) or 0):

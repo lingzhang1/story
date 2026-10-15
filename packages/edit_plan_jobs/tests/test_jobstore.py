@@ -110,4 +110,53 @@ assert js.claim_lease(j1) is None  # j1 is completed, won't claim
 js._ddb.items[jr]["created_at"]={"N":"1"}; js.reconcile_lost_enqueue()
 js._ddb.items[jr]["created_at"]={"N":"1"}; js.reconcile_lost_enqueue()
 assert js.get(jr)["status"] in ("failed","queued")  # eventually fails as enqueue_lost
+
+# ============================ COVERAGE/2 OPERATION TESTS (owner safeguards 1,2,4) ============================
+from edit_plan_jobs import (coverage_operation_id, coverage_payload_fingerprint,
+                            OP_EDIT_PLAN, OP_COVERAGE_V2, KNOWN_OPERATIONS)
+
+def _covid(**kw):
+    base=dict(story_id="S1", owner="u", guide_fingerprint="g1", intent_fingerprint="i1",
+              moment_evidence=[("m1","v1"),("m2","v1")], pending_count=0,
+              mapper_prompt_version="story_coverage/mapper-v1", judge_prompt_version="story_coverage/judge-v1")
+    base.update(kw); return coverage_operation_id(**base)
+
+# C1 canonical fingerprint STABILITY: same inputs (any moment order) -> same op-id
+assert _covid()==_covid(moment_evidence=[("m2","v1"),("m1","v1")]), "op-id stable + order-independent"
+# C2 changed AU EVIDENCE VERSION with UNCHANGED moment ids -> different op-id (safeguard 2)
+assert _covid()!=_covid(moment_evidence=[("m1","v2"),("m2","v1")]), "changed evidence version -> new job"
+# C3 changed PENDING count -> different op-id
+assert _covid()!=_covid(pending_count=1), "changed pending count -> new job"
+# C4 changed guide/intent/prompt version -> different op-id
+assert _covid()!=_covid(guide_fingerprint="g2")
+assert _covid()!=_covid(intent_fingerprint="i2")
+assert _covid()!=_covid(mapper_prompt_version="story_coverage/mapper-v2")
+
+# C5 idempotent coverage create + recovery
+js2=JobStore(cfg=JobStoreConfig(table="t",queue_url="q",bucket="b"),ddb=FakeDDB(),sqs=FakeSQS(),s3=FakeS3())
+opid=_covid(); body='{"story_id":"S1","moments":[]}'; cfp=coverage_payload_fingerprint(body,opid)
+cj1,cc1=js2.create_or_get_coverage(operation_id=opid,owner="u",body_json=body,payload_fingerprint=cfp)
+cj2,cc2=js2.create_or_get_coverage(operation_id=opid,owner="u",body_json=body,payload_fingerprint=cfp)
+assert cj1==cj2 and cc1 and not cc2, "same snapshot recovers same coverage job"
+# C6 DISPATCH ISOLATION: a coverage job reads back operation_type=coverage_v2 (never edit_plan)
+row=js2.get(cj1); assert row["operation_type"]==OP_COVERAGE_V2
+assert row["request_ref"]["inline"] and row["request_ref"]["body_json"]==body, "small body inlined"
+# C7 same op-id DIFFERENT payload -> PayloadConflict (safeguard 2 preserved)
+try:
+    js2.create_or_get_coverage(operation_id=opid,owner="u",body_json='{"other":1}',
+                               payload_fingerprint=coverage_payload_fingerprint('{"other":1}',opid))
+    assert False,"expected coverage payload conflict"
+except PayloadConflict: pass
+# C8 coverage completes under lease, stored under `result` (NEVER `plan`) -> no cross-read as EditPlan
+ctok=js2.claim_lease(cj1); assert ctok
+assert js2.complete_coverage(cj1,{"dimension_coverage":[{"id":"d1"}]},{"mapper_latency_ms":5000},ctok)
+done=js2.get(cj1)
+assert done["status"]=="completed" and "result" in done and done.get("plan") is None, "coverage result not a plan"
+assert done["result"]["dimension_coverage"][0]["id"]=="d1"
+# C9 EDIT-PLAN still stamps operation_type=edit_plan (isolation the other direction)
+ep_row=js.get(j1); assert ep_row["operation_type"]==OP_EDIT_PLAN
+# C10 UNKNOWN operation set is closed; worker dispatch rejects anything outside KNOWN_OPERATIONS
+assert KNOWN_OPERATIONS=={OP_EDIT_PLAN,OP_COVERAGE_V2}
+assert "coverage_v3" not in KNOWN_OPERATIONS
+
 print("ALL AMENDED JOBSTORE TESTS PASSED")
