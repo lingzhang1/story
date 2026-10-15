@@ -277,6 +277,7 @@ struct StoryHomeView: View {
         let fresh = await engine.recomputeIfNeeded(for: story, guide: g, guideFingerprint: guideFingerprint)
         if let fresh { coverage = fresh }                         // keep previous on failure
         let repCount = (coverage?.dimensionCoverage ?? []).reduce(0) { $0 + $1.representedPossibilityIds.count }
+        let states = (coverage?.dimensionCoverage ?? []).map { "\($0.state)" }.joined(separator: ",")
         // Sample the content richness of the first understanding actually sent to coverage: if observed.summary
         // is empty, the mapper sees blanks and maps nothing (represented=0 despite AU present).
         var firstSummaryLen = -1
@@ -289,7 +290,7 @@ struct StoryHomeView: View {
         }
         MediaEngineV1.beacon("coverage: moments=\(story.moments.count) completedAU=\(inputs.completedMUValues.count) "
             + "pending=\(inputs.pendingCount) stale=\(wasStale) dims=\((coverage?.dimensionCoverage ?? []).count) "
-            + "represented=\(repCount) firstSummaryLen=\(firstSummaryLen)")
+            + "represented=\(repCount) firstSummaryLen=\(firstSummaryLen) states=[\(states)]")
     }
 
     /// After returning from capture, the new Moment's Asset Understanding runs ASYNCHRONOUSLY and is
