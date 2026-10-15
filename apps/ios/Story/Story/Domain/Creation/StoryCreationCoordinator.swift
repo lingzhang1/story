@@ -170,6 +170,23 @@ final class StoryCreationCoordinator {
     /// Diversity diagnostics from the most recent Explore run (nil otherwise) — read for device verification.
     private(set) var lastDiversity: RevisionContextBuilder.Diversity?
 
+    /// Compose the effective revision_context sent to the planner: the per-run base context (Explore/Revise,
+    /// or nil for an original create) with the Story's PERSISTED explicit Moment-reference directives folded
+    /// into its `directives` key. The directives are resolved stable UUIDs captured in Creative Direction, so
+    /// they apply to BOTH an original creation and a version re-create. Returns nil only when there is neither
+    /// a base context nor any directives (behavior unchanged — the request is byte-identical to today).
+    static func composeRevisionContext(base: JSONValue?, story: StoryModel) -> JSONValue? {
+        let directives = ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)?.jsonValue()
+        guard directives != nil || base != nil else { return nil }
+        // Start from the base object (or an empty revise-less object). An original create with directives only
+        // uses mode "revise" so the planner reads the hard requirements as REQUIREMENTS, not an explore nudge.
+        var obj: [String: JSONValue]
+        if case .object(let o)? = base { obj = o } else { obj = [:] }
+        if obj["mode"] == nil { obj["mode"] = .string(directives != nil ? "revise" : "explore") }
+        if let directives { obj["directives"] = directives }
+        return .object(obj)
+    }
+
     init(
         planner: EditPlanning,
         renderer: StoryRendering = MediaEngineRenderer(),
@@ -301,7 +318,7 @@ final class StoryCreationCoordinator {
                 musicPlan: planForBuilder,
                 musicAssetId: assetIdForBuilder,
                 musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON,
-                revisionContext: pendingRevisionContext)
+                revisionContext: Self.composeRevisionContext(base: pendingRevisionContext, story: story))
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {

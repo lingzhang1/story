@@ -83,6 +83,38 @@ struct ResolvedDirectives: Equatable {
         if let e = ending { d["ending"] = e.uuidString }
         return d
     }
+
+    /// Encode as a JSONValue `directives` object (the type the planner request carries). Nil when empty, so an
+    /// absent directive set leaves the request byte-identical to today.
+    func jsonValue() -> JSONValue? {
+        if isEmpty { return nil }
+        var o: [String: JSONValue] = [:]
+        if !mustInclude.isEmpty { o["must_include"] = .array(mustInclude.map { .string($0.uuidString) }) }
+        if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString) }) }
+        if let op = opening { o["opening"] = .string(op.uuidString) }
+        if let en = ending { o["ending"] = .string(en.uuidString) }
+        return .object(o)
+    }
+
+    /// Decode persisted directives from the stored wire JSON (StoryModel.creativeDirectivesJSON).
+    static func fromWireJSON(_ json: String?) -> ResolvedDirectives? {
+        guard let json, let data = json.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        func ids(_ v: Any?) -> [UUID] { ((v as? [String]) ?? []).compactMap { UUID(uuidString: $0) } }
+        var d = ResolvedDirectives()
+        d.mustInclude = ids(obj["must_include"])
+        d.exclude = ids(obj["exclude"])
+        d.opening = (obj["opening"] as? String).flatMap { UUID(uuidString: $0) }
+        d.ending = (obj["ending"] as? String).flatMap { UUID(uuidString: $0) }
+        return d.isEmpty ? nil : d
+    }
+
+    /// Serialize to the persisted wire JSON string for StoryModel.creativeDirectivesJSON.
+    func toWireJSON() -> String? {
+        guard !isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: wireDictionary()) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 }
 
 /// A reference that could NOT be resolved — the user must clarify (owner: never silently substitute/drop).

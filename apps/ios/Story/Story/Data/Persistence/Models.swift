@@ -106,6 +106,13 @@ final class StoryModel {
     // Never overwritten during retries, recreation, or version generation (only acceptCustomize sets it).
     var editingApproachExplicit: String?
 
+    // Explicit Moment References (MVP): resolved HARD directives captured in Creative Direction, as the encoded
+    // backend contract {must_include/exclude/opening/ending} of STABLE Moment UUIDs — NEVER display numbers.
+    // Additive migration (optional + defaulted nil); nil = no explicit references => behavior unchanged. Persists
+    // the user's resolved instruction across the hop from setup to generation and across version re-creation.
+    // Set only when the user adds references in Creative Direction; never overwritten by inference/retry.
+    var creativeDirectivesJSON: String?
+
     // Async Edit Planning (Phase 2): the in-flight planning job for THIS creation attempt. operation_id is the
     // idempotency key — persisted BEFORE submitting so a crash/restart/retry reuses the SAME job (no duplicate
     // inference). job_id is the server's handle for polling + restart recovery. A deliberate "Create Another
