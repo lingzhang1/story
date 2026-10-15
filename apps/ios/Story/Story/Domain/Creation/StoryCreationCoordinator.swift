@@ -443,7 +443,8 @@ final class StoryCreationCoordinator {
                     }
                 }
                 guard let jid = submitted else {
-                    return finishFailed(.planTransport(String(describing: lastErr ?? "submit failed")))
+                    let reason = lastErr.map { String(describing: $0) } ?? "submit failed"
+                    return finishFailed(.planTransport(reason))
                 }
                 jobId = jid
                 story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
