@@ -1171,3 +1171,40 @@ def test_engine_deterministic_fast_path_zero_model_calls():
     assert eng.last_diagnostics["revision_path"] == "deterministic"
     assert eng.last_diagnostics["model_calls"] == 0
     assert str(plan.segments[0].asset_id) == b   # opening honored
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — preflight (plan-independent) directive validation.
+# ---------------------------------------------------------------------------
+def test_preflight_passes_clean_directives():
+    from edit_planner import preflight_directives
+    a, b = str(uuid4()), str(uuid4())
+    assert preflight_directives({"opening": a, "order_adjacent": [[b, a]]}, {a, b}) == []
+
+
+def test_preflight_flags_missing_reference():
+    from edit_planner import preflight_directives
+    a = str(uuid4()); ghost = str(uuid4())
+    errs = preflight_directives({"opening": ghost}, {a})
+    assert any(ghost in e and "not in this Story" in e for e in errs)
+
+
+def test_preflight_flags_include_exclude_conflict():
+    from edit_planner import preflight_directives
+    a = str(uuid4())
+    errs = preflight_directives({"must_include": [a], "exclude": [a]}, {a})
+    assert any("both required and excluded" in e for e in errs)
+
+
+def test_preflight_flags_contradictory_and_impossible_adjacency():
+    from edit_planner import preflight_directives
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    e1 = preflight_directives({"order_after": [[a, b], [b, a]]}, {a, b})
+    assert any("Contradictory ordering" in e for e in e1)
+    e2 = preflight_directives({"order_adjacent": [[a, b], [a, c]]}, {a, b, c})
+    assert any("immediately follow more than one" in e for e in e2)
+
+
+def test_preflight_empty_is_noop():
+    from edit_planner import preflight_directives
+    assert preflight_directives({}, set()) == []

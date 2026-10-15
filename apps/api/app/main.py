@@ -70,6 +70,7 @@ from edit_planner import (
     EditPlanInputs,
     EditPlanInfeasibleError,
     MalformedPlanError,
+    preflight_directives,
 )
 import edit_planner as _edit_planner_mod
 import edit_plan_jobs as _jobs
@@ -444,8 +445,13 @@ def create_app() -> FastAPI:
                  extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
                         "success": True, "has_directives": bool(result.directives),
                         "unresolved_count": len(result.unresolved)})
+        # Phase 4 preflight: refuse to let the client spend an expensive revision job on a known-unsatisfiable
+        # or malformed directive set. eligible_ids = the Moment ids the client sent in the snapshot.
+        eligible = {str(m["id"]) for m in body.moments if "id" in m}
+        blocking = preflight_directives(result.directives, eligible)
         return {"directives": result.directives, "soft_direction": result.soft_direction,
-                "unresolved": result.unresolved}
+                "unresolved": result.unresolved, "blocking": blocking,
+                "can_submit": not blocking and not result.unresolved}
 
     @app.post("/v1/scene-understanding", response_model=SceneUnderstandingContract, status_code=200)
     async def scene_understanding(

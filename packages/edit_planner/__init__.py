@@ -581,6 +581,74 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     return errs
 
 
+def preflight_directives(directives: dict, eligible_ids: set[str]) -> list[str]:
+    """Plan-INDEPENDENT validation of resolved directives BEFORE an expensive revision job (Phase 4). Catches
+    what we can know without a plan: references to Moments not in the eligible source set, and internally
+    contradictory constraints (include<->exclude, excluded-but-ordered, contradictory ordering, impossible
+    adjacency, opening/ending vs ordering). Returns human-readable blocking reasons; empty => safe to submit.
+    This does NOT check plan satisfaction (that is validate_plan's job after planning) — it only refuses to
+    spend a job on a request that is already known-unsatisfiable or malformed."""
+    if not isinstance(directives, dict) or not any(directives.get(k) for k in _DIRECTIVE_KEYS):
+        return []
+    errs: list[str] = []
+
+    def _as_list(v):
+        return v if isinstance(v, list) else ([v] if v else [])
+
+    inc = _as_list(directives.get("must_include"))
+    exc = _as_list(directives.get("exclude"))
+    opening = directives.get("opening")
+    ending = directives.get("ending")
+    after_pairs = _pairs(directives.get("order_after"))
+    adj_pairs = _pairs(directives.get("order_adjacent"))
+
+    named = set(inc) | set(exc) | set(x for pair in (after_pairs + adj_pairs) for x in pair)
+    if opening:
+        named.add(opening)
+    if ending:
+        named.add(ending)
+    for mid in named:
+        if mid not in eligible_ids:
+            errs.append(f"Moment '{mid}' is not in this Story (resolve or remove the reference)")
+
+    inc_set, exc_set = set(inc), set(exc)
+    for mid in (inc_set & exc_set):
+        errs.append(f"Moment '{mid}' is both required and excluded")
+    ordered_ids = {x for pair in (after_pairs + adj_pairs) for x in pair}
+    if opening:
+        ordered_ids.add(opening)
+    if ending:
+        ordered_ids.add(ending)
+    for mid in (exc_set & ordered_ids):
+        errs.append(f"Moment '{mid}' is excluded but also used in an ordering/position instruction")
+    after_set = set(after_pairs) | set(adj_pairs)
+    for a, b in after_set:
+        if (b, a) in after_set:
+            errs.append(f"Contradictory ordering between Moment '{a}' and '{b}'")
+    adj_by_a: dict[str, set[str]] = {}
+    adj_by_b: dict[str, set[str]] = {}
+    for a, b in adj_pairs:
+        adj_by_a.setdefault(a, set()).add(b)
+        adj_by_b.setdefault(b, set()).add(a)
+    for a, bs in adj_by_a.items():
+        if len(bs) > 1:
+            errs.append(f"Moment '{a}' can't immediately follow more than one Moment")
+    for b, as_ in adj_by_b.items():
+        if len(as_) > 1:
+            errs.append(f"More than one Moment can't each immediately follow Moment '{b}'")
+    if opening and any(opening == a for a, _ in after_set):
+        errs.append(f"Moment '{opening}' is set as the opening but also ordered after another Moment")
+    if ending and any(ending == b for _, b in after_set):
+        errs.append(f"Moment '{ending}' is set as the ending but another Moment is ordered after it")
+    # de-dupe, stable order
+    seen: set[str] = set()
+    out: list[str] = []
+    for e in errs:
+        if e not in seen:
+            seen.add(e); out.append(e)
+    return out
+
+
 @runtime_checkable
 class EditPlannerEngine(Protocol):
     def generate(self, inputs: EditPlanInputs) -> EditPlanV2Contract: ...
@@ -1112,6 +1180,6 @@ __all__ = [
     "RENDERER_SPEED_MIN", "RENDERER_SPEED_MAX",
     "EditPlanInputs", "EditPlanInfeasibleError", "MalformedPlanError",
     "SegmentTimeline", "validate_plan", "normalize_plan", "timeline_total_seconds",
-    "diversity_diagnostics",
+    "preflight_directives", "diversity_diagnostics",
     "EditPlannerEngine", "RealEditPlannerEngine", "MockEditPlannerEngine",
 ]
