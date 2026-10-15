@@ -269,10 +269,16 @@ struct StoryHomeView: View {
         let guideFingerprint = coordinator.guideFingerprint(for: story.id)
 
         let inputs = engine.currentInputs(for: story)
-        guard !inputs.completedMUValues.isEmpty else { return }   // Guide supplies content; no Mapper/Judge
-        guard engine.isStale(for: story, guideFingerprint: guideFingerprint) else { return }
+        guard !inputs.completedMUValues.isEmpty else {
+            MediaEngineV1.beacon("coverage: moments=\(story.moments.count) completedAU=0 pending=\(inputs.pendingCount) -> SKIP recompute (no AU)")
+            return
+        }   // Guide supplies content; no Mapper/Judge
+        let wasStale = engine.isStale(for: story, guideFingerprint: guideFingerprint)
         let fresh = await engine.recomputeIfNeeded(for: story, guide: g, guideFingerprint: guideFingerprint)
         if let fresh { coverage = fresh }                         // keep previous on failure
+        let repCount = (coverage?.dimensionCoverage ?? []).reduce(0) { $0 + $1.representedPossibilityIds.count }
+        MediaEngineV1.beacon("coverage: moments=\(story.moments.count) completedAU=\(inputs.completedMUValues.count) "
+            + "pending=\(inputs.pendingCount) stale=\(wasStale) dims=\((coverage?.dimensionCoverage ?? []).count) represented=\(repCount)")
     }
 
     /// After returning from capture, the new Moment's Asset Understanding runs ASYNCHRONOUSLY and is
