@@ -138,3 +138,27 @@ def test_judge_and_compose_build_valid_v2():
     assert cov.sufficiency.status.value == "sufficient"          # independent of idea
     assert cov.story_idea is not None                            # sufficient + idea is VALID
     assert [str(x) for x in cov.source_understanding_ids] == [mid]
+
+
+def test_mapper_rejects_empty_dimension_coverage_for_populated_guide():
+    """A populated guide that yields ZERO dimension_coverage (truncation symptom) must raise
+    CoverageUnavailableError so the caller keeps the last valid cache and retries — never caches an empty
+    mapping that marks every Guide item 'Shoot'."""
+    from story_coverage_v2 import RealStoryCoverageMapper, CoverageV2Input, CoverageUnavailableError
+    from model_gateway import StructuredResult, Usage
+    import pytest
+    from uuid import uuid4
+
+    class _GW:
+        def generate_structured(self, req):
+            return StructuredResult(data={"dimension_coverage": [], "strengths": [], "redundancies": []},
+                                    usage=Usage(), stop_reason="max_tokens")
+
+    guide = {"story_id": str(uuid4()), "framing_summary": "f", "dimensions": [
+        {"id": "d1", "label": "Scale", "purpose": "p", "capture_possibilities": [{"id": "p1", "label": "x"}]}]}
+    inp = CoverageV2Input(story_id=uuid4(), story_guide=guide, creative_intent={}, scope={},
+                          moment_understandings=[{"moment_id": str(uuid4()),
+                                                  "observed": {"summary": "rich", "subjects": ["a"], "events": [],
+                                                               "useful_segments": []}}])
+    with pytest.raises(CoverageUnavailableError):
+        RealStoryCoverageMapper(_GW()).map(inp)

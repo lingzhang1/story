@@ -123,11 +123,19 @@ class RealStoryCoverageMapper:
                 + _json.dumps(payload))
         req = StructuredRequest(task="story_coverage.map", schema=self._schema(gids, pids),
                                 prompt_version=MAPPER_PROMPT_VERSION, system=self._system,
-                                user_content=user, max_repair_attempts=2, max_tokens=1800, temperature=0.0)
+                                user_content=user, max_repair_attempts=2, max_tokens=8192, temperature=0.0)
         try:
             res = self._gw.generate_structured(req)
         except (StructuredOutputError, ProviderError) as e:
             raise CoverageUnavailableError(f"mapper unavailable ({type(e).__name__}: {e})") from e
+        # A truncated structured output can validate as an EMPTY dimension_coverage (schema allows []), which
+        # silently drops ALL coverage. One entry per Guide dimension is REQUIRED by construction, so an empty
+        # result for a populated guide is a failure, not a valid mapping — surface it so the cache is kept and
+        # the next recompute retries, rather than caching an empty mapping that marks everything "Shoot".
+        if gids and not (res.data or {}).get("dimension_coverage"):
+            raise CoverageUnavailableError(
+                f"mapper returned empty dimension_coverage for {len(gids)} guide dimensions "
+                f"(likely truncated at stop_reason={getattr(res, 'stop_reason', '?')})")
         d = dict(res.data)
         # evidence_moment_ids remap to real UUIDs (Milestone-B id discipline)
         src = {str(m.get("moment_id") or m.get("id")) for m in inp.moment_understandings if (m.get("moment_id") or m.get("id"))}
