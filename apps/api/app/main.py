@@ -101,6 +101,7 @@ from app.deps import (
     get_creative_intent_engine,
     get_director_engine,  # noqa: F401
     get_edit_engine,
+    get_model_gateway,
     get_scene_understanding_engine,
     get_story_director_engine,
     get_story_engine,
@@ -226,6 +227,18 @@ class EditPlanRequest(BaseModel):
                     "soft_direction?}. Injected into the USER message only; frozen v5.2 system body + EditPlan/2 "
                     "output are UNCHANGED. Absent => behavior identical to before. Part of the request snapshot "
                     "and therefore of the canonical async fingerprint (body-hashed) — never a fingerprint bypass.")
+
+
+class InterpretRevisionRequest(BaseModel):
+    """POST /v1/interpret-revision body (Phase 2 hybrid interpretation). ONE bounded structured model call that
+    turns a free-form revision instruction into TYPED directives (keyed by stable Moment id) + soft prefs +
+    unresolved clauses. Text-only; NO media/frames; never full planning. The client sends the instruction and
+    the Story's NUMBERED Moments (number + short summary + stable id). The model refers to Moments by number;
+    the server maps numbers -> ids so a model can never fabricate an id (an out-of-range number is unresolved)."""
+
+    model_config = ConfigDict(extra="forbid")
+    instruction: str = Field(..., description="the user's free-form revision instruction")
+    moments: list[dict] = Field(..., description="numbered snapshot: [{number:int, id:str, summary?:str}]")
 
 
 class DurationRecommendationRequest(BaseModel):
@@ -401,6 +414,38 @@ def create_app() -> FastAPI:
                    "success": True},
         )
         return intent
+
+    @app.post("/v1/interpret-revision", status_code=200)
+    def interpret_revision_endpoint(
+        body: InterpretRevisionRequest,
+    ) -> dict:
+        """Phase 2 — hybrid NL revision interpretation. ONE bounded structured model call turning a free-form
+        instruction into typed directives (stable ids) + soft_direction + unresolved[]. The client calls this
+        only when its deterministic parse cannot fully cover the instruction. On model/provider failure returns
+        503 (the client falls back to its deterministic parse). Never full planning; no media."""
+        from edit_planner.revision_interpreter import interpret_revision as _interp, PROMPT_VERSION as _IV
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base_fields = {"operation": "interpret_revision", "correlation_id": correlation_id,
+                       "task": "revision.interpret", "prompt_version": _IV,
+                       "input_chars": len(body.instruction), "moment_count": len(body.moments)}
+        try:
+            result = _interp(body.instruction, body.moments, get_model_gateway())
+        except StructuredOutputError as e:
+            log.warning("interpret_revision_structured_output_failed",
+                        extra={**base_fields, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                                detail="interpret_revision_unavailable: model did not return a valid result; retry")
+        except ProviderError as e:
+            log.warning("interpret_revision_provider_failed",
+                        extra={**base_fields, "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503, detail="interpret_revision_unavailable: provider error; retry")
+        log.info("interpret_revision_ok",
+                 extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
+                        "success": True, "has_directives": bool(result.directives),
+                        "unresolved_count": len(result.unresolved)})
+        return {"directives": result.directives, "soft_direction": result.soft_direction,
+                "unresolved": result.unresolved}
 
     @app.post("/v1/scene-understanding", response_model=SceneUnderstandingContract, status_code=200)
     async def scene_understanding(

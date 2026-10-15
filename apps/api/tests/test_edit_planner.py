@@ -1096,3 +1096,35 @@ def _with_rc(inp, directives):
     """Clone an EditPlanInputs adding a revise revision_context with the given directives."""
     import dataclasses
     return dataclasses.replace(inp, revision_context={"mode": "revise", "directives": directives})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — hybrid revision interpreter (unit, fake gateway).
+# ---------------------------------------------------------------------------
+def test_interpret_revision_maps_numbers_to_ids_and_flags_unresolved():
+    from edit_planner.revision_interpreter import interpret_revision
+
+    class _GW:
+        def __init__(self, d): self._d = d
+        def generate_structured(self, req):
+            from model_gateway import StructuredResult, Usage
+            return StructuredResult(data=self._d, usage=Usage())
+
+    numbered = [{"number": 1, "id": "id-a", "summary": "summit"},
+                {"number": 2, "id": "id-b", "summary": "river"}]
+    gw = _GW({"must_include": [], "exclude": [], "opening": 1, "ending": None,
+              "order_after": [], "order_adjacent": [[2, 1]],
+              "soft_direction": "faster cuts", "unsupported": ["make it dreamier"]})
+    r = interpret_revision("use moment 1 to start and moment 2 follow, faster cuts, dreamier", numbered, gw)
+    assert r.directives["opening"] == "id-a"
+    assert r.directives["order_adjacent"] == [["id-b", "id-a"]]
+    assert r.soft_direction == "faster cuts"
+    assert "make it dreamier" in r.unresolved
+    assert r.needs_clarification
+
+    # out-of-range number -> unresolved, never a fabricated id
+    gw2 = _GW({"must_include": [9], "exclude": [], "opening": None, "ending": None,
+               "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r2 = interpret_revision("include moment 9", numbered, gw2)
+    assert r2.directives == {}
+    assert any("9" in u for u in r2.unresolved)
