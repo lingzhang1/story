@@ -74,11 +74,17 @@ struct CreativeDirectionView: View {
             }
         }
         .navigationDestination(isPresented: $navigate) {
-            // Reached Story Home THROUGH the wizard. Back pops Story Home (navigate=false) back to the
-            // wizard's finished "You're all set" step, whose own ← Back exits the wizard cleanly. Using the
-            // wizard's dismiss() here was AMBIGUOUS while this bool-driven destination was on screen (it
-            // routed to the wrong presentation and the Back appeared dead).
-            if let s = resolvedStory { StoryHomeView(story: s, onBack: { navigate = false }) }
+            // Reached Story Home THROUGH the wizard (Home→[Library]→wizard→StoryHome). Back must leave the
+            // WHOLE create flow, not walk back through describe→feel→blueprint. Pop StoryHome first
+            // (navigate=false), then dismiss the wizard on the next runloop so the user lands on whatever
+            // presented it (Home, or the Library) in effectively one gesture. Sequencing avoids the ambiguous
+            // dismiss() that previously left Back dead while this bool-destination was on screen.
+            if let s = resolvedStory {
+                StoryHomeView(story: s, onBack: {
+                    navigate = false
+                    DispatchQueue.main.async { dismiss() }
+                })
+            }
         }
         .alert("Couldn't create your Story", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
