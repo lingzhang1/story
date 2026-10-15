@@ -427,7 +427,20 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
 
 
 # Canonical hard-directive keys. Each value is a RESOLVED stable Moment id (asset_id), never a display number.
-_DIRECTIVE_KEYS = ("must_include", "exclude", "opening", "ending")
+# Ordering keys carry [after, before] PAIRS of resolved ids: order_after = "A appears after B"; order_adjacent
+# = "A appears IMMEDIATELY after B". Semantics for a Moment used in multiple segments: the FIRST occurrence of
+# each id is the one constrained (documented, deterministic).
+_DIRECTIVE_KEYS = ("must_include", "exclude", "opening", "ending", "order_after", "order_adjacent")
+
+
+def _pairs(raw) -> list[tuple[str, str]]:
+    """Read a list of [a, b] pairs defensively; ignore malformed entries (never raise)."""
+    out: list[tuple[str, str]] = []
+    if isinstance(raw, list):
+        for p in raw:
+            if isinstance(p, (list, tuple)) and len(p) == 2 and all(isinstance(x, str) for x in p):
+                out.append((p[0], p[1]))
+    return out
 
 
 def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> list[str]:
@@ -435,7 +448,10 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     revision_context['directives']. Returns precise error strings; NEVER silently ignores or substitutes.
 
     Shape (all ids are RESOLVED stable Moment ids — the same values that appear as segment asset_id):
-      {"must_include": [id,...], "exclude": [id,...], "opening": id, "ending": id}
+      {"must_include": [id,...], "exclude": [id,...], "opening": id, "ending": id,
+       "order_after": [[A,B],...], "order_adjacent": [[A,B],...]}
+    order_after[A,B]    => A's first segment comes AFTER B's first segment.
+    order_adjacent[A,B] => A's first segment comes IMMEDIATELY after B's first segment (B then A, no gap).
 
     A directive naming a Moment that is NOT in the eligible source set (inputs.moments) is itself an error —
     the caller must resolve/clarify references BEFORE submission (a deleted/unavailable Moment is caught here,
@@ -451,6 +467,12 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
 
     def _known(mid: str) -> bool:
         return mid in moments
+
+    def _first_index(mid: str) -> int | None:
+        for i, a in enumerate(used):
+            if a == mid:
+                return i
+        return None
 
     # must_include: every named Moment must appear in at least one segment, and must be an eligible Moment.
     inc = directives.get("must_include") or []
@@ -487,11 +509,75 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
             got = used[-1] if used else "(none)"
             errs.append(f"directive ending: last segment must be Moment '{ending}' but is '{got}'")
 
-    # A Moment cannot be both required and excluded — a conflicting instruction, surfaced not ignored.
-    conflict = (set(inc if isinstance(inc, list) else [inc]) &
-                set(exc if isinstance(exc, list) else [exc]))
-    for mid in conflict:
+    after_pairs = _pairs(directives.get("order_after"))
+    adj_pairs = _pairs(directives.get("order_adjacent"))
+
+    # order_after[A,B]: A's first segment index must be greater than B's first segment index.
+    for a, b in after_pairs:
+        if not _known(a) or not _known(b):
+            miss = a if not _known(a) else b
+            errs.append(f"directive order_after references Moment '{miss}' not in the eligible source set "
+                        "(resolve/clarify the reference before submission)")
+            continue
+        ia, ib = _first_index(a), _first_index(b)
+        if ia is None or ib is None:
+            missing = a if ia is None else b
+            errs.append(f"directive order_after: Moment '{missing}' is required for ordering but appears in no segment")
+        elif not (ia > ib):
+            errs.append(f"directive order_after: Moment '{a}' must come after '{b}' but is at position {ia} vs {ib}")
+
+    # order_adjacent[A,B]: A's first segment must be exactly one position after B's first segment.
+    for a, b in adj_pairs:
+        if not _known(a) or not _known(b):
+            miss = a if not _known(a) else b
+            errs.append(f"directive order_adjacent references Moment '{miss}' not in the eligible source set "
+                        "(resolve/clarify the reference before submission)")
+            continue
+        ia, ib = _first_index(a), _first_index(b)
+        if ia is None or ib is None:
+            missing = a if ia is None else b
+            errs.append(f"directive order_adjacent: Moment '{missing}' is required for adjacency but appears in no segment")
+        elif ia != ib + 1:
+            errs.append(f"directive order_adjacent: Moment '{a}' must immediately follow '{b}' "
+                        f"(expected position {ib + 1}) but is at position {ia}")
+
+    # ---- conflict detection: surface contradictory constraints, never silently ignore ----
+    # A Moment cannot be both required and excluded.
+    inc_set = set(inc if isinstance(inc, list) else [inc])
+    exc_set = set(exc if isinstance(exc, list) else [exc])
+    for mid in (inc_set & exc_set):
         errs.append(f"directive conflict: Moment '{mid}' is in both must_include and exclude")
+    # An excluded Moment cannot be named in an ordering/opening/ending constraint.
+    ordered_ids = {x for pair in (after_pairs + adj_pairs) for x in pair}
+    if opening:
+        ordered_ids.add(opening)
+    if ending:
+        ordered_ids.add(ending)
+    for mid in (exc_set & ordered_ids):
+        errs.append(f"directive conflict: Moment '{mid}' is excluded but also named in an ordering/position directive")
+    # Contradictory after-ordering: A after B AND B after A.
+    after_set = set(after_pairs) | set(adj_pairs)
+    for a, b in after_set:
+        if (b, a) in after_set:
+            errs.append(f"directive conflict: contradictory ordering between '{a}' and '{b}'")
+    # Impossible adjacency: two different predecessors required immediately before the same Moment,
+    # or one Moment required immediately before two different successors.
+    adj_by_a: dict[str, set[str]] = {}
+    adj_by_b: dict[str, set[str]] = {}
+    for a, b in adj_pairs:
+        adj_by_a.setdefault(a, set()).add(b)
+        adj_by_b.setdefault(b, set()).add(a)
+    for a, bs in adj_by_a.items():
+        if len(bs) > 1:
+            errs.append(f"directive conflict: Moment '{a}' is required immediately after multiple Moments {sorted(bs)}")
+    for b, as_ in adj_by_b.items():
+        if len(as_) > 1:
+            errs.append(f"directive conflict: multiple Moments {sorted(as_)} are each required immediately after '{b}'")
+    # opening cannot also be required to come after something; ending cannot be required before something.
+    if opening and any(opening == a for a, _ in after_set):
+        errs.append(f"directive conflict: Moment '{opening}' is the opening but is also ordered after another Moment")
+    if ending and any(ending == b for _, b in after_set):
+        errs.append(f"directive conflict: Moment '{ending}' is the ending but another Moment is ordered after it")
     return errs
 
 
@@ -565,6 +651,14 @@ def _directive_lines(directives: dict | None) -> list[str]:
         out.append(f"HARD REQUIREMENT — the FIRST segment (order 0) MUST be Moment id {directives['opening']}.")
     if directives.get("ending"):
         out.append(f"HARD REQUIREMENT — the LAST segment MUST be Moment id {directives['ending']}.")
+    for pair in (directives.get("order_after") or []):
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            out.append(f"HARD REQUIREMENT — a segment from Moment id {pair[0]} MUST appear somewhere AFTER "
+                       f"a segment from Moment id {pair[1]}.")
+    for pair in (directives.get("order_adjacent") or []):
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            out.append(f"HARD REQUIREMENT — a segment from Moment id {pair[0]} MUST come IMMEDIATELY AFTER "
+                       f"a segment from Moment id {pair[1]} (directly next, no segment between).")
     return out
 
 

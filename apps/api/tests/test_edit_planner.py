@@ -1009,3 +1009,90 @@ def test_directive_lines_rendered_for_model():
     assert f"MUST NOT use any of these Moment ids: {M2}" in block
     assert f"FIRST segment (order 0) MUST be Moment id {M1}" in block
     assert f"LAST segment MUST be Moment id {M2}" in block
+
+
+# ---------------------------------------------------------------------------
+# Ordering directives — order_after (A somewhere after B) + order_adjacent (A immediately after B).
+# ---------------------------------------------------------------------------
+def _plan3(a, b, c):
+    """3-segment plan with the given asset ids in order a,b,c (all consistent 1x)."""
+    segs = []
+    for i, aid in enumerate([a, b, c]):
+        segs.append({"order": i, "asset_id": aid, "source_start_seconds": 1.0, "source_end_seconds": 7.0,
+                     "output_duration_seconds": 6.0, "native_audio": "keep"})
+    return {"target_duration_seconds": 18.0, "feasible": True, "segments": segs}
+
+
+def _inputs3(a, b, c):
+    return _inputs(moments=[
+        {"id": a, "duration_seconds": 9.0, "useful_segments": [[1.0, 8.0]], "summary": "a"},
+        {"id": b, "duration_seconds": 9.0, "useful_segments": [[1.0, 8.0]], "summary": "b"},
+        {"id": c, "duration_seconds": 9.0, "useful_segments": [[1.0, 8.0]], "summary": "c"},
+    ])
+
+
+def test_order_after_satisfied_and_violated():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    base = _inputs3(a, b, c)
+    # plan order a,b,c : "c after a" holds; "a after c" fails
+    ok = validate_plan(_plan3(a, b, c), _with_rc(base, {"order_after": [[c, a]]}))
+    assert [e for e in ok if "order_after" in e] == []
+    bad = validate_plan(_plan3(a, b, c), _with_rc(base, {"order_after": [[a, c]]}))
+    assert any("must come after" in e for e in bad)
+
+
+def test_order_adjacent_satisfied_and_violated():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    base = _inputs3(a, b, c)
+    # a,b,c : b immediately after a holds; c immediately after a fails (c is 2 later)
+    ok = validate_plan(_plan3(a, b, c), _with_rc(base, {"order_adjacent": [[b, a]]}))
+    assert [e for e in ok if "order_adjacent" in e] == []
+    bad = validate_plan(_plan3(a, b, c), _with_rc(base, {"order_adjacent": [[c, a]]}))
+    assert any("immediately follow" in e for e in bad)
+
+
+def test_order_unknown_moment_is_error():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    ghost = str(uuid4())
+    errs = validate_plan(_plan3(a, b, c), _with_rc(_inputs3(a, b, c), {"order_after": [[a, ghost]]}))
+    assert any(ghost in e and "not in the eligible source set" in e for e in errs)
+
+
+def test_order_contradictory_conflict():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    errs = validate_plan(_plan3(a, b, c), _with_rc(_inputs3(a, b, c),
+                         {"order_after": [[a, b], [b, a]]}))
+    assert any("contradictory ordering" in e for e in errs)
+
+
+def test_order_excluded_moment_conflict():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    errs = validate_plan(_plan3(a, b, c), _with_rc(_inputs3(a, b, c),
+                         {"exclude": [a], "order_after": [[a, b]]}))
+    assert any("excluded but also named in an ordering" in e for e in errs)
+
+
+def test_order_impossible_adjacency_conflict():
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    # a immediately after b AND a immediately after c — impossible
+    errs = validate_plan(_plan3(a, b, c), _with_rc(_inputs3(a, b, c),
+                         {"order_adjacent": [[a, b], [a, c]]}))
+    assert any("immediately after multiple Moments" in e for e in errs)
+
+
+def test_opening_plus_adjacent_use_moment5_to_start_moment2_follow():
+    # The owner's exact instruction, resolved: opening=A ("moment 5 to start"),
+    # order_adjacent [B,A] ("moment 2 follow" = B immediately after A).
+    a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
+    base = _inputs3(a, b, c)
+    rc = {"opening": a, "order_adjacent": [[b, a]]}
+    # plan a,b,c satisfies both; plan b,a,c violates opening
+    assert validate_plan(_plan3(a, b, c), _with_rc(base, rc)) == []
+    bad = validate_plan(_plan3(b, a, c), _with_rc(base, rc))
+    assert any("opening" in e for e in bad)
+
+
+def _with_rc(inp, directives):
+    """Clone an EditPlanInputs adding a revise revision_context with the given directives."""
+    import dataclasses
+    return dataclasses.replace(inp, revision_context={"mode": "revise", "directives": directives})
