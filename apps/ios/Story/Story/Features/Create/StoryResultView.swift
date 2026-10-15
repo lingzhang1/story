@@ -379,9 +379,13 @@ struct StoryResultView: View {
         reviseCoordinator = coord
         reviseWorking = true
         reviseError = nil
-        coord.reviseVersion(for: story, base: output, directives: directives, softDirection: instruction)
         Task { @MainActor in
-            // Observe the coordinator to a terminal state (no new navigation surface; swap in place).
+            // Carry the base version's soundtrack into the revise so the revised video keeps its music
+            // (reviseVersion with no music would render silent). My Music resolves locally; a provider track
+            // is re-resolved live (download + analysis) exactly as Change Music does. Nil => honestly no music.
+            let music = await resolveBaseMusic(for: output)
+            coord.reviseVersion(for: story, base: output, directives: directives,
+                                softDirection: instruction, music: music)
             while coord.isCreating { try? await Task.sleep(nanoseconds: 200_000_000) }
             reviseWorking = false
             switch coord.state {
@@ -394,6 +398,26 @@ struct StoryResultView: View {
                 break   // cancelled / other — leave the current version displayed
             }
         }
+    }
+
+    /// Re-resolve the base version's soundtrack so a Revise preserves its music. Reads the base output's
+    /// persisted musicAssetRef ("mymusic:<id>" | "provider:<trackId>" | "none"); My Music resolves locally,
+    /// a provider track re-resolves live via MusicSelectionResolver (same path as Change Music). nil => no music.
+    @MainActor
+    private func resolveBaseMusic(for base: GeneratedOutputModel) async
+        -> StoryCreationCoordinator.MusicSelection? {
+        guard let ref = base.musicAssetRef, ref != "none" else { return nil }
+        if ref.hasPrefix("mymusic:") {
+            let assetId = String(ref.dropFirst("mymusic:".count))
+            return CreateStoryPreviewView.myMusicSelection(assetId: assetId, story: story, context: context)
+        }
+        if ref.hasPrefix("provider:") {
+            let trackId = String(ref.dropFirst("provider:".count))
+            let resolver = MusicSelectionResolver(context: context)
+            guard let rec = await resolver.recommend(for: story, guideFramingSummary: nil) else { return nil }
+            return await resolver.resolveSelection(recommendation: rec, trackId: trackId)
+        }
+        return nil
     }
 }
 
