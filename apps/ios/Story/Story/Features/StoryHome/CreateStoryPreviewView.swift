@@ -318,7 +318,7 @@ struct CreateStoryPreviewView: View {
         .navigationDestination(isPresented: $showCreating) {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
-                              onRequestRecreate: { handleRecreate(from: recreateSource) })
+                              onRequestRecreate: { src in handleRecreate(from: src) })
         }
         .navigationDestination(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
