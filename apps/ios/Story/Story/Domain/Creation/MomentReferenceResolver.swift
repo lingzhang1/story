@@ -137,15 +137,25 @@ enum MomentReferenceResolver {
     /// matching a supported pattern is left for the planner as free text (soft direction) — NOT invented.
     static func parseTyped(_ text: String) -> [ParsedReference] {
         guard !text.isEmpty else { return [] }
-        // Verb cues -> slot. Matched case-insensitively. "start with" / "open with" => opening;
-        // "end with" / "finish with" => ending; "exclude" / "do not use" / "don't use" / "remove" => exclude;
-        // "include" / "use" / "add" / "with" (bare) => include.
+        // Verb cues -> slot, HIGHEST priority first (an earlier match claims its char range so a lower
+        // pattern cannot re-match the same words — this is what stops "start WITH moment 5" also matching the
+        // bare include "with moment 5"). Covers natural phrasings: "start with M5" / "use M5 to start" /
+        // "M5 to start" / "open on M5" for opening; "end with M8" / "M8 at the end" / "finish on M8" for
+        // ending; include/exclude verbs. Anything unmatched stays free-text soft direction (never invented).
         let patterns: [(DirectiveSlot, String)] = [
-            (.opening, #"(?:start|open|begin)(?:ing)?\s+with\s+moment\s+#?(\d+)"#),
-            (.ending,  #"(?:end|finish|close)(?:ing)?\s+with\s+moment\s+#?(\d+)"#),
+            // OPENING — verb-before-number ("start with / open on / begin with moment 5")
+            (.opening, #"(?:start|open|begin|lead)(?:ing)?\s+(?:with|on|off\s+with)?\s*moment\s+#?(\d+)"#),
+            // OPENING — number-before-cue ("use moment 5 to start", "moment 5 first", "moment 5 to open")
+            (.opening, #"moment\s+#?(\d+)\s+(?:to\s+)?(?:start|open|begin|first|lead|up\s+front|at\s+the\s+(?:start|beginning)|as\s+the\s+(?:opening|first))"#),
+            // ENDING — verb-before-number ("end with / finish on / close with moment 8")
+            (.ending,  #"(?:end|finish|close)(?:ing)?\s+(?:with|on)?\s*moment\s+#?(\d+)"#),
+            // ENDING — number-before-cue ("put moment 8 at the end", "moment 8 last", "moment 8 to end")
+            (.ending,  #"moment\s+#?(\d+)\s+(?:to\s+)?(?:at\s+the\s+end|last|to\s+end|to\s+finish|as\s+the\s+(?:ending|last|finale))"#),
             (.ending,  #"put\s+moment\s+#?(\d+)\s+(?:at\s+the\s+end|last)"#),
-            (.exclude, #"(?:exclude|do\s*n[o']?t\s+use|don[o']?t\s+use|remove|skip|without)\s+moment\s+#?(\d+)"#),
-            (.include, #"(?:include|use|add|keep|with)\s+moment\s+#?(\d+)"#),
+            // EXCLUDE
+            (.exclude, #"(?:exclude|do\s*n[o']?t\s+use|don[o']?t\s+use|remove|drop|skip|without|leave\s+out)\s+moment\s+#?(\d+)"#),
+            // INCLUDE (lowest priority; NOT a bare "with" — that over-matched "start with")
+            (.include, #"(?:include|use|add|keep|feature)\s+moment\s+#?(\d+)"#),
         ]
         let ns = text as NSString
         var claimed = IndexSet()  // character ranges already consumed by a higher-priority pattern
