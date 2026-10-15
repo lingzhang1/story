@@ -189,6 +189,18 @@ final class StoryCreationCoordinator {
         return .object(obj)
     }
 
+    /// Compact diagnostic tag for the submit beacon: what revision_context the device is actually sending.
+    /// e.g. "revise+dir+base", "explore", or "none". Proves end-to-end whether Revise directives arrive.
+    static func revisionModeTag(_ ctx: JSONValue?) -> String {
+        guard case .object(let o)? = ctx else { return "none" }
+        var mode = "?"
+        if case .string(let m)? = o["mode"] { mode = m }
+        var tag = mode
+        if o["directives"] != nil { tag += "+dir" }
+        if o["base_plan"] != nil { tag += "+base" }
+        return tag
+    }
+
     init(
         planner: EditPlanning,
         renderer: StoryRendering = MediaEngineRenderer(),
@@ -399,7 +411,9 @@ final class StoryCreationCoordinator {
                 story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
             }
             MediaEngineV1.beacon("editplan-job: submit req=\(requested.rawValue) sheets=\(sheets.count) "
-                + "critique=\(critique) job=\(jobId.prefix(8))")
+                + "critique=\(critique) job=\(jobId.prefix(8)) "
+                + "rev=\(Self.revisionModeTag(build.request.revisionContext)) "
+                + "music=\(pendingMusic?.trackId.prefix(10) ?? "none") op=\(pendingOperationType)")
 
             // Poll to terminal (bounded backoff; transport errors don't end the poll; cancel stops it).
             let final = try await jobClient.pollUntilTerminal(
