@@ -76,8 +76,8 @@ private struct PhotosPickerModifier: ViewModifier {
         content
             .photosPicker(isPresented: $isPresented, selection: $selection,
             // Per-session cap (you can reopen the picker to add more — each import APPENDS to the Story).
-            // Raised from 10 so a larger shoot can be imported in one pass.
-                          maxSelectionCount: 30, matching: .videos)
+            // Raised to 100 so a large shoot can be imported in one pass.
+                          maxSelectionCount: 100, matching: .videos)
             .onChange(of: selection) { _, items in
                 guard !items.isEmpty else { return }
                 Task { await importAll(items) }
