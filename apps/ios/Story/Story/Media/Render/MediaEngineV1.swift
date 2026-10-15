@@ -348,11 +348,26 @@ struct MediaEngineV1 {
         // whichever placed segments are live over it are drawn (one = solo, two = crossfade overlap). This
         // guarantees contiguous, non-overlapping coverage by construction.
         func liveSegments(in slice: CMTimeRange) -> [(segment: EditSegmentV2, track: Int, range: CMTimeRange)] {
-            placed.filter { p in
+            // Live if the segment's placed range contains the slice, with a small epsilon so sub-frame
+            // boundary rounding (600-timescale starts vs summed durations across many segments) does not
+            // falsely drop a segment and leave an uncovered slice (which makes AVAssetExportSession stop).
+            let eps = CMTime(value: 1, timescale: 600)   // ~1.7ms tolerance
+            return placed.filter { p in
                 let pEnd = CMTimeAdd(p.range.start, p.range.duration)
-                // live if the segment's range strictly contains the slice interior
-                return CMTimeCompare(p.range.start, slice.start) <= 0 && CMTimeCompare(pEnd, slice.end) >= 0
+                return CMTimeCompare(p.range.start, CMTimeAdd(slice.start, eps)) <= 0
+                    && CMTimeCompare(pEnd, CMTimeSubtract(slice.end, eps)) >= 0
             }
+        }
+
+        /// The placed segment that overlaps `slice` the MOST — the guaranteed non-empty fallback so a slice is
+        /// never left uncovered (any gap => AVAssetExportSession "Operation Stopped" and no output file).
+        func bestCovering(_ slice: CMTimeRange) -> (segment: EditSegmentV2, track: Int, range: CMTimeRange)? {
+            placed.map { p -> (p: (segment: EditSegmentV2, track: Int, range: CMTimeRange), ov: Double) in
+                let pEnd = CMTimeAdd(p.range.start, p.range.duration)
+                let lo = CMTimeMaximum(p.range.start, slice.start)
+                let hi = CMTimeMinimum(pEnd, slice.end)
+                return (p, max(0, hi.seconds - lo.seconds))
+            }.max { $0.ov < $1.ov }?.p
         }
 
         // boundary set: every segment start + end, clamped to [0, total], sorted & deduped
@@ -375,7 +390,19 @@ struct MediaEngineV1 {
             guard CMTimeCompare(sliceEnd, sliceStart) > 0 else { continue }   // skip zero-length slices
             let slice = CMTimeRange(start: sliceStart, end: sliceEnd)
             let live = liveSegments(in: slice)
-            guard !live.isEmpty else { continue }   // (should not happen: coverage is total)
+            // A slice MUST emit an instruction — an uncovered slice makes AVAssetExportSession stop with no
+            // output. If no segment strictly contains this (thin, boundary-rounding) slice, fall back to the
+            // single segment that overlaps it most, drawn solo. Coverage is thus total by construction.
+            if live.isEmpty {
+                guard let fb = bestCovering(slice) else { continue }   // truly nothing (should never happen)
+                let inst = AVMutableVideoCompositionInstruction()
+                inst.timeRange = slice
+                let li = AVMutableVideoCompositionLayerInstruction(assetTrack: vTracks[fb.track])
+                li.setTransform(try transform(for: fb.segment), at: slice.start)
+                inst.layerInstructions = [li]
+                instructions.append(inst)
+                continue
+            }
 
             let inst = AVMutableVideoCompositionInstruction()
             inst.timeRange = slice
