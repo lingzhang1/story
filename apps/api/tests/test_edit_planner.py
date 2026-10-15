@@ -783,3 +783,150 @@ def test_revision_context_in_request_fingerprint():
     # identical body => identical fingerprint (transport recovery resumes the same job)
     fp_a2 = payload_fingerprint(body_a, [], False, "storytelling", creative_brief=None, sheet_digests=[])
     assert fp_a == fp_a2
+
+
+# ---------------------------------------------------------------------------
+# P0 — EditPlan renderer capability: speed must be 0.5x–2.0x (MediaEngineV1 limit).
+# Reject (not clamp) unsupported speeds so bounded repair can pick an executable alternative.
+# ---------------------------------------------------------------------------
+def _speed_plan(speed):
+    """A single-segment plan whose output_duration is CONSISTENT with (span / speed), so the ONLY
+    thing a validator can object to is the speed value itself — isolating the renderer-range gate."""
+    span = 8.0  # M1 source [1,9]
+    out = round(span / speed, 3) if (isinstance(speed, (int, float)) and speed and speed > 0) else 8.0
+    return {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "speed": speed, "output_duration_seconds": out, "native_audio": "keep"},
+    ]}
+
+
+def _speed_errs(plan):
+    return [e for e in validate_plan(plan, _inputs()) if "speed" in e]
+
+
+def test_speed_0_5_accepted():
+    assert _speed_errs(_speed_plan(0.5)) == []
+
+
+def test_speed_1_0_accepted():
+    assert _speed_errs(_speed_plan(1.0)) == []
+
+
+def test_speed_2_0_accepted():
+    assert _speed_errs(_speed_plan(2.0)) == []
+
+
+def test_speed_0_49_rejected():
+    errs = _speed_errs(_speed_plan(0.49))
+    assert any("out of renderer-supported range" in e for e in errs)
+
+
+def test_speed_4_0_rejected():
+    # The exact hiking failure: 4.0x passes the schema (speed>0) but is unrenderable.
+    errs = _speed_errs(_speed_plan(4.0))
+    assert any("out of renderer-supported range" in e and "[0.5, 2.0]" in e for e in errs)
+
+
+def test_speed_non_finite_rejected():
+    for bad in (float("inf"), float("nan"), "fast"):
+        errs = _speed_errs(_speed_plan(bad))
+        assert any("finite number" in e for e in errs), f"did not reject speed={bad!r}"
+
+
+def test_absent_speed_defaults_to_1x_accepted():
+    # An omitted speed is the schema default (1.0) and must stay valid — no regression.
+    plan = _speed_plan(1.0)
+    plan["segments"][0].pop("speed")
+    assert _speed_errs(plan) == []
+
+
+def test_existing_valid_plans_unchanged():
+    # The canonical good plan (no explicit speed) still passes the FULL validator unchanged.
+    assert validate_plan(_good_plan(), _inputs()) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — bounded repair: an unsupported speed routes to ONE repair call carrying the exact
+# validator error; the repaired plan is re-validated and must be clean, or the Story fails honestly.
+# ---------------------------------------------------------------------------
+from model_gateway import StructuredResult, Usage  # noqa: E402
+
+
+class _SeqGateway:
+    """Returns a preset response per call, in order (last repeats). Records every request so a test
+    can assert the exact validator error was fed back into the repair prompt."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+        self.last_fallback = False
+
+    def generate_structured(self, req):
+        self.calls.append(req)
+        idx = min(len(self.calls) - 1, len(self._responses) - 1)
+        return StructuredResult(
+            data=json.loads(json.dumps(self._responses[idx])),
+            usage=Usage(input_tokens=100, output_tokens=40, total_tokens=140),
+            attempts=1, model="fake", provider="fake",
+        )
+
+
+def test_invalid_speed_triggers_bounded_repair():
+    # First call: 4.0x (unrenderable). Repair call: a duration-valid plan within 0.5x–2.0x.
+    bad, good = _speed_plan(4.0), _good_plan()
+    gw = _SeqGateway([bad, good])
+    eng = RealEditPlannerEngine(gw)
+    plan = eng.generate(_inputs())
+    assert eng.last_diagnostics["repaired"] is True
+    assert eng.last_diagnostics["executability_repairs_used"] == 1
+    # the EXACT validator error reached the repair prompt
+    assert len(gw.calls) == 2
+    assert "out of renderer-supported range" in gw.calls[1].user_content
+    assert all((s.speed or 1.0) <= 2.0 for s in plan.segments)
+
+
+def test_repaired_plan_passes_full_validation():
+    gw = _SeqGateway([_speed_plan(4.0), _good_plan()])
+    plan = RealEditPlannerEngine(gw).generate(_inputs())
+    # round-trip the emitted contract back through the validator — zero errors.
+    emitted = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": s.order, "asset_id": str(s.asset_id),
+         "source_start_seconds": s.source_start_seconds, "source_end_seconds": s.source_end_seconds,
+         "speed": s.speed, "output_duration_seconds": s.output_duration_seconds,
+         "native_audio": s.native_audio.value} for s in plan.segments]}
+    assert validate_plan(emitted, _inputs()) == []
+
+
+def test_repair_preserves_target_duration():
+    # The repaired alternative keeps the total within the accept band of the 18s target.
+    gw = _SeqGateway([_speed_plan(4.0), _good_plan()])
+    plan = RealEditPlannerEngine(gw).generate(_inputs())
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert 18.0 * 0.8 <= total <= 18.0 * 1.5
+
+
+def test_repair_still_invalid_fails_honestly():
+    # Repair ALSO returns an unsupported speed -> never shipped; honest StructuredOutputError.
+    gw = _SeqGateway([_speed_plan(4.0), _speed_plan(3.0)])
+    eng = RealEditPlannerEngine(gw)
+    with pytest.raises(StructuredOutputError):
+        eng.generate(_inputs())
+    assert eng.last_diagnostics["final"] == "invalid_after_repair"
+    # bounded: exactly one repair attempt, no unbounded loop
+    assert len(gw.calls) == 2
+
+
+def test_critique_revision_cannot_reintroduce_invalid_speed():
+    # Valid base plan, but the critique->revision pass emits a 4.0x speed. The deterministic validator
+    # rejects the revision and the ORIGINAL valid plan is retained (revision never silently adopted).
+    base = _good_plan()
+    revised_bad = _speed_plan(4.0)
+    gw = _SeqGateway([base, "critique text", revised_bad])
+    # critique call returns a {"critique": ...} dict; wrap the text as that shape
+    gw._responses[1] = {"critique": "lead with a stronger hook"}
+    eng = RealEditPlannerEngine(gw)
+    plan = eng.generate(_inputs(creative_brief="punchy, fast", critique_revision=True))
+    assert eng.last_diagnostics.get("critique_applied") is False
+    assert eng.last_diagnostics.get("critique_rejected_reason") == "revision_invalid"
+    # original valid plan survived — no 4.0x speed leaked through
+    assert all((s.speed or 1.0) <= 2.0 for s in plan.segments)

@@ -16,6 +16,7 @@ OPTIONALLY a selected MusicAsset + MusicAnalysis. Music is OPTIONAL — no-music
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,18 @@ DURATION_TOLERANCE = 0.20  # legacy symmetric tolerance — retained for the rep
 # only decide ACCEPT vs reject so the user gets a watchable video instead of "couldn't finish your story".
 DURATION_OVERSHOOT_TOLERANCE = 0.50   # accept up to +50% longer than the requested duration
 DURATION_UNDERSHOOT_TOLERANCE = 0.20  # reject if >20% SHORTER than requested (degenerate / empty-feeling)
+
+# RENDERER CAPABILITY — playback speed. MediaEngineV1 (the on-device renderer) only supports 0.5x–2.0x
+# playback (see apps/ios/.../MediaEngineV1.swift SCOPE + StoryCreationCoordinator renderability check), so a
+# segment speed outside this window is schema-valid but UNRENDERABLE and crashes the device with
+# "segment N speed S out of range [0.5, 2.0]". The planner's schema only requires speed>0, so without this
+# gate the model can emit e.g. a 4.0x time-lapse that passes every server check and then fails on-device.
+# This is a REJECT bound (routed to bounded repair), NOT an unconditional clamp: a mathematically valid speed
+# is not necessarily an editorially valid one, so we let the planner choose an executable alternative
+# (shorten the source range / adjust pacing) rather than silently rewriting its numbers. Keep in sync with
+# the iOS renderability check and the Phase-4 capability-audit doc.
+RENDERER_SPEED_MIN = 0.5
+RENDERER_SPEED_MAX = 2.0
 
 # v4 adds ONE "SIGNIFICANCE-WEIGHTED SCREEN TIME" paragraph to the frozen v3 body (which is v2's creative
 # body + the EXECUTABILITY INVARIANTS section). Owner-approved via the Editorial Timing Quality Gate: it
@@ -210,12 +223,26 @@ class SegmentTimeline:
         return err is not None and err <= ROUND_SNAP_ABS and err > 0
 
 
+def _coerce_speed(raw: Any) -> float:
+    """Resolve a segment's speed for validation. An ABSENT speed defaults to 1.0 (the schema's documented
+    default). A PRESENT speed is validated AS GIVEN — including out-of-range values like 4.0, which the
+    renderer-range gate must reject rather than silently normalize. Non-numeric junk (e.g. a string) becomes
+    NaN so the validator's finite-number gate rejects it cleanly instead of raising deep in arithmetic.
+    Note: a literal present 0 / 0.0 stays 0.0 and is caught by the non-positive gate."""
+    if raw is None:
+        return 1.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _segment_timeline(seg: dict) -> SegmentTimeline:
     tr = seg.get("transition") or None
     return SegmentTimeline(
         source_start=seg.get("source_start_seconds"),
         source_end=seg.get("source_end_seconds"),
-        speed=seg.get("speed") or 1.0,
+        speed=_coerce_speed(seg.get("speed")),
         declared_output=seg.get("output_duration_seconds") or 0.0,
         transition_type=(tr or {}).get("type"),
         transition_duration=(tr or {}).get("duration_seconds"),
@@ -351,8 +378,16 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
         if s.get("native_audio") not in NATIVE:
             errs.append(f"seg{i}: native_audio missing/invalid")
         sp = tl.speed
-        if sp <= 0:
+        if sp is None or not math.isfinite(sp):
+            errs.append(f"seg{i}: speed must be a finite number (got {sp!r})")
+        elif sp <= 0:
             errs.append(f"seg{i}: non-positive speed {sp}")
+        elif sp < RENDERER_SPEED_MIN or sp > RENDERER_SPEED_MAX:
+            # Schema-valid (speed>0) but UNRENDERABLE: MediaEngineV1 supports only 0.5x–2.0x. Reject so the
+            # bounded repair pass can pick an executable alternative (shorten source / adjust pacing) rather
+            # than shipping a plan that crashes the device renderer.
+            errs.append(f"seg{i}: speed {sp} out of renderer-supported range "
+                        f"[{RENDERER_SPEED_MIN}, {RENDERER_SPEED_MAX}]")
         elif tl.is_output_inconsistent():
             expected = tl.expected_output
             errs.append(f"seg{i}: output {od}s inconsistent with source span {tl.span:.1f}s @ speed {sp} "
@@ -587,6 +622,12 @@ def _build_repair(inputs: EditPlanInputs, bad_plan: dict, errs: list[str]) -> st
         "segment ORDER, speeds, native-audio and transition choices wherever possible; change the smallest set "
         "of numbers needed to make the plan executable.\n\n"
         "EXECUTABILITY RULES you must satisfy:\n"
+        f"- PLAYBACK SPEED must stay within {RENDERER_SPEED_MIN}x–{RENDERER_SPEED_MAX}x (the renderer supports "
+        "no faster or slower). If a segment currently uses an unsupported speed (e.g. a 4.0x time-lapse), do "
+        "NOT merely clamp the number — PREFER to achieve the pacing a different way: SHORTEN the segment's "
+        "source range (pick the most expressive stretch) and/or let the cut do the work, keeping speed within "
+        f"{RENDERER_SPEED_MIN}x–{RENDERER_SPEED_MAX}x. Only use speed as a last resort, and never outside that "
+        "window.\n"
         "- For every segment: output_duration_seconds MUST equal (source_end_seconds - source_start_seconds) / "
         "speed (speed defaults to 1.0). If you want a segment SHORTER, shorten its source range or raise its "
         "speed; if LONGER, extend the source range (staying within the Moment's real duration and useful "
@@ -856,6 +897,7 @@ __all__ = [
     "PROMPT_VERSION", "TASK", "MODEL_ID", "DURATION_TOLERANCE",
     "DURATION_OVERSHOOT_TOLERANCE", "DURATION_UNDERSHOOT_TOLERANCE", "SCHEMA",
     "SPEED_CONSISTENCY_ABS", "SPEED_CONSISTENCY_REL", "ROUND_SNAP_ABS",
+    "RENDERER_SPEED_MIN", "RENDERER_SPEED_MAX",
     "EditPlanInputs", "EditPlanInfeasibleError", "MalformedPlanError",
     "SegmentTimeline", "validate_plan", "normalize_plan", "timeline_total_seconds",
     "diversity_diagnostics",
