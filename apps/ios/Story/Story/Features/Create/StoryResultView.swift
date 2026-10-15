@@ -100,6 +100,10 @@ struct StoryResultView: View {
     @State private var showShare = false
     @State private var recreateCoordinator: StoryCreationCoordinator?
     @State private var showChangeMusic = false
+    @State private var showRevise = false
+    @State private var reviseCoordinator: StoryCreationCoordinator?
+    @State private var reviseWorking = false
+    @State private var reviseError: String?
 
     private var playback: ResultPlayback {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
@@ -150,6 +154,16 @@ struct StoryResultView: View {
                 player?.pause(); player = nil; isPlaying = false   // reload player for the new file
             }
         }
+        .sheet(isPresented: $showRevise) {
+            ReviseStorySheet(story: story, base: output) { directives, instruction in
+                startRevise(directives: directives, instruction: instruction)
+            }
+        }
+        .overlay { if reviseWorking { reviseWorkingOverlay } }
+        .alert("Couldn't revise", isPresented: Binding(get: { reviseError != nil },
+                                                       set: { if !$0 { reviseError = nil } })) {
+            Button("OK", role: .cancel) { reviseError = nil }
+        } message: { Text(reviseError ?? "") }
     }
 
     private var resolvedURL: URL? {
@@ -251,6 +265,18 @@ struct StoryResultView: View {
                 .buttonStyle(.plain)
                 .disabled(output.editPlanJSON == nil)
                 .accessibilityHint(output.editPlanJSON != nil ? "Replace the soundtrack; the edit stays the same" : "Not available for this video")
+
+                // "Revise" (Natural-Language Revision): apply a user-directed change (incl. explicit Moment
+                // references) to THIS version, preserving unaffected edits. Needs the base plan, so it is
+                // enabled only when this output carries a persisted executable plan.
+                Button { showRevise = true } label: {
+                    Text("✎ Revise")
+                        .font(StoryTheme.body(13))
+                        .foregroundStyle(output.editPlanJSON != nil ? StoryTheme.gold.opacity(0.85) : StoryTheme.cream.opacity(0.18))
+                }
+                .buttonStyle(.plain)
+                .disabled(output.editPlanJSON == nil)
+                .accessibilityHint(output.editPlanJSON != nil ? "Apply a change; the rest of the edit is kept" : "Not available for this video")
             }
             .padding(.top, 2)
 
@@ -318,8 +344,7 @@ struct StoryResultView: View {
     /// new successful GeneratedOutputModel once its render succeeds (Batch A invariant). Prefer the parent-driven
     /// path (reuses the shared Creating screen, so the view stack doesn't accumulate); fall back to a local
     /// coordinator + dismiss when presented standalone.
-    private func recreate() {
-        if let onRecreate {
+    private func recreate() {        if let onRecreate {
             onRecreate(output)
             return
         }
@@ -330,6 +355,45 @@ struct StoryResultView: View {
         recreateCoordinator?.createAnotherVersion(for: story, from: output)
         // Hand off to the Creating screen for live progress.
         dismiss()
+    }
+
+    // MARK: - Revise (Natural-Language Revision)
+
+    private var reviseWorkingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().tint(StoryTheme.gold)
+                Text("Revising your Story…").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.85))
+                Text("Applying your change; the rest of the edit is kept.")
+                    .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.45))
+            }
+        }
+    }
+
+    /// Run a Revise against THIS output in place (mirrors Change Music's in-view flow): a local coordinator
+    /// re-plans with the exact base plan + resolved directives, and on success the displayed output swaps to
+    /// the new version (the base and all prior versions are preserved in the Story's version list).
+    private func startRevise(directives: ResolvedDirectives, instruction: String) {
+        let coord = reviseCoordinator ?? StoryCreationCoordinator(planner: EditPlannerService(), context: context)
+        reviseCoordinator = coord
+        reviseWorking = true
+        reviseError = nil
+        coord.reviseVersion(for: story, base: output, directives: directives, softDirection: instruction)
+        Task { @MainActor in
+            // Observe the coordinator to a terminal state (no new navigation surface; swap in place).
+            while coord.isCreating { try? await Task.sleep(nanoseconds: 200_000_000) }
+            reviseWorking = false
+            switch coord.state {
+            case .completed(let created):
+                swappedOutput = created
+                player?.pause(); player = nil; isPlaying = false
+            case .failed(let message):
+                reviseError = message
+            default:
+                break   // cancelled / other — leave the current version displayed
+            }
+        }
     }
 }
 
