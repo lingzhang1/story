@@ -194,14 +194,14 @@ final class MomentReferenceResolverTests: XCTestCase {
     func test_case5_moment2_immediately_after_moment5() {
         let (n, ids) = num5()
         let t = "Put Moment 2 immediately after Moment 5."
-        let r = MomentReferenceResolver.resolve(ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        let r = MomentReferenceResolver.resolve(typed: [], ordering: MomentReferenceResolver.parseOrdering(t), in: n)
         XCTAssertEqual(r.directives.orderAdjacent, [[ids[1], ids[4]]])
     }
 
     func test_case6_moment2_somewhere_after_moment5() {
         let (n, ids) = num5()
         let t = "Show Moment 2 somewhere after Moment 5."
-        let r = MomentReferenceResolver.resolve(ordering: MomentReferenceResolver.parseOrdering(t), in: n)
+        let r = MomentReferenceResolver.resolve(typed: [], ordering: MomentReferenceResolver.parseOrdering(t), in: n)
         XCTAssertEqual(r.directives.orderAfter, [[ids[1], ids[4]]])
         XCTAssertTrue(r.directives.orderAdjacent.isEmpty)
     }
