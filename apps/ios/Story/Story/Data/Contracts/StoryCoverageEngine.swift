@@ -44,6 +44,14 @@ final class StoryCoverageEngine {
     func isStale(for story: StoryModel, guideFingerprint: String) -> Bool {
         guard let row = cachedModel(for: story.id) else { return true }
         let inputs = currentInputs(for: story)
+        // SELF-HEAL: a cached snapshot with ZERO dimension coverage while completed understandings exist is a
+        // broken/empty mapping (e.g. a prior Mapper truncation that validated as empty dimension_coverage).
+        // Its provenance fingerprints still match the unchanged inputs, so without this it would be served
+        // forever and every Guide item would stay "Shoot". Force a recompute so it repopulates.
+        if !inputs.completedMUValues.isEmpty,
+           let dto = cachedCoverage(for: story.id), dto.dimensionCoverage.isEmpty {
+            return true
+        }
         return row.sourceUnderstandingIdsFingerprint != inputs.sourceFingerprint
             || row.creativeIntentFingerprint != inputs.intentFingerprint
             || row.storyGuideFingerprint != guideFingerprint
