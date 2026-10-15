@@ -420,6 +420,78 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
                         f"SHORT of target {target}s (lower bound)")
     if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
         errs.append("feasible=false but no infeasible_reason given")
+    # HARD DIRECTIVES (Explicit Moment References): when the request carries resolved stable Moment IDs as
+    # directives, the plan MUST satisfy them deterministically — the model is never trusted to honor them.
+    errs.extend(_validate_directives(plan, inputs, moments))
+    return errs
+
+
+# Canonical hard-directive keys. Each value is a RESOLVED stable Moment id (asset_id), never a display number.
+_DIRECTIVE_KEYS = ("must_include", "exclude", "opening", "ending")
+
+
+def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> list[str]:
+    """Deterministically enforce the hard Moment-reference directives carried in
+    revision_context['directives']. Returns precise error strings; NEVER silently ignores or substitutes.
+
+    Shape (all ids are RESOLVED stable Moment ids — the same values that appear as segment asset_id):
+      {"must_include": [id,...], "exclude": [id,...], "opening": id, "ending": id}
+
+    A directive naming a Moment that is NOT in the eligible source set (inputs.moments) is itself an error —
+    the caller must resolve/clarify references BEFORE submission (a deleted/unavailable Moment is caught here,
+    not silently dropped). None/empty directives are a no-op (behavior unchanged)."""
+    ctx = inputs.revision_context or {}
+    directives = ctx.get("directives") or {}
+    if not isinstance(directives, dict) or not any(directives.get(k) for k in _DIRECTIVE_KEYS):
+        return []
+    errs: list[str] = []
+    segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
+    used = [s.get("asset_id") for s in segs]
+    used_set = set(used)
+
+    def _known(mid: str) -> bool:
+        return mid in moments
+
+    # must_include: every named Moment must appear in at least one segment, and must be an eligible Moment.
+    inc = directives.get("must_include") or []
+    for mid in (inc if isinstance(inc, list) else [inc]):
+        if not _known(mid):
+            errs.append(f"directive must_include references Moment '{mid}' not in the eligible source set "
+                        "(resolve/clarify the reference before submission)")
+        elif mid not in used_set:
+            errs.append(f"directive must_include: Moment '{mid}' is required but appears in no segment")
+
+    # exclude: no named Moment may appear in any segment.
+    exc = directives.get("exclude") or []
+    for mid in (exc if isinstance(exc, list) else [exc]):
+        if mid in used_set:
+            errs.append(f"directive exclude: Moment '{mid}' must NOT be used but appears in a segment")
+
+    # opening: the first segment (order 0) must be the named Moment.
+    opening = directives.get("opening")
+    if opening:
+        if not _known(opening):
+            errs.append(f"directive opening references Moment '{opening}' not in the eligible source set "
+                        "(resolve/clarify the reference before submission)")
+        elif not segs or used[0] != opening:
+            got = used[0] if used else "(none)"
+            errs.append(f"directive opening: first segment must be Moment '{opening}' but is '{got}'")
+
+    # ending: the last segment must be the named Moment.
+    ending = directives.get("ending")
+    if ending:
+        if not _known(ending):
+            errs.append(f"directive ending references Moment '{ending}' not in the eligible source set "
+                        "(resolve/clarify the reference before submission)")
+        elif not segs or used[-1] != ending:
+            got = used[-1] if used else "(none)"
+            errs.append(f"directive ending: last segment must be Moment '{ending}' but is '{got}'")
+
+    # A Moment cannot be both required and excluded — a conflicting instruction, surfaced not ignored.
+    conflict = (set(inc if isinstance(inc, list) else [inc]) &
+                set(exc if isinstance(exc, list) else [exc]))
+    for mid in conflict:
+        errs.append(f"directive conflict: Moment '{mid}' is in both must_include and exclude")
     return errs
 
 
@@ -473,6 +545,29 @@ def _build_user(inputs: EditPlanInputs) -> str:
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
 
 
+def _directive_lines(directives: dict | None) -> list[str]:
+    """Render resolved hard Moment-reference directives as explicit model instructions. Ids are the SAME
+    stable Moment ids used as segment asset_id, so the model can act on them directly. Empty => no lines."""
+    if not isinstance(directives, dict):
+        return []
+    out: list[str] = []
+    inc = directives.get("must_include") or []
+    inc = inc if isinstance(inc, list) else [inc]
+    exc = directives.get("exclude") or []
+    exc = exc if isinstance(exc, list) else [exc]
+    if inc:
+        out.append("HARD REQUIREMENT — you MUST include a segment from each of these Moment ids: "
+                   + ", ".join(str(x) for x in inc))
+    if exc:
+        out.append("HARD REQUIREMENT — you MUST NOT use any of these Moment ids: "
+                   + ", ".join(str(x) for x in exc))
+    if directives.get("opening"):
+        out.append(f"HARD REQUIREMENT — the FIRST segment (order 0) MUST be Moment id {directives['opening']}.")
+    if directives.get("ending"):
+        out.append(f"HARD REQUIREMENT — the LAST segment MUST be Moment id {directives['ending']}.")
+    return out
+
+
 def _revision_context_block(ctx: dict | None) -> str:
     """Render the version-aware context as a BOUNDED USER-message block (never the frozen system body).
 
@@ -508,9 +603,10 @@ def _revision_context_block(ctx: dict | None) -> str:
         soft = (ctx.get("soft_direction") or "").strip()
         if soft:
             lines.append("REVISE INTENT (soft): " + soft)
-        if ctx.get("directives"):
-            lines.append("REVISE DIRECTIVES (hard): " + json.dumps(ctx.get("directives")))
         lines.append("Apply the requested changes and PRESERVE unaffected edits where feasible.")
+    # HARD DIRECTIVES — resolved stable Moment references. Rendered in BOTH modes (a user may pin an opening
+    # while exploring). These are REQUIREMENTS the deterministic validator also enforces; the model must obey.
+    lines.extend(_directive_lines(ctx.get("directives")))
     if summaries:
         lines.append("PREVIOUS VERSION(S) (most recent first):")
         lines.append(json.dumps(summaries, indent=2))

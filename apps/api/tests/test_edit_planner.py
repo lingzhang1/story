@@ -735,10 +735,12 @@ def test_revision_context_history_is_bounded():
 def test_revision_context_revise_carries_directives_and_soft():
     ctx = {"mode": "revise", "base_version_id": "v1",
            "soft_direction": "more cinematic",
-           "directives": {"include_moment_ids": [M1], "exclude_moment_ids": [], "opening_moment_id": M2}}
+           "directives": {"must_include": [M1], "exclude": [], "opening": M2}}
     block = _revision_context_block(ctx)
     assert "REVISE INTENT (soft): more cinematic" in block
-    assert "REVISE DIRECTIVES (hard):" in block
+    assert "HARD REQUIREMENT" in block
+    assert f"MUST include a segment from each of these Moment ids: {M1}" in block
+    assert f"the FIRST segment (order 0) MUST be Moment id {M2}" in block
     assert "PRESERVE unaffected edits" in block
 
 
@@ -930,3 +932,80 @@ def test_critique_revision_cannot_reintroduce_invalid_speed():
     assert eng.last_diagnostics.get("critique_rejected_reason") == "revision_invalid"
     # original valid plan survived — no 4.0x speed leaked through
     assert all((s.speed or 1.0) <= 2.0 for s in plan.segments)
+
+
+# ---------------------------------------------------------------------------
+# Explicit Moment References — deterministic hard-directive validation.
+# Directives carry RESOLVED stable Moment ids (asset_id values), never display numbers.
+# ---------------------------------------------------------------------------
+def _ctx(directives, mode="revise"):
+    return {"mode": mode, "base_version_id": "v1", "directives": directives}
+
+
+def test_directive_must_include_satisfied():
+    plan = _good_plan()  # uses M1 and M2
+    errs = validate_plan(plan, _inputs(revision_context=_ctx({"must_include": [M1]})))
+    assert [e for e in errs if "must_include" in e] == []
+
+
+def test_directive_must_include_violated():
+    plan = _good_plan()
+    plan["segments"] = [s for s in plan["segments"] if s["asset_id"] != M2]  # drop M2
+    errs = validate_plan(plan, _inputs(revision_context=_ctx({"must_include": [M2]})))
+    assert any("must_include" in e and "appears in no segment" in e for e in errs)
+
+
+def test_directive_exclude_violated():
+    plan = _good_plan()  # contains M2
+    errs = validate_plan(plan, _inputs(revision_context=_ctx({"exclude": [M2]})))
+    assert any("exclude" in e and "must NOT be used" in e for e in errs)
+
+
+def test_directive_opening_satisfied_and_violated():
+    plan = _good_plan()  # order 0 is M1
+    ok = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M1})))
+    assert [e for e in ok if "opening" in e] == []
+    bad = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M2})))
+    assert any("opening" in e and "first segment must be" in e for e in bad)
+
+
+def test_directive_ending_satisfied_and_violated():
+    plan = _good_plan()  # last is M2
+    ok = validate_plan(plan, _inputs(revision_context=_ctx({"ending": M2})))
+    assert [e for e in ok if "ending" in e] == []
+    bad = validate_plan(plan, _inputs(revision_context=_ctx({"ending": M1})))
+    assert any("ending" in e and "last segment must be" in e for e in bad)
+
+
+def test_directive_unknown_moment_is_error_not_silent():
+    # A reference to a Moment not in the eligible source set must be flagged (deleted/unavailable case),
+    # never silently ignored or substituted.
+    ghost = str(uuid4())
+    errs = validate_plan(_good_plan(), _inputs(revision_context=_ctx({"must_include": [ghost]})))
+    assert any(ghost in e and "not in the eligible source set" in e for e in errs)
+
+
+def test_directive_conflict_include_and_exclude():
+    errs = validate_plan(_good_plan(), _inputs(revision_context=_ctx({"must_include": [M1], "exclude": [M1]})))
+    assert any("conflict" in e and M1 in e for e in errs)
+
+
+def test_directive_duplicate_references_safe():
+    # Duplicate ids in must_include are handled without error when satisfied.
+    errs = validate_plan(_good_plan(), _inputs(revision_context=_ctx({"must_include": [M1, M1]})))
+    assert [e for e in errs if "must_include" in e] == []
+
+
+def test_no_directives_behaves_unchanged():
+    # revision_context without directives (or absent) must not add any directive errors.
+    assert validate_plan(_good_plan(), _inputs()) == []
+    assert validate_plan(_good_plan(), _inputs(revision_context=_ctx({}))) == []
+    assert validate_plan(_good_plan(), _inputs(revision_context={"mode": "explore"})) == []
+
+
+def test_directive_lines_rendered_for_model():
+    block = _revision_context_block(_ctx({"must_include": [M1], "exclude": [M2], "opening": M1, "ending": M2}))
+    assert f"MUST include a segment from each of these Moment ids: {M1}" in block
+    assert f"MUST NOT use any of these Moment ids: {M2}" in block
+    assert f"FIRST segment (order 0) MUST be Moment id {M1}" in block
+    assert f"LAST segment MUST be Moment id {M2}" in block
