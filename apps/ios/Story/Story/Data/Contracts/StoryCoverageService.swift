@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // StoryCoverageService — the Milestone-E network boundary for Story Coverage
 // (story_coverage/1, FROZEN).
@@ -39,6 +40,9 @@ enum StoryCoverageServiceError: Error, LocalizedError {
     case unavailableRetryable      // 503 — compute failed; keep previous cached coverage
     case badStatus(Int)
     case decoding(Error)
+    case jobFailed(String)         // worker classified a terminal failure (category)
+    case jobCancelled              // user cancelled
+    case pollTimedOut(String)      // gave up polling this attempt; job id kept for recovery
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +50,12 @@ enum StoryCoverageServiceError: Error, LocalizedError {
         case .unavailableRetryable: return "Story Guide is updating; will retry."
         case .badStatus(let c): return "Unexpected coverage response (\(c))."
         case .decoding: return "Coverage returned an unexpected shape."
+        case .jobFailed(let cat):
+            return cat == "provider_exhausted"
+                ? "Story Guide analysis is temporarily rate-limited. Try again later."
+                : "Story Guide analysis didn't complete (\(cat))."
+        case .jobCancelled: return "Story Guide update was cancelled."
+        case .pollTimedOut: return "Story Guide is still analyzing; it will finish in the background."
         }
     }
 }
@@ -84,22 +94,99 @@ protocol StoryCoverageV2Computing {
 struct StoryCoverageV2Service: StoryCoverageV2Computing {
     var baseURL: URL = StoryBackend.baseURL
     var session: URLSession = StoryBackend.coverageSession
+    /// Max wall-clock to poll a submitted job before giving up this attempt (worker runs <900s; the device
+    /// keeps the job id so a later open RECOVERS the same job rather than re-submitting — see the engine).
+    var maxPollSeconds: TimeInterval = 300
+    var pollIntervalSeconds: UInt64 = 3
 
+    /// Submit -> poll -> retrieve. The sync /v1/story-coverage/v2 ran two sequential Opus calls (~191s cold)
+    /// past App Runner's hard 120s wall, so the device never received the result and looped. This runs the
+    /// SAME computation as an async job (worker Lambda, no 120s wall) and polls durable status. The
+    /// operation_id is a stable hash of the canonical request body: identical Story evidence -> same id ->
+    /// the existing queued/running/completed job is recovered WITHOUT launching new inference; changed
+    /// evidence -> new id -> new job. Polling never triggers inference (it only reads status).
     func compute(_ request: StoryCoverageV2RequestDTO) async throws -> StoryCoverageV2DTO {
-        var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage/v2"))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        do { req.httpBody = try StoryContractCoding.encoder().encode(request) }
+        let bodyData: Data
+        do { bodyData = try StoryContractCoding.encoder().encode(request) }
         catch { throw StoryCoverageServiceError.decoding(error) }
-        let data: Data
-        let resp: URLResponse
+        let bodyString = String(data: bodyData, encoding: .utf8) ?? "{}"
+        let operationId = Self.operationId(for: bodyString)
+
+        let jobId = try await submit(operationId: operationId, body: bodyString)
+        return try await pollToResult(jobId: jobId)
+    }
+
+    /// Deterministic operation id = sha256 of the canonical request body. Captures every output-affecting
+    /// input (guide, intent, scope, the completed MU set, pending count) because they are all in the body.
+    static func operationId(for bodyString: String) -> String {
+        let digest = SHA256.hash(data: Data(bodyString.utf8))
+        return "coverage_v2:" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func submit(operationId: String, body: String) async throws -> String {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage/v2/jobs"))
+        req.httpMethod = "POST"
+        let boundary = "Boundary-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        func field(_ name: String, _ value: String) -> String {
+            "--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n"
+        }
+        var form = field("operation_id", operationId)
+        form += field("owner", "dev")
+        form += field("body", body)
+        form += "--\(boundary)--\r\n"
+        req.httpBody = Data(form.utf8)
+
+        let data: Data; let resp: URLResponse
         do { (data, resp) = try await session.data(for: req) }
         catch { throw StoryCoverageServiceError.transport(error) }
         guard let http = resp as? HTTPURLResponse else { throw StoryCoverageServiceError.badStatus(-1) }
-        if http.statusCode == 503 { throw StoryCoverageServiceError.unavailableRetryable }
-        guard http.statusCode == 200 else { throw StoryCoverageServiceError.badStatus(http.statusCode) }
-        do { return try StoryContractCoding.decoder().decode(StoryCoverageV2DTO.self, from: data) }
-        catch { throw StoryCoverageServiceError.decoding(error) }
+        guard http.statusCode == 202 else { throw StoryCoverageServiceError.badStatus(http.statusCode) }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let jobId = obj["job_id"] as? String else {
+            throw StoryCoverageServiceError.decoding(
+                NSError(domain: "coverage", code: 0, userInfo: [NSLocalizedDescriptionKey: "no job_id"]))
+        }
+        return jobId
+    }
+
+    private func pollToResult(jobId: String) async throws -> StoryCoverageV2DTO {
+        let deadline = Date().addingTimeInterval(maxPollSeconds)
+        let url = baseURL.appendingPathComponent("v1/story-coverage/v2/jobs/\(jobId)")
+        while Date() < deadline {
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            let data: Data; let resp: URLResponse
+            do { (data, resp) = try await session.data(for: req) }
+            catch { throw StoryCoverageServiceError.transport(error) }
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw StoryCoverageServiceError.badStatus((resp as? HTTPURLResponse)?.statusCode ?? -1)
+            }
+            let status = (obj["status"] as? String) ?? "unknown"
+            switch status {
+            case "completed":
+                guard let result = obj["result"] else {
+                    throw StoryCoverageServiceError.decoding(
+                        NSError(domain: "coverage", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "completed without result"]))
+                }
+                let resultData = try JSONSerialization.data(withJSONObject: result)
+                do { return try StoryContractCoding.decoder().decode(StoryCoverageV2DTO.self, from: resultData) }
+                catch { throw StoryCoverageServiceError.decoding(error) }
+            case "failed":
+                let cat = (obj["failure_category"] as? String) ?? "unknown"
+                throw StoryCoverageServiceError.jobFailed(cat)
+            case "cancelled":
+                throw StoryCoverageServiceError.jobCancelled
+            case "expired":
+                throw StoryCoverageServiceError.unavailableRetryable
+            default:   // queued | running | cancel_requested — keep polling (no inference triggered)
+                try? await Task.sleep(nanoseconds: pollIntervalSeconds * 1_000_000_000)
+            }
+        }
+        // Timed out waiting — the job keeps running server-side; the device recovers it on the next open.
+        throw StoryCoverageServiceError.pollTimedOut(jobId)
     }
 }
 
