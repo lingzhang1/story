@@ -47,6 +47,20 @@ enum StoryBackend {
         cfg.httpMaximumConnectionsPerHost = 2   // bound background upload concurrency at the transport layer
         return URLSession(configuration: cfg)
     }()
+
+    /// Coverage/2 recompute is a SINGLE long Opus Mapper+Judge pass whose COLD first call over a large moment
+    /// set (26-50 rich understandings, 8192 output tokens) was measured at ~191s on the dev backend — longer
+    /// than longSession's 180s request timeout. With the shorter cap the device timed out, discarded the
+    /// successful result, kept the empty cache, and re-triggered on next open: a recompute LOOP that never
+    /// updated the Guide. A dedicated session with headroom lets the first cold call complete and cache.
+    static let coverageSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 300
+        cfg.timeoutIntervalForResource = 420
+        cfg.waitsForConnectivity = true
+        cfg.httpMaximumConnectionsPerHost = 2
+        return URLSession(configuration: cfg)
+    }()
 }
 
 enum CreativeIntentServiceError: Error, LocalizedError {
