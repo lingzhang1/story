@@ -51,6 +51,18 @@ def _build_engine():
     return RealEditPlannerEngine(gw, executability_repair_attempts=2)
 
 
+def _build_coverage_engine():
+    """Mirror apps/api/app/deps.get_story_coverage_v2_engine so the worker runs the IDENTICAL two-call
+    Coverage path (Mapper + Judge, Opus primary -> Sonnet fallback). Frozen prompts/contract untouched."""
+    from model_gateway import BedrockModelGateway, FallbackModelGateway
+    from story_coverage_v2 import RealStoryCoverageV2Engine
+    model = os.environ.get("STORY_COVERAGE_MODEL", "us.anthropic.claude-opus-4-6-v1")
+    fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+    primary = BedrockModelGateway(model_id=model)
+    gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
+    return RealStoryCoverageV2Engine(gw, model_id=model)
+
+
 def _classify(exc: Exception, inputs: EditPlanInputs) -> tuple[str, str]:
     """Map the engine's exceptions to a contract failure_category + detail."""
     if isinstance(exc, MalformedPlanError):
@@ -67,10 +79,130 @@ def _classify(exc: Exception, inputs: EditPlanInputs) -> tuple[str, str]:
     return "internal", f"{type(exc).__name__}: {exc}"[:400]
 
 
+def _classify_coverage(exc: Exception) -> tuple[str, str]:
+    """Map Coverage engine exceptions to a contract failure_category + detail. CoverageUnavailableError wraps
+    both model failures (mapper/judge) and the empty-dimension_coverage guard (truncation). Distinguish daily
+    quota exhaustion (not transient — the Opus->Sonnet fallback already applied) from a transient provider error."""
+    from story_coverage_v2 import CoverageUnavailableError
+    msg = str(exc)
+    if isinstance(exc, CoverageUnavailableError):
+        low = msg.lower()
+        if "empty dimension_coverage" in low or "truncat" in low:
+            return "empty_mapping", msg[:400]
+        if "too many tokens per day" in low or "daily" in low:
+            return "provider_exhausted", "daily token quota exhausted (not retried as transient)"
+        if "mapper unavailable" in low:
+            return "mapper_unavailable", msg[:400]
+        if "judge unavailable" in low:
+            return "judge_unavailable", msg[:400]
+        return "coverage_unavailable", msg[:400]
+    if isinstance(exc, StructuredOutputError):
+        return "invalid_output", msg[:400]
+    if isinstance(exc, ProviderError):
+        if "Too many tokens per day" in msg or "daily" in msg.lower():
+            return "provider_exhausted", "daily token quota exhausted (not retried as transient)"
+        return "provider_error", msg[:400]
+    return "internal", f"{type(exc).__name__}: {exc}"[:400]
+
+
 def _run_one(store: _jobs.JobStore, job_id: str) -> str:
+    """Dispatch on operation_type (owner safeguard 1). Unknown operations fail safe — never guessed, never run."""
     job = store.get(job_id)
     if not job:
         return "missing"
+    op = job.get("operation_type", _jobs.OP_EDIT_PLAN)
+    if op == _jobs.OP_COVERAGE_V2:
+        return _run_coverage(store, job_id, job)
+    if op == _jobs.OP_EDIT_PLAN:
+        return _run_edit_plan(store, job_id, job)
+    # Unknown operation: fail the job safely (never execute an unrecognized payload against any engine).
+    store.fail(job_id, "unknown_operation", f"operation_type={op!r} not in {sorted(_jobs.KNOWN_OPERATIONS)}")
+    return f"failed:unknown_operation"
+
+
+def _run_coverage(store: _jobs.JobStore, job_id: str, job: dict) -> str:
+    """Coverage/2 async execution. Same lifecycle contract as edit-plan (claim-lease -> run -> cancel-recheck
+    -> conditional publish) but runs the IDENTICAL RealStoryCoverageV2Engine.compute (Mapper + Judge) off the
+    App Runner request path, and reads its compact body INLINE (no S3 sheets). Frozen prompts/contract untouched."""
+    if job.get("status") in _jobs.TERMINAL:
+        return "already_terminal"
+    rref = job.get("request_ref", {})
+    if job.get("status") == "cancel_requested":
+        store.mark_cancelled(job_id)
+        if not rref.get("inline") and rref.get("staging_prefix"):
+            store.delete_staging(rref["staging_prefix"])
+        return "cancelled_prelease"
+
+    token = store.claim_lease(job_id)
+    if not token:
+        return "lease_held"
+
+    try:
+        # Load the Coverage body: inlined for a compact payload, else staged in S3.
+        if rref.get("inline"):
+            body_json = rref["body_json"]
+        else:
+            body_json, _sheets = store.load_request(rref["staging_prefix"], [])
+            # staged coverage body is written as body.json; load_request returns (body, sheets)
+
+        b = json.loads(body_json)
+
+        # ACCEPTANCE HOOK (test-only, env-gated): deterministic long-run simulation without model cost.
+        if os.environ.get("STORY_WORKER_ALLOW_TEST_DELAY") == "1":
+            try:
+                delay = int(b.get("_test_delay_s") or 0)
+            except Exception:
+                delay = 0
+            if delay > 0:
+                waited = 0
+                while waited < min(delay, EXEC_DEADLINE_S - 30):
+                    time.sleep(5); waited += 5
+                    if store.is_cancel_requested(job_id):
+                        store.mark_cancelled(job_id); return "cancelled_during_delay"
+
+        from story_coverage_v2 import CoverageV2Input
+        from uuid import UUID as _UUID
+        inp = CoverageV2Input(
+            story_id=_UUID(str(b["story_id"])),
+            story_guide=b.get("story_guide", {}),
+            creative_intent=b.get("creative_intent", {}),
+            scope=b.get("scope", {}),
+            moment_understandings=b.get("moment_understandings", []),
+            pending_count=int(b.get("pending_count", 0)))
+
+        t0 = time.monotonic()
+        engine = _build_coverage_engine()
+        coverage = engine.compute(inp)   # SAME two-call path: Mapper + Judge, frozen prompts, 8192 tokens
+        latency_ms = round((time.monotonic() - t0) * 1000)
+
+        if store.is_cancel_requested(job_id):
+            store.mark_cancelled(job_id)
+            return "cancelled_midrun"
+
+        result = _coverage_to_dict(coverage)
+        diag = {
+            "coverage_latency_ms": latency_ms,
+            "dimension_coverage_count": len(result.get("dimension_coverage", []) or []),
+            "mapper_prompt_version": os.environ.get("STORY_COVERAGE_MAPPER_VERSION", "story_coverage/mapper-v1"),
+        }
+        ok = store.complete_coverage(job_id, result, diag, token)
+        return "completed" if ok else "publish_lost_lease"
+    except Exception as exc:  # noqa: BLE001
+        cat, detail = _classify_coverage(exc)
+        store.fail(job_id, cat, detail, token)
+        return f"failed:{cat}"
+
+
+def _coverage_to_dict(cov) -> dict:
+    """StoryCoverageContractV2 -> plain dict for DynamoDB (Pydantic v2 model_dump, else dict())."""
+    if hasattr(cov, "model_dump"):
+        return cov.model_dump(mode="json")
+    if hasattr(cov, "dict"):
+        return cov.dict()
+    return dict(cov)
+
+
+def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
     if job.get("status") in _jobs.TERMINAL:
         return "already_terminal"
     # cancel while queued -> cancelled, no model call

@@ -1075,6 +1075,94 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="not found")
         return {"reenqueued": _job_store().reconcile_lost_enqueue()}
 
+    # ========================================================================================================
+    # ASYNC STORY COVERAGE/2 (milestone-async-story-coverage-reliability). The sync /v1/story-coverage/v2 above
+    # runs TWO sequential Opus calls (Mapper + Judge) ~191s cold — past App Runner's hard 120s request wall, so
+    # the device never receives the result and loops. These endpoints submit the SAME computation as a job the
+    # worker runs off the request path, then the client polls. Reuses the edit-plan job store via the
+    # coverage_v2 operation discriminator — no new infra. Frozen prompts/story_coverage/2 contract untouched.
+    # ========================================================================================================
+    _COV_JOB_MAX_INLINE_BYTES = 350_000   # DynamoDB item ceiling is 400KB; inline the compact body under this.
+
+    @app.post("/v1/story-coverage/v2/jobs", status_code=202)
+    def submit_coverage_job(
+        operation_id: str = Form(..., description="canonical coverage op-id (see coverage_operation_id); a changed snapshot uses a new id"),
+        owner: str = Form(default="dev", description="advisory only — not trusted as identity"),
+        body: str = Form(..., description="JSON StoryCoverageV2Request body (same shape as POST /v1/story-coverage/v2)"),
+        test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it)"),
+    ):
+        """Submit an async Coverage/2 job. Returns {job_id,status} promptly (no model call). Idempotent on
+        operation_id; a same-id DIFFERENT-payload submit is 409 (payload conflict preserved). Recovers an
+        existing queued/running/completed job for the SAME snapshot without launching new inference."""
+        import json as _json
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        # Validate the body against the SAME frozen request model the sync endpoint uses (never reinterpret).
+        try:
+            parsed = StoryCoverageV2Request.model_validate_json(body)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"invalid story-coverage body json: {e}")
+        if len(parsed.moment_understandings) > _COV_MAX_MOMENTS:
+            raise HTTPException(status_code=413, detail=f"too many moments (max {_COV_MAX_MOMENTS})")
+        # Re-serialize the VALIDATED body so the fingerprint + the worker see a canonical form (and optionally
+        # fold in the acceptance-only test delay). Keeps the stored body independent of client whitespace.
+        canon = parsed.model_dump(mode="json")
+        if test_delay_s and int(test_delay_s) > 0:
+            canon["_test_delay_s"] = int(test_delay_s)
+        body_json = _json.dumps(canon, sort_keys=True, default=str)
+
+        store = _job_store()
+        fp = _jobs.coverage_payload_fingerprint(body_json, operation_id)
+        # Compact bodies inline into the DynamoDB item; a large body stages to encrypted S3 (worker reads either).
+        staging_prefix = ""
+        if len(body_json.encode("utf-8")) > _COV_JOB_MAX_INLINE_BYTES:
+            jid = _jobs.job_id_for(operation_id)
+            staging_prefix = store.stage_request(jid, body_json, [])
+            body_json = ""   # not inlined; worker loads from S3
+        try:
+            job_id, created = store.create_or_get_coverage(
+                operation_id=operation_id, owner=owner, body_json=body_json,
+                payload_fingerprint=fp, staging_prefix=staging_prefix)
+        except _jobs.PayloadConflict as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if created:
+            store.enqueue(job_id)
+        log.info("coverage_job_submitted", extra={"operation": "coverage_job", "job_id": job_id,
+                 "job_created": created, "moment_count": len(parsed.moment_understandings),
+                 "pending_count": parsed.pending_count, "inlined": not staging_prefix})
+        return {"job_id": job_id, "status": "queued", "created": created}
+
+    @app.get("/v1/story-coverage/v2/jobs/{job_id}")
+    def get_coverage_job(job_id: str):
+        """Durable status. Polling NEVER triggers inference — it only reads DynamoDB. On completion returns the
+        StoryCoverage/2 result AND the operation_id, so the client can reject a result that is stale for the
+        CURRENT Story (safeguard 4: input-freshness is enforced client-side against the live fingerprint)."""
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        job = _job_store().get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
+            # Never serve an edit-plan job through the coverage status route (dispatch isolation).
+            raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
+        out = {k: job.get(k) for k in ("job_id", "status", "operation_id", "failure_category",
+                                       "failure_detail", "diagnostics")}
+        if job.get("status") == "completed":
+            out["result"] = job.get("result")
+        return out
+
+    @app.post("/v1/story-coverage/v2/jobs/{job_id}/cancel")
+    def cancel_coverage_job(job_id: str):
+        if not _dev_access_ok():
+            raise HTTPException(status_code=404, detail="not found")
+        store = _job_store()
+        job = store.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
+            raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
+        return {"job_id": job_id, "status": store.request_cancel(job_id)}
+
     @app.post("/v1/music-plan", response_model=MusicPlanContract, status_code=200)
     def music_plan(
         body: MusicPlanRequest,
