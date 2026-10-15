@@ -281,16 +281,21 @@ struct StoryHomeView: View {
         // Sample the content richness of the first understanding actually sent to coverage: if observed.summary
         // is empty, the mapper sees blanks and maps nothing (represented=0 despite AU present).
         var firstSummaryLen = -1
+        var firstSubj = -1, firstEv = -1, firstUseful = -1
         if case .object(let o)? = inputs.completedMUValues.first {
-            if case .object(let obs)? = o["observed"], case .string(let s)? = obs["summary"] {
-                firstSummaryLen = s.count
+            if case .object(let obs)? = o["observed"] {
+                if case .string(let s)? = obs["summary"] { firstSummaryLen = s.count }
+                if case .array(let a)? = obs["subjects"] { firstSubj = a.count }
+                if case .array(let a)? = obs["events"] { firstEv = a.count }
+                if case .array(let a)? = obs["useful_segments"] { firstUseful = a.count }
             } else if case .string(let s)? = o["summary"] {
-                firstSummaryLen = -(s.count)   // negative => summary at TOP level, not under observed (shape drift)
+                firstSummaryLen = -(s.count)   // negative => summary at TOP level (shape drift)
             }
         }
         MediaEngineV1.beacon("coverage: moments=\(story.moments.count) completedAU=\(inputs.completedMUValues.count) "
             + "pending=\(inputs.pendingCount) stale=\(wasStale) dims=\((coverage?.dimensionCoverage ?? []).count) "
-            + "represented=\(repCount) firstSummaryLen=\(firstSummaryLen) states=[\(states)]")
+            + "represented=\(repCount) firstSummaryLen=\(firstSummaryLen) states=[\(states)] "
+            + "subj=\(firstSubj) ev=\(firstEv) useful=\(firstUseful)")
     }
 
     /// After returning from capture, the new Moment's Asset Understanding runs ASYNCHRONOUSLY and is
