@@ -1,6 +1,9 @@
 import Foundation
 import SwiftData
 import CoreGraphics
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // StoryCreationCoordinator — R-c Batch A.
 //
@@ -258,7 +261,16 @@ final class StoryCreationCoordinator {
         cancelRequested = false
         partialRelativePath = nil
         lastFailure = nil
+        Self.setKeepAwake(true)   // don't let the screen sleep mid-plan/render (sleep tears down the connection)
         task = Task { [weak self] in await self?.run(story: story, outputFormat: outputFormat, targetSeconds: targetSeconds) }
+    }
+
+    /// Keep the device awake during an active Create/Revise so a screen sleep cannot suspend the app and tear
+    /// down the in-flight planning/render connection (observed as NSURLError -1005). Cleared when the run ends.
+    private static func setKeepAwake(_ on: Bool) {
+        #if canImport(UIKit)
+        UIApplication.shared.isIdleTimerDisabled = on
+        #endif
     }
 
     /// Cancel the in-flight creation: cancels the task, cleans any partial output,
@@ -331,7 +343,7 @@ final class StoryCreationCoordinator {
     // MARK: - Pipeline
 
     private func run(story: StoryModel, outputFormat: String, targetSeconds: Double?) async {
-        defer { isCreating = false; task = nil }
+        defer { isCreating = false; task = nil; Self.setKeepAwake(false) }
 
         // ---- preparing: gather REAL persisted inputs; missing prerequisite -> honest failure ----
         state = .preparing
@@ -401,13 +413,39 @@ final class StoryCreationCoordinator {
             let brief = wantMultimodal ? StoryMultimodalPlanning.creativeBrief : nil
             let critique = wantMultimodal && StoryMultimodalPlanning.critiqueRevisionEnabled
 
-            // Submit (or recover an in-flight job_id). A transport error here is safe to retry with the same opId.
+            // Submit (or recover an in-flight job_id). Submit is IDEMPOTENT on operation_id, so a transport
+            // error (e.g. the screen slept and iOS tore down the connection: NSURLError -1005) is safe to retry
+            // with the SAME opId — the server either creates the job or returns the one it already made. We
+            // retry a couple of times with a short backoff before giving up, so a brief suspension does not lose
+            // a revision whose job is already running server-side.
             let jobId: String
             if let existing = story.planJobId {
                 jobId = existing   // recovery: a job was already submitted for this attempt
             } else {
-                jobId = try await jobClient.submit(build.request, operationId: opId, owner: "dev", approach: requested,
-                                                   sheets: sheets, creativeBrief: brief, critiqueRevision: critique)
+                var submitted: String? = nil
+                var lastErr: Error? = nil
+                for attempt in 0..<3 {
+                    if cancelRequested { return finishCancelled() }
+                    do {
+                        submitted = try await jobClient.submit(build.request, operationId: opId, owner: "dev",
+                                                               approach: requested, sheets: sheets,
+                                                               creativeBrief: brief, critiqueRevision: critique)
+                        break
+                    } catch let EditPlanJobError.transport(underlying) {
+                        // A user cancel surfaces as NSURLError -999 — not retryable, it IS a cancellation.
+                        if cancelRequested || (underlying as NSError).code == NSURLErrorCancelled {
+                            return finishCancelled()
+                        }
+                        lastErr = underlying
+                        MediaEngineV1.beacon("editplan-job: submit transport retry \(attempt + 1) "
+                            + "code=\((underlying as NSError).code)")
+                        try? await Task.sleep(nanoseconds: UInt64(600_000_000 * (attempt + 1)))  // 0.6s,1.2s
+                    }
+                }
+                guard let jid = submitted else {
+                    return finishFailed(.planTransport(String(describing: lastErr ?? "submit failed")))
+                }
+                jobId = jid
                 story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
             }
             MediaEngineV1.beacon("editplan-job: submit req=\(requested.rawValue) sheets=\(sheets.count) "
