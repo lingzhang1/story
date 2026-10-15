@@ -63,8 +63,33 @@ enum RevisionContextBuilder {
         ])
     }
 
-    // MARK: - Diversity diagnostics (deterministic; mirrors the backend diversity_diagnostics)
+    /// Build the REVISE `revision_context` for a user-directed change to a SELECTED base version.
+    ///   - base: the version being revised (lineage anchor + exact plan source).
+    ///   - directives: resolved HARD Moment-reference directives (stable UUIDs) — may be empty.
+    ///   - softDirection: the free-text request ("make it more cinematic", event-level asks).
+    /// Unlike Explore, Revise carries the EXACT base_plan (owner: never a digest) so the planner preserves
+    /// unaffected edits and the backend can diff the result against it. Returns a context even when the base
+    /// plan is missing (we still carry the instruction), but base_plan is omitted in that case.
+    static func revise(base: GeneratedOutputModel,
+                       directives: ResolvedDirectives,
+                       softDirection: String) -> JSONValue {
+        var obj: [String: JSONValue] = [
+            "mode": .string("revise"),
+            "base_version_id": .string((base.versionId ?? base.id).uuidString),
+        ]
+        let soft = softDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !soft.isEmpty { obj["soft_direction"] = .string(soft) }
+        if let d = directives.jsonValue() { obj["directives"] = d }
+        // EXACT base plan (owner clarification #2): the executable plan the renderer consumed, so the planner
+        // can preserve unaffected edits and the server can detect unrelated changes. Omitted only when absent.
+        if let json = base.editPlanJSON, let data = json.data(using: .utf8),
+           let planJV = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            obj["base_plan"] = planJV
+        }
+        return .object(obj)
+    }
 
+    // MARK: - Diversity diagnostics (deterministic; mirrors the backend diversity_diagnostics)
     struct Diversity: Equatable {
         let momentSetJaccard: Double
         let openingChanged: Bool

@@ -183,7 +183,9 @@ final class StoryCreationCoordinator {
         var obj: [String: JSONValue]
         if case .object(let o)? = base { obj = o } else { obj = [:] }
         if obj["mode"] == nil { obj["mode"] = .string(directives != nil ? "revise" : "explore") }
-        if let directives { obj["directives"] = directives }
+        // Fold the Story's persisted creation-time directives ONLY when the base context does not already carry
+        // its own (a Revise run supplies its own directives from the user's revise instruction — never clobber).
+        if obj["directives"] == nil, let directives { obj["directives"] = directives }
         return .object(obj)
     }
 
@@ -291,6 +293,25 @@ final class StoryCreationCoordinator {
         pendingRevisionContext = RevisionContextBuilder.explore(parent: parent, recents: recents)
         pendingParentVersionId = parent.versionId ?? parent.id
         pendingOperationType = "another_version"
+        lastDiversity = nil
+        beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
+    }
+
+    /// Revise a SELECTED version with a user-directed change (Natural-Language Revision). Carries mode="revise"
+    /// + the EXACT base plan + resolved hard directives + the soft request, so the planner APPLIES the change
+    /// while preserving unaffected edits and the backend validates the hard directives deterministically.
+    /// ADDITIVE: a new GeneratedOutput is appended; the base and all prior versions are preserved. A FRESH
+    /// operation_id is minted. Reuses the SAME planner/validation/render path; music + user settings preserved.
+    func reviseVersion(for story: StoryModel, base: GeneratedOutputModel,
+                       directives: ResolvedDirectives, softDirection: String,
+                       outputFormat: String = "vertical", targetSeconds: Double? = nil,
+                       music: MusicSelection? = nil) {
+        guard !isCreating else { return }
+        story.planOperationId = nil; story.planJobId = nil
+        pendingRevisionContext = RevisionContextBuilder.revise(base: base, directives: directives,
+                                                               softDirection: softDirection)
+        pendingParentVersionId = base.versionId ?? base.id
+        pendingOperationType = "revision"
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
