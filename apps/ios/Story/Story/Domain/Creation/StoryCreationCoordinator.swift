@@ -964,6 +964,8 @@ extension StoryCreationCoordinator {
         if let jobStatus { row.jobStatus = jobStatus }
         if let planJSON { row.planJSON = planJSON }
         row.musicSelectionRef = Self.musicRef(for: pendingMusic) ?? row.musicSelectionRef
+        row.soundtrackRole = pendingMusic?.soundtrackRole ?? row.soundtrackRole
+        row.nativeAudioPriority = pendingMusic?.nativeAudioPriority ?? row.nativeAudioPriority
         row.outputFormat = lastOutputFormat
         row.targetSeconds = lastTargetSeconds
         row.updatedAt = .now

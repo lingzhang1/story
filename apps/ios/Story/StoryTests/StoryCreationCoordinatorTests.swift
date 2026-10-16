@@ -509,6 +509,57 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         XCTAssertFalse(coord.hasRecoverablePendingOperation(storyId: s.id))
     }
 
+    /// Amendment: render-resume from a saved plan works for ALL THREE operation types (original /
+    /// another_version / revision) — one shared lifecycle, keyed on operationType, not hardcoded to Explore.
+    func test_recovery_renderResume_allOperationTypes() async throws {
+        for opType in ["original", "another_version", "revision"] {
+            let s = newStory()
+            let m1 = momentWithFile(s, rel: "media/rec-\(opType)-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+            let plan = validPlan([m1])
+            let planJSON = String(data: try StoryContractCoding.encoder().encode(plan), encoding: .utf8)!
+            let op = PendingOperationModel(storyId: s.id, operationId: "op-\(opType)", jobId: "job-\(opType)",
+                                           operationType: opType, phase: "plan_ready",
+                                           jobStatus: "completed", planJSON: planJSON, outputFormat: "vertical")
+            ctx.insert(op); try ctx.save()
+            let jobClient = FakeJobClient(.failUnavailable)   // fails if resume wrongly re-polls/submits
+            let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+                                                 jobClient: jobClient,
+                                                 renderer: FakeRenderer(.ok(okResult())), context: ctx)
+            XCTAssertTrue(coord.resumePendingOperation(for: s), "\(opType) should resume")
+            await awaitSettled(coord)
+            guard case .completed(let out) = coord.state else {
+                return XCTFail("\(opType): expected .completed, got \(coord.state)")
+            }
+            XCTAssertEqual(jobClient.submitCount, 0, "\(opType): render-resume must not submit")
+            XCTAssertEqual(out.operationType, opType, "\(opType): operationType preserved on the recovered output")
+            XCTAssertEqual(s.generatedOutputs.count, 1, "\(opType): exactly one recovered version")
+            XCTAssertFalse(coord.hasRecoverablePendingOperation(storyId: s.id))
+        }
+    }
+
+    /// Amendment: a queued/running resume (no saved plan yet) RESUMES POLLING the existing job and never
+    /// submits a second one — the directives/context already live in the server-side job.
+    func test_recovery_queuedResume_reusesJob_noResubmit() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rec-q-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let plan = validPlan([m1])
+        // A pending op still at 'planning' with NO saved plan -> resume must poll the existing job.
+        let op = PendingOperationModel(storyId: s.id, operationId: "op-q", jobId: "job-q",
+                                       operationType: "revision", phase: "planning",
+                                       jobStatus: "running", outputFormat: "vertical")
+        ctx.insert(op); try ctx.save()
+        s.planOperationId = "op-q"; s.planJobId = "job-q"; try ctx.save()   // recovery seam
+        let jobClient = FakeJobClient(.ok(plan))   // the existing job completes when polled
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)),
+                                             jobClient: jobClient,
+                                             renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        XCTAssertTrue(coord.resumePendingOperation(for: s))
+        await awaitSettled(coord)
+        guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
+        XCTAssertEqual(jobClient.submitCount, 0, "queued-resume must poll the existing job, not submit a new one")
+        XCTAssertEqual(s.generatedOutputs.count, 1)
+    }
+
     /// Phase 5: a deliberate Create Another Version while a recoverable op exists ABANDONS the stale op (no two
     /// non-terminal operations -> no duplicate expensive jobs).
     func test_phase5_deliberateCreateAbandonsStalePending() async throws {

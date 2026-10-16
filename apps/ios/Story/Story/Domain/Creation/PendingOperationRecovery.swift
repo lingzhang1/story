@@ -67,8 +67,11 @@ final class PendingOperationRecovery {
     }
 
     /// Re-resolve the pending op's soundtrack from its persisted musicSelectionRef
-    /// ("mymusic:<id>" | "provider:<trackId>" | nil). My Music resolves locally; a provider track re-resolves
-    /// live via MusicSelectionResolver (download + analysis). nil => no music (never blocks recovery).
+    /// ("mymusic:<id>" | "provider:<trackId>" | nil) WITHOUT a fresh MusicPlan. The plan was already planned
+    /// music-aware; recovery only needs the soundtrack file + decoded analysis + the two mixing knobs, which we
+    /// persisted at plan_ready. A provider track resolves via the TRACK-SCOPED analysisBoth + downloadSoundtrack
+    /// (no recommend()/MusicPlan). My Music resolves locally. nil => no music (never blocks recovery). This is
+    /// what keeps `original` recovery from unnecessarily rerunning MusicPlan.
     private static func resolveMusic(for storyId: UUID, story: StoryModel, context: ModelContext) async
         -> StoryCreationCoordinator.MusicSelection? {
         let desc = FetchDescriptor<PendingOperationModel>(predicate: #Predicate { $0.storyId == storyId })
@@ -78,12 +81,23 @@ final class PendingOperationRecovery {
             let assetId = String(ref.dropFirst("mymusic:".count))
             return CreateStoryPreviewView.myMusicSelection(assetId: assetId, story: story, context: context)
         }
-        if ref.hasPrefix("provider:") {
-            let trackId = String(ref.dropFirst("provider:".count))
-            let resolver = MusicSelectionResolver(context: context)
-            guard let rec = await resolver.recommend(for: story, guideFramingSummary: nil) else { return nil }
-            return await resolver.resolveSelection(recommendation: rec, trackId: trackId)
+        guard ref.hasPrefix("provider:") else { return nil }
+        let trackId = String(ref.dropFirst("provider:".count))
+        let candidates = MusicCandidatesService()
+        // Track-scoped analysis + audio — NO MusicPlan recommend() call.
+        guard let both = try? await candidates.analysisBoth(trackId: trackId),
+              let url = try? await candidates.downloadSoundtrack(trackId: trackId) else {
+            MediaEngineV1.beacon("editplan-recover: provider music re-resolve FAILED track=\(trackId.prefix(8)) -> no-music")
+            return nil
         }
-        return nil
+        return StoryCreationCoordinator.MusicSelection(
+            musicPlanJSON: .object([:]),                 // planning is done; not used at render
+            trackId: trackId,
+            analysisJSON: both.raw,
+            analysis: both.analysis,
+            soundtrackURL: url,
+            soundtrackRole: row.soundtrackRole ?? "supportive",
+            nativeAudioPriority: row.nativeAudioPriority ?? "selective",
+            trackTitle: "Soundtrack")
     }
 }

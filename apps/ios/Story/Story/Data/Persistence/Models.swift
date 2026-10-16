@@ -815,6 +815,11 @@ final class PendingOperationModel {
 
     // Render context needed to reproduce the SAME output on a resumed render (music + settings + format/target).
     var musicSelectionRef: String?   // resolved music handle so a resumed render keeps the same soundtrack
+    // Render-time music facts captured at plan_ready so a render-resume can rebuild MediaEngineInputs WITHOUT a
+    // fresh MusicPlan (recommend()) call — the plan was already planned music-aware; recovery only needs the
+    // soundtrack file + analysis by trackId, and these two mixing knobs. nil => no-music render.
+    var soundtrackRole: String?
+    var nativeAudioPriority: String?
     var outputFormat: String?
     var targetSeconds: Double?
 
@@ -834,6 +839,8 @@ final class PendingOperationModel {
         failureCategory: String? = nil,
         planJSON: String? = nil,
         musicSelectionRef: String? = nil,
+        soundtrackRole: String? = nil,
+        nativeAudioPriority: String? = nil,
         outputFormat: String? = nil,
         targetSeconds: Double? = nil,
         createdAt: Date = .now,
@@ -851,6 +858,8 @@ final class PendingOperationModel {
         self.failureCategory = failureCategory
         self.planJSON = planJSON
         self.musicSelectionRef = musicSelectionRef
+        self.soundtrackRole = soundtrackRole
+        self.nativeAudioPriority = nativeAudioPriority
         self.outputFormat = outputFormat
         self.targetSeconds = targetSeconds
         self.createdAt = createdAt
