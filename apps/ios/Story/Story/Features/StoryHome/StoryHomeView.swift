@@ -21,6 +21,9 @@ struct StoryHomeView: View {
     @State private var showCapture = false
     @State private var showMenu = false
     @State private var showPreview = false
+    /// When Create decides a good output already exists, push the Result directly (the "Here's what I'm
+    /// working with" preview is never shown as a resting page).
+    @State private var reopenOutput: GeneratedOutputModel?
     @State private var pickerItems = false
     @State private var showMoments = false
     @State private var showAddMoments = false      // Phase 3: "Add Moments" source chooser
@@ -99,7 +102,7 @@ struct StoryHomeView: View {
                     // local file AND a completed MomentUnderstanding (same rule as EditPlanRequestBuilder).
                     let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
                     VStack(spacing: 4) {
-                        Button { showPreview = true } label: {
+                        Button { startCreateOrOpen() } label: {
                             Text("Create my Story").font(StoryTheme.body(14))
                                 .foregroundStyle(readiness.isPlannable ? StoryTheme.cream.opacity(0.7) : StoryTheme.cream.opacity(0.2))
                                 .frame(maxWidth: .infinity)
@@ -179,6 +182,16 @@ struct StoryHomeView: View {
             SceneScanFlowView(captureContext: .story(story), selectedOpportunity: launch.opportunity)
         }
         .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
+        .navigationDestination(item: $reopenOutput) { output in
+            StoryResultView(story: story, initialOutput: output,
+                            onHome: { if let onBack { onBack() } else { dismiss() } },
+                            onRecreate: { _ in
+                                // "Create another version" from the Result -> run the create flow (which shows
+                                // the Customize sheet). Routed through the preview host (auto-starts, no grid).
+                                reopenOutput = nil
+                                DispatchQueue.main.async { showPreview = true }
+                            })
+        }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems, onProgress: { p in
             // Non-blocking live signal while videos copy out of Photos. Clear ~1.2s after finish so a
@@ -235,6 +248,24 @@ struct StoryHomeView: View {
     //   - A failed recompute preserves the previous valid coverage (never fabricates).
     //   - Only recompute when there is at least one understood Moment to reason from;
     //     an empty / all-pending Story shows the neutral state (pending = unknown).
+    /// Create decides the route AT TAP TIME (synchronously, so navigation fires reliably — a nested
+    /// navigationDestination set later inside a pushed view's onAppear does NOT, which is why the old preview
+    /// grid kept resting). If a good, non-stale output whose file is on disk already exists, push the Result
+    /// directly; otherwise push the create-flow host (which auto-starts duration + Customize + music; the
+    /// "Here's what I'm working with" grid is never a resting page).
+    private func startCreateOrOpen() {
+        let decision = ReopenDecision.decide(
+            outputs: story.generatedOutputs,
+            isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
+            fileExists: { RenderOutputStore.shared.exists(relative: $0) })
+        switch decision {
+        case .showResult(let outputId):
+            reopenOutput = story.generatedOutputs.first { $0.id == outputId }
+        case .create:
+            showPreview = true
+        }
+    }
+
     private func loadCoverage() async {
         // R-c.1 legacy backfill: videos imported BEFORE import-AU shipped have no MomentUnderstanding and no
         // job. Enqueue them once (idempotent — a Moment already understood or already queued is skipped, so

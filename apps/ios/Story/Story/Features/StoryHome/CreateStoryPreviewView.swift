@@ -281,80 +281,26 @@ struct CreateStoryPreviewView: View {
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Custom back header (consistent with the rest of the product).
-                HStack(spacing: 12) {
-                    Button { dismiss() } label: {
-                        Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                            .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("Back")
-                    Spacer()
-                }
-                StoryEyebrow(text: story.title.displayTitle)
-                Text("Here's what I'm working with.")
-                    .font(StoryTheme.display(24)).foregroundStyle(StoryTheme.cream)
-
-                if story.moments.isEmpty {
-                    StoryEmptyState(text: "No moments yet. Shoot one first.")
-                } else {
-                    LazyVGrid(columns: cols, spacing: 8) {
-                        ForEach(story.moments.sorted(by: { $0.createdAt < $1.createdAt })) { m in
-                            thumb(m)
-                        }
-                    }
-                    Text("\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
-                    Text("Story will choose the moments that work best.")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
-                }
-
-                // Music — now AVAILABLE (R-d): Story recommends a soundtrack and you choose it in the next
-                // step. Honest copy, no track named here (that happens in the picker after you tap Create).
-                VStack(alignment: .leading, spacing: 6) {
-                    StoryEyebrow(text: "Music")
-                    Text("Story will suggest a soundtrack — you'll choose it next, or create without music.")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
-                }
-
-                // Create — REAL consumer action (R-c Batch C). Enabled only when the Story is plannable
-                // (>=1 Moment with a resolvable file AND a completed MomentUnderstanding — same rule as
-                // EditPlanRequestBuilder). Tap -> ReopenDecision (existing good output -> Result; else Creating).
-                // Duplicate guard: the button also disables while a flow is already active for this Story.
-                let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
-                let canCreate = readiness.isPlannable && !isCreateFlowActive
-                VStack(alignment: .leading, spacing: 8) {
-                    if canCreate {
-                        StoryPrimaryButton(title: "Create my Story") { startCreate() }
-                    } else {
-                        StoryUnavailableButton(title: "Create my Story", note: readiness.copy)
-                    }
-                    if readiness.isPlannable, case .pendingAnalysis = readiness {
-                        // Honest: a plan uses only the ready moments; the rest are still analyzing.
-                        Text(readiness.copy)
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                    }
-                }
-                .padding(.top, 4)
-
-                #if DEBUG
-                if AppMode.current.showsDiagnostics {
-                    StoryEyebrow(text: "DEBUG · dev mock output")
-                    Button("Generate mock output (dev only)") {
-                        try? useCases.createStoryOutput(for: story)
-                    }
-                    .font(StoryTheme.body(13)).tint(StoryTheme.gold)
-                    if !story.generatedOutputs.isEmpty {
-                        Text("mock outputs: \(story.generatedOutputs.count)")
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                    }
-                }
-                #endif
-
-                Spacer(minLength: 20)
+        // Pure flow host — NEVER the old "Here's what I'm working with" grid. This screen is reached only when
+        // a create is actually needed (StoryHomeView routes an existing result straight to the Result screen),
+        // and onAppear immediately starts the flow (duration -> Customize -> music -> Creating). We show only a
+        // minimal preparing state behind those sheets so there is no redundant resting page.
+        VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                Button { dismiss() } label: {
+                    Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                        .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Back")
+                Spacer()
             }
             .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
+            Spacer()
+            ProgressView().tint(StoryTheme.gold)
+            Text("Preparing your Story…")
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
