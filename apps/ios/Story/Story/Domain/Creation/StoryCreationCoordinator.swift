@@ -170,6 +170,10 @@ final class StoryCreationCoordinator {
     private var pendingRevisionContext: JSONValue?
     private var pendingParentVersionId: UUID?
     private var pendingOperationType: String = "original"
+    /// True when a Create-Another-Version run was launched from the Customize sheet with directives the user
+    /// typed FOR THIS operation — those directives are then folded (mode=revise) instead of a blind explore.
+    /// Reset by every entry point so a one-tap Explore never inherits them.
+    private var pendingDirectedByCustomize: Bool = false
     /// Diversity diagnostics from the most recent Explore run (nil otherwise) — read for device verification.
     private(set) var lastDiversity: RevisionContextBuilder.Diversity?
 
@@ -182,13 +186,19 @@ final class StoryCreationCoordinator {
     /// still "original" and correctly re-applies them. Returns nil only when there is neither a base context nor
     /// any foldable instruction (behavior unchanged — the request is byte-identical to today).
     static func composeRevisionContext(base: JSONValue?, story: StoryModel,
-                                       operationType: String = "original") -> JSONValue? {
-        // One-time Stage 2 instructions apply to the original create only. For another_version/revision the
-        // persisted creation-time instructions are intentionally NOT re-read (the base context is authoritative).
-        let isOriginal = (operationType == "original")
-        let directives = isOriginal ? ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)?.jsonValue() : nil
+                                       operationType: String = "original",
+                                       directedByCustomize: Bool = false) -> JSONValue? {
+        // Fold the Story's persisted Creative-Direction instructions when they belong to THIS operation:
+        //  - an ORIGINAL create (the one-time Stage 2 instruction the user just entered), or
+        //  - a Create-Another-Version launched FROM the Customize sheet with directives typed for this run
+        //    (directedByCustomize) — "start from Moment 15, then Moment 2" must be honored, not discarded.
+        // NOT folded for a one-tap "Create another version" from the Result (directedByCustomize=false) or a
+        // Revise (which supplies its own directives), so a stale creation-time instruction never silently leaks
+        // into an unrelated later Explore (owner test 12).
+        let usesPersisted = (operationType == "original") || (operationType == "another_version" && directedByCustomize)
+        let directives = usesPersisted ? ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)?.jsonValue() : nil
         let soft: String? = {
-            guard isOriginal else { return nil }
+            guard usesPersisted else { return nil }
             let t = (story.creativeDirectionText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
         }()
@@ -198,6 +208,11 @@ final class StoryCreationCoordinator {
         var obj: [String: JSONValue]
         if case .object(let o)? = base { obj = o } else { obj = [:] }
         if obj["mode"] == nil { obj["mode"] = .string((directives != nil || soft != nil) ? "revise" : "explore") }
+        // HARD directives must be read as REQUIREMENTS, so when we fold them onto an explore base (a
+        // Customize-directed Create Another Version: "start from Moment 15, then Moment 2"), upgrade the mode
+        // from explore to revise. Without this the planner would treat an explicit opening/order as a soft
+        // nudge and could ignore it — exactly the "doesn't align to my instruction" bug.
+        if directives != nil, case .string("explore")? = obj["mode"] { obj["mode"] = .string("revise") }
         // Fold the Story's persisted creation-time directives ONLY when the base context does not already carry
         // its own (a Revise run supplies its own directives from the user's revise instruction — never clobber).
         if obj["directives"] == nil, let directives { obj["directives"] = directives }
@@ -258,6 +273,7 @@ final class StoryCreationCoordinator {
         pendingRevisionContext = nil
         pendingParentVersionId = nil
         pendingOperationType = "original"
+        pendingDirectedByCustomize = false
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
 
@@ -338,7 +354,7 @@ final class StoryCreationCoordinator {
     /// fingerprint bypass). Reuses the SAME planner/validation/render path; music + user settings preserved.
     func createAnotherVersion(for story: StoryModel, from parent: GeneratedOutputModel,
                               outputFormat: String = "vertical", targetSeconds: Double? = nil,
-                              music: MusicSelection? = nil) {
+                              music: MusicSelection? = nil, directedByCustomize: Bool = false) {
         guard !isCreating else { return }
         // Phase 5: a DELIBERATE new version is a NEW operation. Abandon any stale recoverable pending op for
         // this Story first (the user chose to start over rather than resume), so there is never more than one
@@ -349,6 +365,11 @@ final class StoryCreationCoordinator {
         pendingRevisionContext = RevisionContextBuilder.explore(parent: parent, recents: recents)
         pendingParentVersionId = parent.versionId ?? parent.id
         pendingOperationType = "another_version"
+        // When the user reached this via the Customize sheet and typed Creative Direction for THIS operation,
+        // honor those directives (mode=revise semantics over the explore base) — they are not a stale
+        // creation-time leak, they are this operation's intent. A one-tap "Create another version" from the
+        // Result (no Customize sheet) leaves this false, so it stays a blind explore and inherits nothing.
+        pendingDirectedByCustomize = directedByCustomize
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
@@ -369,6 +390,7 @@ final class StoryCreationCoordinator {
                                                                softDirection: softDirection)
         pendingParentVersionId = base.versionId ?? base.id
         pendingOperationType = "revision"
+        pendingDirectedByCustomize = false
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
@@ -397,7 +419,8 @@ final class StoryCreationCoordinator {
                 musicAssetId: assetIdForBuilder,
                 musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON,
                 revisionContext: Self.composeRevisionContext(base: pendingRevisionContext, story: story,
-                                                             operationType: pendingOperationType))
+                                                             operationType: pendingOperationType,
+                                                             directedByCustomize: pendingDirectedByCustomize))
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {

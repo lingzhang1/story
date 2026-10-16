@@ -168,7 +168,10 @@ struct StoryCreatingView: View {
                 } else if musicIsPreresolved {
                     // Picker already chose + resolved the track (or no-music). Render exactly that.
                     if let parent = sourceVersion {
-                        coord.createAnotherVersion(for: story, from: parent, music: preresolvedMusic)
+                        // This Create-Another-Version came through the Customize sheet, so any Creative
+                        // Direction the user typed is for THIS operation — honor it (mode=revise over explore).
+                        coord.createAnotherVersion(for: story, from: parent, music: preresolvedMusic,
+                                                   directedByCustomize: true)
                     } else {
                         coord.createWithMusic(for: story, music: preresolvedMusic)
                     }
