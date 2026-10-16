@@ -358,35 +358,35 @@ struct CreateStoryPreviewView: View {
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
-        .task {
-            // P0 recovery routing: a reopened Story with an unfinished AI operation must NOT show the
-            // from-scratch create preview. If the app-level recovery already produced a version while we were
-            // away, open it; otherwise resume the operation here with honest progress. Runs once per appearance.
+        .onAppear {
             guard !recoveryChecked else { return }
             recoveryChecked = true
             let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
             if probe.hasRecoverablePendingOperation(storyId: story.id) {
-                // A live unfinished op — resume it here with honest progress, then land on Result.
-                resumePreresolvedMusic = await PendingOperationRecovery.resolveMusicForResume(
-                    storyId: story.id, story: story, context: context)
-                showResuming = true
+                MediaEngineV1.beacon("preview-route: RESUME story=\(story.id.uuidString.prefix(8))")
+                // Music resolve is async; do it off the main actor, then show the resume screen.
+                Task {
+                    resumePreresolvedMusic = await PendingOperationRecovery.resolveMusicForResume(
+                        storyId: story.id, story: story, context: context)
+                    showResuming = true
+                }
                 return
             }
-            // No live op. If a good output already exists (e.g. a background recovery landed one, or a prior
-            // render), the from-scratch create preview is redundant — open the result directly instead.
             let decision = ReopenDecision.decide(
                 outputs: story.generatedOutputs,
                 isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
                 fileExists: { RenderOutputStore.shared.exists(relative: $0) })
+            let outs = story.generatedOutputs.count
+            let withFile = story.generatedOutputs.filter { ($0.relativeFilePath.map { RenderOutputStore.shared.exists(relative: $0) } ?? false) }.count
+            let stale = story.generatedOutputs.filter { StoryCreationCoordinator.isOutputStale(output: $0, story: story) }.count
             if case .showResult(let outputId) = decision {
+                MediaEngineV1.beacon("preview-route: RESULT story=\(story.id.uuidString.prefix(8)) outs=\(outs) withFile=\(withFile) stale=\(stale)")
                 reopenOutput = story.generatedOutputs.first { $0.id == outputId }
                 return
             }
-            // Fresh, plannable Story with no output/op: the static "Here's what I'm working with" page adds
-            // nothing (the user can review photos in Moments), so go STRAIGHT into the create flow — the
-            // Customize sheet (Creative Direction) + duration + music picker present over this host. The page
-            // is never a resting surface.
-            if StoryCreationReadiness.evaluate(story: story, context: context).isPlannable {
+            let plannable = StoryCreationReadiness.evaluate(story: story, context: context).isPlannable
+            MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8)) outs=\(outs) withFile=\(withFile) stale=\(stale) plannable=\(plannable)")
+            if plannable {
                 startCreate()
             }
         }
