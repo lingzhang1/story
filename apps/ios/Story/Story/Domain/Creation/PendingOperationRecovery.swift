@@ -58,7 +58,7 @@ final class PendingOperationRecovery {
             defer { Self.inFlight.remove(storyId); Self.retained[storyId] = nil }
             // Re-resolve the operation's soundtrack (same path as Revise/Change Music) so a resumed render keeps
             // its music WHERE FEASIBLE; nil renders no-music rather than block the recovery of the video.
-            let music = await Self.resolveMusic(for: storyId, story: story, context: context)
+            let music = await Self.resolveMusicForResume(storyId: storyId, story: story, context: context)
             guard coord.resumePendingOperation(for: story, music: music) else { return }
             while coord.isCreating { try? await Task.sleep(nanoseconds: 300_000_000) }
             MediaEngineV1.beacon("editplan-recover: resume finished story=\(storyId.uuidString.prefix(8)) "
@@ -72,7 +72,7 @@ final class PendingOperationRecovery {
     /// persisted at plan_ready. A provider track resolves via the TRACK-SCOPED analysisBoth + downloadSoundtrack
     /// (no recommend()/MusicPlan). My Music resolves locally. nil => no music (never blocks recovery). This is
     /// what keeps `original` recovery from unnecessarily rerunning MusicPlan.
-    private static func resolveMusic(for storyId: UUID, story: StoryModel, context: ModelContext) async
+    static func resolveMusicForResume(storyId: UUID, story: StoryModel, context: ModelContext) async
         -> StoryCreationCoordinator.MusicSelection? {
         let desc = FetchDescriptor<PendingOperationModel>(predicate: #Predicate { $0.storyId == storyId })
         guard let row = ((try? context.fetch(desc)) ?? []).first(where: { $0.isRecoverable }),

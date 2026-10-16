@@ -85,6 +85,11 @@ struct StoryCreatingView: View {
     /// left the stuck "Finishing up…" screen behind when Result dismissed). When nil, this view falls back to
     /// pushing Result itself (standalone / test host).
     var onCompleted: ((GeneratedOutputModel) -> Void)? = nil
+    /// P0 recovery: when true, this screen RESUMES the Story's existing unfinished edit-plan operation instead
+    /// of starting a fresh create — it reuses the persisted job (no re-inference), re-resolves the soundtrack,
+    /// and renders the recovered plan. `preresolvedMusic` carries the re-resolved selection when the parent
+    /// already resolved it. Used when a Story is reopened with a recoverable pending operation.
+    var resumePending: Bool = false
 
     @State private var coordinator: StoryCreationCoordinator?
     // R-d.2 keep-alive: creating a Story runs a long foreground pipeline (Opus planning + AVAssetExportSession),
@@ -152,7 +157,15 @@ struct StoryCreatingView: View {
                 createStartedAt = Date()   // start the patience timer from the real creation moment
                 let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
                 coordinator = coord
-                if musicIsPreresolved {
+                if resumePending {
+                    // P0 recovery: resume the Story's existing unfinished operation (reuse the job, no new
+                    // inference). preresolvedMusic is the re-resolved soundtrack (nil = no-music). If there is
+                    // nothing recoverable (race: another coordinator already finished it), fall through to the
+                    // normal reopen path by dismissing — the parent routes to the result.
+                    if !coord.resumePendingOperation(for: story, music: preresolvedMusic) {
+                        dismiss()
+                    }
+                } else if musicIsPreresolved {
                     // Picker already chose + resolved the track (or no-music). Render exactly that.
                     if let parent = sourceVersion {
                         coord.createAnotherVersion(for: story, from: parent, music: preresolvedMusic)

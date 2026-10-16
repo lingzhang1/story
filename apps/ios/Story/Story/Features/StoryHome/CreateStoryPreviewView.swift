@@ -23,6 +23,11 @@ struct CreateStoryPreviewView: View {
     // to open the Result screen for an existing good output or start a new render.
     @State private var showCreating = false
     @State private var reopenOutput: GeneratedOutputModel?
+    // P0 recovery: when a reopened Story has a recoverable unfinished operation, route into the Creating
+    // screen in resume mode (reuse the job, no re-inference) instead of showing the redundant create preview.
+    @State private var resumePreresolvedMusic: StoryCreationCoordinator.MusicSelection?
+    @State private var showResuming = false
+    @State private var recoveryChecked = false
     /// Creative Revision Foundation: the parent output a "Create a new version" (Explore) is derived FROM.
     /// Set by handleRecreate; threaded into StoryCreatingView so the coordinator re-plans version-aware. nil
     /// for a first/original create.
@@ -353,12 +358,43 @@ struct CreateStoryPreviewView: View {
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
+        .task {
+            // P0 recovery routing: a reopened Story with an unfinished AI operation must NOT show the
+            // from-scratch create preview. If the app-level recovery already produced a version while we were
+            // away, open it; otherwise resume the operation here with honest progress. Runs once per appearance.
+            guard !recoveryChecked else { return }
+            recoveryChecked = true
+            let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
+            if probe.hasRecoverablePendingOperation(storyId: story.id) {
+                // A live unfinished op — resume it here with honest progress, then land on Result.
+                resumePreresolvedMusic = await PendingOperationRecovery.resolveMusicForResume(
+                    storyId: story.id, story: story, context: context)
+                showResuming = true
+                return
+            }
+            // No live op. If a good output already exists (e.g. a background recovery landed one, or a prior
+            // render), the from-scratch create preview is redundant — open the result directly instead.
+            let decision = ReopenDecision.decide(
+                outputs: story.generatedOutputs,
+                isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
+                fileExists: { RenderOutputStore.shared.exists(relative: $0) })
+            if case .showResult(let outputId) = decision {
+                reopenOutput = story.generatedOutputs.first { $0.id == outputId }
+            }
+        }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
         // renders exactly that track and self-manages its Result. Reopen -> Result directly.
         .navigationDestination(isPresented: $showCreating) {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
                               onRequestRecreate: { src in handleRecreate(from: src) })
+        }
+        .navigationDestination(isPresented: $showResuming) {
+            // P0 recovery: resume the existing unfinished operation (reuse the job, no new inference) and show
+            // the real progress UI, landing on Result. Not a fresh create.
+            StoryCreatingView(story: story, preresolvedMusic: resumePreresolvedMusic, musicIsPreresolved: true,
+                              onCompleted: { out in reopenOutput = out; showResuming = false },
+                              resumePending: true)
         }
         .navigationDestination(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
