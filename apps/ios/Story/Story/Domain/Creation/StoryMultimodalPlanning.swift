@@ -50,6 +50,22 @@ enum StoryMultimodalPlanning {
     static func setCritiqueOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: critiqueFlagKey) }
     private static let _critiqueDefault = true
 
+    /// Phase 4 (Create Another Version latency): whether a DELIBERATE "Create Another Version" (Explore) runs
+    /// the critique pass. Default OFF — Explore's default is ONE multimodal planning call (critique roughly
+    /// doubles model calls). Images, prior-version diversity context, mandatory deterministic validation and
+    /// the worker's bounded repair are unaffected; only the automatic critique pass is gated here. Flip ON via
+    /// env `STORY_CRITIQUE_EXPLORE=1` or the UserDefaults bool, without a rebuild.
+    static var critiqueExploreEnabled: Bool {
+        if ProcessInfo.processInfo.environment["STORY_CRITIQUE_EXPLORE"] == "0" { return false }
+        if ProcessInfo.processInfo.environment["STORY_CRITIQUE_EXPLORE"] == "1" { return true }
+        if UserDefaults.standard.object(forKey: critiqueExploreFlagKey) != nil {
+            return UserDefaults.standard.bool(forKey: critiqueExploreFlagKey)
+        }
+        return false   // default: one-call Explore
+    }
+    static let critiqueExploreFlagKey = "STORY_CRITIQUE_EXPLORE"
+    static func setCritiqueExploreOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: critiqueExploreFlagKey) }
+
     static let creativeBriefVersion = "shortform_mvp/1"
     static let creativeBrief = """
     When user intent does not require chronology, prioritize visually engaging and meaningful footage. \

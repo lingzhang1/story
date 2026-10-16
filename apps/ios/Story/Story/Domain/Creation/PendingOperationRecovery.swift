@@ -1,0 +1,89 @@
+import Foundation
+import SwiftData
+
+// PendingOperationRecovery — P0 Phase 2/3 driver.
+//
+// On app foreground (scenePhase == .active) or Story reopen, find unfinished AI operations (PendingOperationModel
+// rows that are not saved/abandoned) and RESUME them so a completed backend plan is never silently lost because
+// the app was backgrounded, suspended, or force-quit. This mirrors AssetUnderstandingQueue.recoverOrphans +
+// drain: it is non-blocking, opportunistic, and idempotent.
+//
+// CRITICAL GUARANTEES (owner mandate):
+//   - NEVER submits a second model request. Resume reuses the persisted operationId + jobId and only
+//     polls/fetches/renders (the coordinator's resumePendingOperation enforces this).
+//   - NOT an indefinitely-running loop and NOT reliant on background URLSession / beginBackgroundTask. It runs
+//     ONE pass when the app becomes active; active polling stops when the app is suspended (the poll Task is
+//     suspended with the app) and a fresh pass resumes it on the next .active.
+//   - Single-flight: an in-progress recovery set prevents repeated foreground/reopen events from creating
+//     duplicate polling or rendering tasks for the same Story.
+@MainActor
+final class PendingOperationRecovery {
+    private let context: ModelContext
+
+    // In-flight guard shared across recovery passes in this process: a Story whose resume is running is not
+    // resumed again by a second foreground event. Coordinators are retained for the lifetime of their resume.
+    private static var inFlight: Set<UUID> = []
+    private static var retained: [UUID: StoryCreationCoordinator] = [:]
+
+    init(context: ModelContext) { self.context = context }
+
+    /// Fetch Stories that have a recoverable pending operation, resume each once.
+    func recoverAll() {
+        let desc = FetchDescriptor<PendingOperationModel>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])
+        let rows = ((try? context.fetch(desc)) ?? []).filter { $0.isRecoverable && $0.jobId != nil }
+        guard !rows.isEmpty else { return }
+        // One resume per Story (dedupe multiple rows defensively).
+        var seen = Set<UUID>()
+        for row in rows where !seen.contains(row.storyId) {
+            seen.insert(row.storyId)
+            resume(storyId: row.storyId)
+        }
+    }
+
+    /// Resume the recoverable operation for one Story. Safe to call repeatedly — the in-flight guard makes a
+    /// second call a no-op until the first resume finishes.
+    func resume(storyId: UUID) {
+        guard !Self.inFlight.contains(storyId) else { return }
+        let storyDesc = FetchDescriptor<StoryModel>(predicate: #Predicate { $0.id == storyId })
+        guard let story = (try? context.fetch(storyDesc))?.first else { return }
+
+        let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
+        guard coord.hasRecoverablePendingOperation(storyId: storyId) else { return }
+
+        Self.inFlight.insert(storyId)
+        Self.retained[storyId] = coord
+        MediaEngineV1.beacon("editplan-recover: foreground pass resuming story=\(storyId.uuidString.prefix(8))")
+
+        Task { @MainActor in
+            defer { Self.inFlight.remove(storyId); Self.retained[storyId] = nil }
+            // Re-resolve the operation's soundtrack (same path as Revise/Change Music) so a resumed render keeps
+            // its music WHERE FEASIBLE; nil renders no-music rather than block the recovery of the video.
+            let music = await Self.resolveMusic(for: storyId, story: story, context: context)
+            guard coord.resumePendingOperation(for: story, music: music) else { return }
+            while coord.isCreating { try? await Task.sleep(nanoseconds: 300_000_000) }
+            MediaEngineV1.beacon("editplan-recover: resume finished story=\(storyId.uuidString.prefix(8)) "
+                + "state=\(String(describing: coord.state))")
+        }
+    }
+
+    /// Re-resolve the pending op's soundtrack from its persisted musicSelectionRef
+    /// ("mymusic:<id>" | "provider:<trackId>" | nil). My Music resolves locally; a provider track re-resolves
+    /// live via MusicSelectionResolver (download + analysis). nil => no music (never blocks recovery).
+    private static func resolveMusic(for storyId: UUID, story: StoryModel, context: ModelContext) async
+        -> StoryCreationCoordinator.MusicSelection? {
+        let desc = FetchDescriptor<PendingOperationModel>(predicate: #Predicate { $0.storyId == storyId })
+        guard let row = ((try? context.fetch(desc)) ?? []).first(where: { $0.isRecoverable }),
+              let ref = row.musicSelectionRef, ref != "none" else { return nil }
+        if ref.hasPrefix("mymusic:") {
+            let assetId = String(ref.dropFirst("mymusic:".count))
+            return CreateStoryPreviewView.myMusicSelection(assetId: assetId, story: story, context: context)
+        }
+        if ref.hasPrefix("provider:") {
+            let trackId = String(ref.dropFirst("provider:".count))
+            let resolver = MusicSelectionResolver(context: context)
+            guard let rec = await resolver.recommend(for: story, guideFramingSummary: nil) else { return nil }
+            return await resolver.resolveSelection(recommendation: rec, trackId: trackId)
+        }
+        return nil
+    }
+}

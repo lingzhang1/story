@@ -113,6 +113,15 @@ final class StoryModel {
     // Set only when the user adds references in Creative Direction; never overwritten by inference/retry.
     var creativeDirectivesJSON: String?
 
+    // Stage 2 Creative Direction SOFT preferences — the user's free-text creative direction captured on the
+    // Customize screen ("make the cuts faster", "use the most visually striking footage first"). DRAFT TEXT:
+    // survives navigation + a failed generation so the Customize sheet can repopulate it. Additive migration
+    // (optional + defaulted nil); nil => no soft direction => behavior unchanged. This is NOT the factual Story
+    // description (intentText) — it never overwrites it. Forwarded as revision_context.soft_direction for the
+    // ORIGINAL create only (createAnotherVersion uses explore, revision supplies its own), so a one-time
+    // creative instruction is never silently inherited by an unrelated later version.
+    var creativeDirectionText: String?
+
     // Async Edit Planning (Phase 2): the in-flight planning job for THIS creation attempt. operation_id is the
     // idempotency key — persisted BEFORE submitting so a crash/restart/retry reuses the SAME job (no duplicate
     // inference). job_id is the server's handle for polling + restart recovery. A deliberate "Create Another
@@ -765,4 +774,89 @@ final class MyMusicAssetModel {
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }
+}
+
+// MARK: - Pending AI operation (durable recovery state)
+//
+// P0 RECOVERY (Phases 1-3): a completed backend edit-plan MUST NOT be silently lost because the app was
+// backgrounded, suspended, force-quit, or the Story was reopened. The in-flight state the coordinator used to
+// keep only in memory (operation_type, parent version, music, the plan itself) is NOT enough to recover after a
+// relaunch, and a single mutable `story.planJobId` cannot tell a RESUMABLE operation apart from a finished one.
+//
+// This row is the DURABLE source of truth for ONE unfinished operation. It is written BEFORE the job is
+// submitted (so a crash between submit and the first poll is recoverable) and is DELETED only when the
+// operation reaches a logical terminal state the user keeps (saved) or explicitly abandons. Exactly one row
+// per (storyId) may be non-terminal at a time — the coordinator enforces single-flight.
+//
+// Idempotency is preserved: `operationId` is the backend idempotency key. Resume/transport-retry REUSE this
+// row's operationId (never a new job); a deliberate "Create Another Version" / "Revise" creates a NEW row with
+// a NEW operationId. So recovery never triggers a second inference.
+@Model
+final class PendingOperationModel {
+    @Attribute(.unique) var id: UUID
+
+    // Identity needed to recover the operation WITHOUT re-inference.
+    var storyId: UUID
+    var operationId: String          // backend idempotency key — reused on resume/retry, new on deliberate create
+    var jobId: String?               // server job handle for polling; nil until submit returns
+    var operationType: String        // "original" | "another_version" | "revision"
+    var baseVersionId: String?       // Explore/revision: the user-selected parent/base version row id
+    var requestFingerprint: String?  // included-Moments fingerprint at submit time (drift detection; advisory)
+
+    // Lifecycle. `phase` tracks the exactly-once pipeline: submitted -> planning -> plan_ready -> rendering ->
+    // saved. `status` mirrors the last observed backend job status (queued|running|completed|failed|...).
+    var phase: String                // submitted|planning|plan_ready|rendering|saved|abandoned
+    var jobStatus: String?           // last observed backend status (advisory)
+    var failureCategory: String?     // backend failure_category when phase ended in failure
+
+    // The completed, VALIDATED-on-fetch EditPlan/2 JSON — persisted at plan_ready so rendering can resume after
+    // a force-quit WITHOUT re-polling or re-inference. Canonical snake_case wire shape (EditPlan/2).
+    var planJSON: String?
+
+    // Render context needed to reproduce the SAME output on a resumed render (music + settings + format/target).
+    var musicSelectionRef: String?   // resolved music handle so a resumed render keeps the same soundtrack
+    var outputFormat: String?
+    var targetSeconds: Double?
+
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        storyId: UUID,
+        operationId: String,
+        jobId: String? = nil,
+        operationType: String,
+        baseVersionId: String? = nil,
+        requestFingerprint: String? = nil,
+        phase: String = "submitted",
+        jobStatus: String? = nil,
+        failureCategory: String? = nil,
+        planJSON: String? = nil,
+        musicSelectionRef: String? = nil,
+        outputFormat: String? = nil,
+        targetSeconds: Double? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.storyId = storyId
+        self.operationId = operationId
+        self.jobId = jobId
+        self.operationType = operationType
+        self.baseVersionId = baseVersionId
+        self.requestFingerprint = requestFingerprint
+        self.phase = phase
+        self.jobStatus = jobStatus
+        self.failureCategory = failureCategory
+        self.planJSON = planJSON
+        self.musicSelectionRef = musicSelectionRef
+        self.outputFormat = outputFormat
+        self.targetSeconds = targetSeconds
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    /// Non-terminal operations are the ones recovery acts on.
+    var isRecoverable: Bool { phase != "saved" && phase != "abandoned" }
 }

@@ -23,6 +23,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                  GeneratedOutputModel.self, LocalIdentityModel.self,
                  MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
+                 PendingOperationModel.self,
             configurations: config)
     }
 
@@ -458,5 +459,98 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
         XCTAssertEqual(renderer.seenSoundtrackURL, soundtrack)      // future-music seam threads through
         XCTAssertNotNil(renderer.seenMusicAnalysis)
+    }
+
+    // MARK: - P0 recovery (Phases 1-3, 5)
+
+    /// A deliberate create writes ONE durable pending row (phase plan_ready->deleted on save) and leaves none
+    /// behind on success (exactly-once). Covers Phase 1 persistence + Phase 3 finalize.
+    func test_recovery_successDeletesPendingRow_exactlyOnce() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rec-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let plan = validPlan([m1])
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)),
+                                             jobClient: FakeJobClient(.ok(plan)),
+                                             renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        coord.create(for: s)
+        await awaitSettled(coord)
+        guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
+        // Exactly-once: the saved output means NO recoverable pending row remains.
+        let rows = try ctx.fetch(FetchDescriptor<PendingOperationModel>())
+        XCTAssertTrue(rows.allSatisfy { !$0.isRecoverable } || rows.isEmpty,
+                      "a saved operation must leave no recoverable pending row")
+        XCTAssertFalse(coord.hasRecoverablePendingOperation(storyId: s.id))
+        XCTAssertEqual(s.generatedOutputs.count, 1)
+    }
+
+    /// Phase 3 render-resume: a pending row at plan_ready with a saved plan renders DIRECTLY (no poll, no new
+    /// submit) and produces exactly one version. Simulates reopen after the plan completed while backgrounded.
+    func test_recovery_renderResumeFromSavedPlan_noNewInference() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rec-pr-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let plan = validPlan([m1])
+        let planJSON = String(data: try StoryContractCoding.encoder().encode(plan), encoding: .utf8)!
+        // Seed a completed-but-unrendered operation, as a background completion would have left it.
+        let op = PendingOperationModel(storyId: s.id, operationId: "op-pr", jobId: "job-pr",
+                                       operationType: "another_version", phase: "plan_ready",
+                                       jobStatus: "completed", planJSON: planJSON,
+                                       outputFormat: "vertical")
+        ctx.insert(op); try ctx.save()
+
+        let jobClient = FakeJobClient(.failUnavailable)   // would FAIL if the resume (wrongly) re-polled/submitted
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+                                             jobClient: jobClient,
+                                             renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        XCTAssertTrue(coord.resumePendingOperation(for: s))
+        await awaitSettled(coord)
+        guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
+        XCTAssertEqual(jobClient.submitCount, 0, "render-resume must NOT submit a new job")
+        XCTAssertEqual(s.generatedOutputs.count, 1, "exactly one recovered version")
+        XCTAssertFalse(coord.hasRecoverablePendingOperation(storyId: s.id))
+    }
+
+    /// Phase 5: a deliberate Create Another Version while a recoverable op exists ABANDONS the stale op (no two
+    /// non-terminal operations -> no duplicate expensive jobs).
+    func test_phase5_deliberateCreateAbandonsStalePending() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rec-ab-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let parentPlan = validPlan([m1])
+        // First, a completed original so there's a parent to Explore from.
+        let c0 = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(parentPlan)),
+                                          jobClient: FakeJobClient(.ok(parentPlan)),
+                                          renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        c0.create(for: s); await awaitSettled(c0)
+        guard case .completed(let parent) = c0.state else { return XCTFail("parent create failed") }
+
+        // Seed a stale recoverable pending op (as if a prior another_version was interrupted).
+        let stale = PendingOperationModel(storyId: s.id, operationId: "op-stale", jobId: "job-stale",
+                                          operationType: "another_version", phase: "planning")
+        ctx.insert(stale); try ctx.save()
+        XCTAssertTrue(c0.hasRecoverablePendingOperation(storyId: s.id))
+
+        // Deliberate new version must abandon the stale op.
+        let c1 = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(parentPlan)),
+                                          jobClient: FakeJobClient(.ok(parentPlan)),
+                                          renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        c1.createAnotherVersion(for: s, from: parent)
+        await awaitSettled(c1)
+        let staleRows = try ctx.fetch(FetchDescriptor<PendingOperationModel>())
+            .filter { $0.operationId == "op-stale" }
+        XCTAssertTrue(staleRows.isEmpty, "the stale pending op must be abandoned by a deliberate new version")
+    }
+
+    /// Phase 5: a failed operation keeps its pending row (phase not saved) with a failure category, so reopen
+    /// surfaces the failure honestly rather than silently losing it.
+    func test_recovery_failureKeepsRowWithCategory() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rec-f-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+                                             jobClient: FakeJobClient(.failInfeasible("too much material")),
+                                             renderer: FakeRenderer(.ok(okResult())), context: ctx)
+        coord.create(for: s)
+        await awaitSettled(coord)
+        guard case .failed = coord.state else { return XCTFail("expected .failed, got \(coord.state)") }
+        let rows = try ctx.fetch(FetchDescriptor<PendingOperationModel>()).filter { $0.storyId == s.id }
+        XCTAssertEqual(rows.first?.failureCategory, "material_infeasible")
     }
 }

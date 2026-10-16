@@ -17,7 +17,8 @@ struct StoryApp: App {
             MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
             StoryCoverageModel.self, StoryGuideModel.self,
             StoryMusicDirectionModel.self,
-            MyMusicAssetModel.self
+            MyMusicAssetModel.self,
+            PendingOperationModel.self
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -51,6 +52,9 @@ struct StoryApp: App {
         let auQueue = AssetUnderstandingQueue(context: container.mainContext)
         auQueue.recoverOrphans()
         Task { await auQueue.drain() }
+        // P0 Phase 2: recover unfinished AI edit-plan operations (app killed/backgrounded mid-plan or
+        // mid-render). Resumes polling/rendering from durable PendingOperationModel state — NEVER re-inference.
+        PendingOperationRecovery(context: container.mainContext).recoverAll()
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -66,6 +70,10 @@ struct StoryApp: App {
             if phase == .active {
                 let q = AssetUnderstandingQueue(context: container.mainContext)
                 Task { await q.drain() }
+                // P0 Phase 2: on every foreground, resume any unfinished edit-plan operation whose poll was
+                // suspended while backgrounded (or whose job completed while we were away). Idempotent +
+                // single-flight — repeated foregrounds never create duplicate polling/rendering.
+                PendingOperationRecovery(context: container.mainContext).recoverAll()
             }
         }
     }
