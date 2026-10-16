@@ -40,6 +40,9 @@ struct CreateStoryPreviewView: View {
     @State private var recommendingDuration = false
     @State private var durationRec: DurationRecommendation?
     @State private var durationNoMaterial = false
+    // Stage 2 music-routing: set when an explicit Stage 2 music preference conflicts with a user-authored
+    // MusicDirection — surfaced as an advisory (owner §2), never a silent overwrite.
+    @State private var musicConflictMessage: String?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -115,14 +118,51 @@ struct CreateStoryPreviewView: View {
     }
 
     /// Customize Your Story accept: persist BOTH the chosen duration AND the user's EXPLICIT sound preference
-    /// (authoritative — survives relaunch/regeneration), then continue the unchanged music flow.
-    private func acceptCustomize(seconds: Double, sound: SoundPreference, mode: String, approach: EditingApproach) {
+    /// (authoritative — survives relaunch/regeneration), PLUS the optional Stage 2 Creative Direction (resolved
+    /// hard directives + soft free text), then continue the unchanged music flow. The directives/soft are the
+    /// ONE-TIME creation-time instructions — composeRevisionContext folds them for the ORIGINAL create only, so
+    /// a later "Create Another Version" never inherits them. Draft text + chips persist so a failed generation
+    /// or navigation keeps what the user typed.
+    private func acceptCustomize(seconds: Double, sound: SoundPreference, mode: String, approach: EditingApproach,
+                                 directives: ResolvedDirectives?, soft: String, chipIds: [UUID],
+                                 music: ParsedMusicIntent) {
         durationRec = nil
         story.intentTargetDurationSeconds = (seconds * 10).rounded() / 10
         story.soundPreferenceExplicit = sound.rawValue   // explicit choice; never overwritten by inference
         story.editorialMode = mode                        // highlights|full|custom -> edit-plan request breadth
         story.editingApproachExplicit = approach.rawValue // storytelling|visual_first -> planning path
+        // Stage 2 Creative Direction — persist resolved HARD directives (stable UUIDs) + the SOFT text draft.
+        // nil directives => clear any stale persisted set (empty input preserves prior behavior). Never touches
+        // the factual Story description (intentText). Beat-sync lives INSIDE `soft` (edit-planner only) — it is
+        // intentionally not routed to music, so matching cuts to the music never changes the soundtrack (§1).
+        story.creativeDirectivesJSON = directives?.toWireJSON()
+        let trimmedSoft = soft.trimmingCharacters(in: .whitespacesAndNewlines)
+        story.creativeDirectionText = trimmedSoft.isEmpty ? nil : trimmedSoft
         try? context.save()
+        // Route an EXPLICIT music PREFERENCE to MusicPlan via MusicDirection (owner §1/§2). A user-authored
+        // direction is authoritative — do NOT silently overwrite; surface the conflict and keep theirs. When
+        // none is user-authored, the deliberate Stage 2 instruction becomes the authored direction so the
+        // downstream music recommender uses it. Music-only: this regenerates nothing else (§4) — AU/Guide/
+        // Coverage are independent; it just bumps the MusicDirection fingerprint the MusicPlan cache compares.
+        if let pref = music.preference {
+            let coord = MusicDirectionCoordinator(context: context)
+            if coord.isUserAuthored(for: story.id) {
+                let existing = coord.direction(for: story.id)?.moodTags ?? []
+                // Surface only a MATERIAL conflict (the requested moods are not already covered).
+                if !Set(pref.moodTags).isSubset(of: Set(existing)) {
+                    musicConflictMessage = "You asked for “\(pref.phrase)” music, but this Story already has a "
+                        + "music feel you set earlier. I kept your earlier choice. Change it from the music "
+                        + "controls if you want “\(pref.phrase)” instead."
+                }
+                // else: compatible — nothing to do, the authored direction already covers it.
+            } else {
+                let moods = pref.moodTags
+                let summary = "A \(moods.joined(separator: " · ")) soundtrack"
+                let dto = MusicDirectionContractDTO(summary: summary, moodTags: moods, energy: nil,
+                                                    progression: nil, rawUserDescription: pref.phrase)
+                coord.save(userEdit: dto, for: story.id)   // deliberate Stage 2 instruction -> authored
+            }
+        }
         beginMusicFlow()
     }
 
@@ -338,8 +378,14 @@ struct CreateStoryPreviewView: View {
                 initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
                 initialEditingApproach: story.effectiveEditingApproach,
                 visualFirstAvailable: StoryMultimodalPlanning.enabled,
-                onCreate: { seconds, sound, mode, approach in
-                    acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach) },
+                numbering: StoryMomentNumbering(story: story.moments),
+                momentForId: { id in story.moments.first { $0.id == id } },
+                initialCreativeDirection: story.creativeDirectionText ?? "",
+                initialReferenceChipIds: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)
+                    .map { Array(Set($0.mustInclude + $0.exclude + [$0.opening, $0.ending].compactMap { $0 })) } ?? [],
+                onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
+                    acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
+                                    directives: directives, soft: soft, chipIds: chipIds, music: music) },
                 onCancel: { durationRec = nil })
                 .presentationDetents([.large])
         }
@@ -348,6 +394,10 @@ struct CreateStoryPreviewView: View {
         } message: {
             Text("There isn't enough usable footage yet to build a Story. Capture a few more Moments and try again.")
         }
+        .alert("Kept your music choice", isPresented: Binding(
+            get: { musicConflictMessage != nil }, set: { if !$0 { musicConflictMessage = nil } })) {
+            Button("OK", role: .cancel) { musicConflictMessage = nil }
+        } message: { Text(musicConflictMessage ?? "") }
         .overlay {
             if resolvingMusic || preparingSelection || recommendingDuration {
                 ZStack {

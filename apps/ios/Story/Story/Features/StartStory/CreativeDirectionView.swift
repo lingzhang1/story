@@ -36,14 +36,6 @@ struct CreativeDirectionView: View {
     @State private var musicLoading = false
     @State private var musicSheetOpen = false
 
-    // Explicit Moment References (Phase B/C): a stable numbering snapshot captured when the step appears, the
-    // chips the user inserted (each carrying a stable Moment UUID), and the picker sheet toggle. Resolved to
-    // directives + persisted on confirm. Empty / hidden when the Story has no referenceable Moments yet.
-    @State private var momentNumbering: StoryMomentNumbering?
-    @State private var referenceChips: [MomentReferenceChipModel] = []
-    @State private var showReferencePicker = false
-    @State private var referenceClarification: String?
-
     private let presets: [(title: String, desc: String)] = [
         ("Cinematic journey", "Cinematic · Scenic · Journey"),
         ("Energetic adventure", "Energetic · Kinetic · Adventure"),
@@ -118,25 +110,10 @@ struct CreativeDirectionView: View {
                 .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.32))
             StoryTextField(placeholder: "We're hiking the Tour du Mont Blanc for 8 days…",
                            text: $description, minHeight: 220)
-            referenceBar
             StoryTextField(placeholder: "Give it a title", text: $title, minHeight: 44)
             Spacer(minLength: 8)
             StoryPrimaryButton(title: "Continue") { step = .feel }
                 .disabled(cannotContinueDescribe).opacity(cannotContinueDescribe ? 0.4 : 1)
-        }
-        .sheet(isPresented: $showReferencePicker) {
-            if let numbering = momentNumbering {
-                MomentReferencePicker(
-                    numbering: numbering,
-                    momentForId: { id in referenceableMoments.first { $0.id == id } },
-                    alreadyReferenced: Set(referenceChips.map(\.id)),
-                    onConfirm: { ids in
-                        // Replace chips with the confirmed selection, preserving snapshot order.
-                        referenceChips = numbering.items
-                            .filter { ids.contains($0.id) }
-                            .map { MomentReferenceChipModel(id: $0.id, displayNumber: $0.number) }
-                    })
-            }
         }
     }
     private var cannotContinueDescribe: Bool {
@@ -144,84 +121,10 @@ struct CreativeDirectionView: View {
         || description.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    // MARK: - Explicit Moment References
-
-    /// The Moments a user can reference here: the seeded set (Create-from-Moments) or, if none, the Story's own
-    /// linked Moments. Empty for a bare "Start a Story" with no Moments yet (the reference bar then hides).
-    private var referenceableMoments: [MomentModel] {
-        if !seedMoments.isEmpty { return seedMoments }
-        return resolvedStory?.moments ?? []
-    }
-
-    /// Build (once) the stable numbering snapshot from the referenceable Moments' current order.
-    private func ensureNumbering() {
-        guard momentNumbering == nil else { return }
-        let moments = referenceableMoments
-        guard !moments.isEmpty else { return }
-        momentNumbering = StoryMomentNumbering(story: moments)
-    }
-
-    @ViewBuilder
-    private var referenceBar: some View {
-        if !referenceableMoments.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Button { ensureNumbering(); showReferencePicker = true } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
-                        Text("Add Moment reference").font(StoryTheme.body(13, .medium))
-                    }
-                    .foregroundStyle(StoryTheme.gold)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                MomentReferenceChipRow(chips: referenceChips) { id in
-                    referenceChips.removeAll { $0.id == id }   // removes the REFERENCE only, never the Moment
-                }
-                if let msg = referenceClarification {
-                    Text(msg).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
-                }
-            }
-        }
-    }
-
-    /// Merge typed "Moment N" references in the description with the visual chips into resolved directives, and
-    /// persist them to the Story as the backend wire shape. Surfaces clarification instead of silently dropping.
-    private func resolveAndPersistDirectives(to story: StoryModel) {
-        ensureNumbering()
-        guard let numbering = momentNumbering else {
-            story.creativeDirectivesJSON = nil; return
-        }
-        let typed = MomentReferenceResolver.parseTyped(description)
-        // Chips default to the INCLUDE slot (a visually-picked Moment is "use this"); typed verbs set opening/
-        // ending/exclude explicitly. A later typed opening/ending still overrides.
-        let chipRefs = referenceChips.map { (slot: DirectiveSlot.include, id: $0.id) }
-        let ordering = MomentReferenceResolver.parseOrdering(description)
-        let implicit = MomentReferenceResolver.parseImplicitFollow(description)
-        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering, implicitFollow: implicit, in: numbering)
-        if result.needsClarification {
-            referenceClarification = clarificationMessage(result.unresolved, numbering: numbering)
-        } else {
-            referenceClarification = nil
-        }
-        story.creativeDirectivesJSON = result.directives.toWireJSON()
-    }
-
-    private func clarificationMessage(_ unresolved: [UnresolvedReference],
-                                      numbering: StoryMomentNumbering) -> String {
-        let parts = unresolved.map { u -> String in
-            switch u.reason {
-            case .numberOutOfRange(let n): return "Moment \(n) doesn't exist (this Story has \(numbering.count))"
-            case .momentUnavailable: return "a referenced Moment is no longer in this Story"
-            }
-        }
-        return "Please fix: " + parts.joined(separator: "; ") + "."
-    }
-
-    /// Confirm "Start Story": resolve + persist explicit Moment-reference directives onto the Story (so they
-    /// survive the hop to generation and version re-creates), then navigate to Story Home.
+    /// Confirm "Start Story": Stage 1 is description-only — Moment-specific editing instructions live on the
+    /// Stage 2 Customize screen, NOT here. So confirming just marks the Story confirmed and navigates to Story
+    /// Home; seeded Library Moments were already attached in resolve(). No directives are persisted here.
     private func confirmStart() {
-        if let s = resolvedStory { resolveAndPersistDirectives(to: s) }
         confirmed = true
         navigate = true
     }

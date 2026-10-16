@@ -14,8 +14,20 @@ struct CustomizeYourStoryView: View {
     /// Whether the Visual-first option can be honored right now (StoryMultimodalPlanning.enabled). When false
     /// the Editing Approach section is HIDDEN entirely — we never present an option that silently can't run.
     let visualFirstAvailable: Bool
-    /// Returns chosen duration (seconds), sound choice, length wire, and the chosen editing approach.
-    let onCreate: (Double, SoundPreference, String, EditingApproach) -> Void
+    /// STABLE Moment-number snapshot for Creative Direction (Stage 2). Empty => the section is hidden (no
+    /// referenceable Moments). Typed "Moment N" references resolve against THIS snapshot.
+    let numbering: StoryMomentNumbering
+    /// Resolve a stable Moment id -> MomentModel for the visual picker's live thumbnails (no media copy).
+    let momentForId: (UUID) -> MomentModel?
+    /// Draft Creative Direction text to repopulate (survives navigation / failed generation).
+    let initialCreativeDirection: String
+    /// Draft reference chips to repopulate (stable ids; display numbers re-derived from `numbering`).
+    let initialReferenceChipIds: [UUID]
+    /// Returns chosen duration (seconds), sound, length wire, editing approach, resolved HARD directives (nil
+    /// when none), the SOFT creative-direction text, the chip ids, and the parsed MUSIC intent — so the caller
+    /// persists the draft, forwards directives + soft_direction to the edit planner, and routes an explicit
+    /// music preference to MusicPlan (owner Music-Routing §1).
+    let onCreate: (Double, SoundPreference, String, EditingApproach, ResolvedDirectives?, String, [UUID], ParsedMusicIntent) -> Void
     let onCancel: () -> Void
 
     enum LengthChoice: Hashable { case highlights, full, custom
@@ -26,12 +38,23 @@ struct CustomizeYourStoryView: View {
     @State private var sound: SoundPreference
     @State private var approach: EditingApproach
     @State private var customSeconds: Double
+    // Stage 2 Creative Direction (optional). Draft text + reference chips, resolved to directives on Create.
+    @State private var creativeDirection: String
+    @State private var chips: [MomentReferenceChipModel]
+    @State private var showReferencePicker = false
+    @State private var clarification: String?
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
          initialEditingApproach: EditingApproach = .default, visualFirstAvailable: Bool = false,
-         onCreate: @escaping (Double, SoundPreference, String, EditingApproach) -> Void, onCancel: @escaping () -> Void) {
+         numbering: StoryMomentNumbering = StoryMomentNumbering(ordered: []),
+         momentForId: @escaping (UUID) -> MomentModel? = { _ in nil },
+         initialCreativeDirection: String = "", initialReferenceChipIds: [UUID] = [],
+         onCreate: @escaping (Double, SoundPreference, String, EditingApproach, ResolvedDirectives?, String, [UUID], ParsedMusicIntent) -> Void,
+         onCancel: @escaping () -> Void) {
         self.rec = rec; self.inferredSound = inferredSound; self.initialExplicitSound = initialExplicitSound
         self.initialEditingApproach = initialEditingApproach; self.visualFirstAvailable = visualFirstAvailable
+        self.numbering = numbering; self.momentForId = momentForId
+        self.initialCreativeDirection = initialCreativeDirection; self.initialReferenceChipIds = initialReferenceChipIds
         self.onCreate = onCreate; self.onCancel = onCancel
         // Default length: Full Story when a recommended point exists, else Custom.
         _length = State(initialValue: rec.recommendedPointSeconds != nil ? .full : .custom)
@@ -43,6 +66,12 @@ struct CustomizeYourStoryView: View {
         let seed = rec.recommendedPointSeconds
             ?? ((rec.evidence.feasibleBandSeconds.first ?? 10) + (rec.evidence.feasibleBandSeconds.last ?? 30)) / 2
         _customSeconds = State(initialValue: seed.rounded())
+        // Seed Creative Direction draft (survives navigation / failed generation). Chips re-derive their display
+        // number from the current numbering snapshot; an id no longer present is dropped (surfaced on Create).
+        _creativeDirection = State(initialValue: initialCreativeDirection)
+        _chips = State(initialValue: numbering.items
+            .filter { initialReferenceChipIds.contains($0.id) }
+            .map { MomentReferenceChipModel(id: $0.id, displayNumber: $0.number) })
     }
 
     private var ceiling: Double { max(rec.recommendation?.feasibleCeilingSeconds ?? 60, rec.evidence.feasibleBandSeconds.last ?? 60) }
@@ -117,7 +146,33 @@ struct CustomizeYourStoryView: View {
                     soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
                 }
 
-                Button { onCreate(chosenSeconds, sound, length.wire, approach) } label: {
+                // SECTION — Creative Direction (OPTIONAL; Stage 2). Shown only when there are referenceable
+                // Moments. Natural-language instructions + typed "Moment N" references + a visual picker; typed
+                // references resolve against the stable numbering snapshot. Hard references that don't resolve
+                // BLOCK Create (never silently dropped). Empty => request byte-identical to today.
+                if numbering.count > 0 {
+                    section(title: "Creative Direction",
+                            subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
+                        StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
+                                       text: $creativeDirection, minHeight: 110)
+                        Button { showReferencePicker = true } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
+                                Text("Add Moment reference").font(StoryTheme.body(13, .medium))
+                            }
+                            .foregroundStyle(StoryTheme.gold)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        MomentReferenceChipRow(chips: chips) { id in chips.removeAll { $0.id == id } }
+                        if let clarification {
+                            Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
+                        }
+                    }
+                }
+
+                Button { attemptCreate() } label: {
                     Text("Create my Story").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
                         .frame(maxWidth: .infinity).padding(.vertical, 16)
                         .background(StoryTheme.cream).clipShape(Capsule())
@@ -132,6 +187,50 @@ struct CustomizeYourStoryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .presentationBackground(StoryTheme.ink)
+        .sheet(isPresented: $showReferencePicker) {
+            MomentReferencePicker(
+                numbering: numbering,
+                momentForId: momentForId,
+                alreadyReferenced: Set(chips.map(\.id)),
+                onConfirm: { ids in
+                    chips = numbering.items.filter { ids.contains($0.id) }
+                        .map { MomentReferenceChipModel(id: $0.id, displayNumber: $0.number) }
+                })
+        }
+    }
+
+    /// Resolve the typed references + chips against the stable snapshot. Hard references that cannot resolve
+    /// BLOCK creation with inline clarification (owner: never silently discard). The soft free text is forwarded
+    /// as-is (soft_direction) regardless of whether it also contained typed references. On success, hand the
+    /// resolved directives + the soft text + the chip ids out so the caller persists the draft and forwards them.
+    private func attemptCreate() {
+        let typed = MomentReferenceResolver.parseTyped(creativeDirection)
+        let chipRefs = chips.map { (slot: DirectiveSlot.include, id: $0.id) }
+        let ordering = MomentReferenceResolver.parseOrdering(creativeDirection)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(creativeDirection)
+        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering,
+                                                     implicitFollow: implicit, in: numbering)
+        if result.needsClarification {
+            clarification = clarificationMessage(result.unresolved)
+            return   // never submit expensive generation with unresolved hard references
+        }
+        clarification = nil
+        let directives: ResolvedDirectives? = result.directives.isEmpty ? nil : result.directives
+        let soft = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Separate the music concern from the editing concern (owner Music-Routing §1). The caller routes the
+        // explicit music PREFERENCE to MusicPlan; beat-sync stays in `soft` for the edit planner only.
+        let music = MomentReferenceResolver.parseMusicIntent(creativeDirection)
+        onCreate(chosenSeconds, sound, length.wire, approach, directives, soft, chips.map(\.id), music)
+    }
+
+    private func clarificationMessage(_ unresolved: [UnresolvedReference]) -> String {
+        let parts = unresolved.map { u -> String in
+            switch u.reason {
+            case .numberOutOfRange(let n): return "Moment \(n) doesn't exist (this Story has \(numbering.count))"
+            case .momentUnavailable: return "a referenced Moment is no longer in this Story"
+            }
+        }
+        return "Please fix: " + parts.joined(separator: "; ") + "."
     }
 
     // MARK: - row builders

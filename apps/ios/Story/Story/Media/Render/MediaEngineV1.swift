@@ -300,24 +300,58 @@ struct MediaEngineV1 {
             let start = CMTime(seconds: segment.sourceStartSeconds ?? 0, preferredTimescale: 600)
             let end = CMTime(seconds: segment.sourceEndSeconds ?? segment.outputDurationSeconds,
                              preferredTimescale: 600)
-            let srcRange = CMTimeRange(start: start, end: end)
+            // CLAMP the plan's source range to the clip's REAL video-track range. A new-version/revise plan can
+            // estimate a sourceEnd past the clip's actual duration; inserting such a range inserts LESS media
+            // than requested (or nothing), leaving the composition track short while `placed` still claims the
+            // full output slice -> AVAssetExportSession fails with -11841 "The video could not be composed"
+            // ("Operation Stopped"). Intersecting with the track's own timeRange guarantees the insert covers
+            // exactly what we place. If the intersection is empty (source range entirely past the clip), fall
+            // back to the clip's own tail of the requested length; if the clip has no usable video at all, fail
+            // honestly rather than build an uncoverable composition.
+            let trackRange = srcVideo.timeRange                                   // real available media range
+            let requested = CMTimeRange(start: start, end: end)
+            var srcRange = requested.intersection(trackRange)
+            if srcRange.duration.seconds <= 0.03 {                                // empty / sub-frame overlap
+                let want = max(0.1, (segment.sourceEndSeconds ?? segment.outputDurationSeconds)
+                               - (segment.sourceStartSeconds ?? 0))
+                let dur = CMTime(seconds: min(want, max(0.1, trackRange.duration.seconds)), preferredTimescale: 600)
+                let fallbackStart = CMTimeMaximum(.zero, CMTimeSubtract(CMTimeRangeGetEnd(trackRange), dur))
+                srcRange = CMTimeRange(start: fallbackStart, duration: dur)
+                    .intersection(trackRange)
+            }
+            guard srcRange.duration.seconds > 0.03 else {
+                throw MediaEngineError.exportFailed(
+                    "segment source range empty for \(segment.assetId) (clip has no usable video)")
+            }
 
             // Overlap: pull this segment's start back by xf so it begins while the previous is still visible.
             let segStart = i == 0 ? cursor
                 : CMTimeSubtract(cursor, CMTime(seconds: xf, preferredTimescale: 600))
 
             try track.insertTimeRange(srcRange, of: srcVideo, at: segStart)
+            var audioInsertedDur: CMTime? = nil
             if let srcAudio = asset.tracks(withMediaType: .audio).first, let at = aTrack {
-                try? at.insertTimeRange(srcRange, of: srcAudio, at: segStart)
+                // Audio clamped to the SAME range intersected with the audio track (audio may be shorter).
+                let aRange = srcRange.intersection(srcAudio.timeRange)
+                if aRange.duration.seconds > 0.0 {
+                    try? at.insertTimeRange(aRange, of: srcAudio, at: segStart)
+                    audioInsertedDur = aRange.duration
+                }
             }
-            // speed (0.5x–2.0x): scale the inserted range to the requested output duration
-            if let speed = segment.speed, speed > 0, abs(speed - 1.0) > 0.01 {
-                let inserted = CMTimeRange(start: segStart, duration: srcRange.duration)
-                let scaled = CMTime(seconds: srcRange.duration.seconds / speed, preferredTimescale: 600)
-                track.scaleTimeRange(inserted, toDuration: scaled)
+            // Map the ACTUALLY-INSERTED (clamped) range onto the planned output duration so the on-track
+            // content length equals exactly what `placed` claims — coverage is then exact by construction even
+            // when the source range was clamped shorter than requested, OR a speed was applied. (A clamp +
+            // no-speed path previously left the track shorter than its slice -> -11841.) outputDurationSeconds
+            // already reflects the planner's speed intent, so mapping inserted->outDur subsumes the speed scale.
+            let outDur = CMTime(seconds: max(0.1, segment.outputDurationSeconds), preferredTimescale: 600)
+            if CMTimeCompare(srcRange.duration, outDur) != 0 {
+                track.scaleTimeRange(CMTimeRange(start: segStart, duration: srcRange.duration), toDuration: outDur)
+            }
+            // Scale audio on ITS OWN inserted range (audio may be shorter than video) so it stays in sync.
+            if let aDur = audioInsertedDur, let at = aTrack, CMTimeCompare(aDur, outDur) != 0 {
+                at.scaleTimeRange(CMTimeRange(start: segStart, duration: aDur), toDuration: outDur)
             }
 
-            let outDur = CMTime(seconds: segment.outputDurationSeconds, preferredTimescale: 600)
             placed.append((segment, i % 2, CMTimeRange(start: segStart, duration: outDur)))
             cursor = CMTimeAdd(segStart, outDur)   // next segment appends after THIS one's end
         }
