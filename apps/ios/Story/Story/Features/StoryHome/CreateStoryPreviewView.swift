@@ -380,6 +380,14 @@ struct CreateStoryPreviewView: View {
                 fileExists: { RenderOutputStore.shared.exists(relative: $0) })
             if case .showResult(let outputId) = decision {
                 reopenOutput = story.generatedOutputs.first { $0.id == outputId }
+                return
+            }
+            // Fresh, plannable Story with no output/op: the static "Here's what I'm working with" page adds
+            // nothing (the user can review photos in Moments), so go STRAIGHT into the create flow — the
+            // Customize sheet (Creative Direction) + duration + music picker present over this host. The page
+            // is never a resting surface.
+            if StoryCreationReadiness.evaluate(story: story, context: context).isPlannable {
+                startCreate()
             }
         }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
