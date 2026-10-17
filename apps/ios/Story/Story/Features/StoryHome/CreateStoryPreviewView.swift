@@ -333,19 +333,24 @@ struct CreateStoryPreviewView: View {
         }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
         // renders exactly that track and self-manages its Result. Reopen -> Result directly.
-        .navigationDestination(isPresented: $showCreating) {
+        // These are presented as fullScreenCover (NOT navigationDestination): this host is itself a pushed
+        // view, and a nested navigationDestination set from onAppear / after a sheet dismissal fires
+        // unreliably on a pushed view (it silently dropped the Creating push, so the edit-plan job was never
+        // submitted). A cover is reliable regardless of nav-stack timing.
+        .fullScreenCover(isPresented: $showCreating) {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
-                              onRequestRecreate: { src in handleRecreate(from: src) })
+                              onRequestRecreate: { src in handleRecreate(from: src) },
+                              onCompleted: { out in showCreating = false; reopenOutput = out })
         }
-        .navigationDestination(isPresented: $showResuming) {
+        .fullScreenCover(isPresented: $showResuming) {
             // P0 recovery: resume the existing unfinished operation (reuse the job, no new inference) and show
             // the real progress UI, landing on Result. Not a fresh create.
             StoryCreatingView(story: story, preresolvedMusic: resumePreresolvedMusic, musicIsPreresolved: true,
-                              onCompleted: { out in reopenOutput = out; showResuming = false },
+                              onCompleted: { out in showResuming = false; reopenOutput = out },
                               resumePending: true)
         }
-        .navigationDestination(item: $reopenOutput) { output in
+        .fullScreenCover(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
                             onRecreate: { src in handleRecreate(from: src) })
         }
