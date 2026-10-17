@@ -171,6 +171,12 @@ export class StoryApiStack extends cdk.Stack {
     jobsTable.grantReadWriteData(worker);
     stagingBucket.grantRead(worker);
     stagingBucket.grantDelete(worker);
+    // The SqsEventSource grants CONSUME (receive/delete), but the EventBridge reconcile tick runs
+    // reconcile_lost_enqueue() which RE-ENQUEUES stranded jobs via sqs:SendMessage. Without this grant the
+    // send fails with AccessDenied, the reconciler swallows it, and a job whose original enqueue was lost sits
+    // in `queued` forever (observed: status=queued attempt_count=0 reconcile_count=None for 10+ min). Grant
+    // send so the lost-enqueue recovery actually works.
+    jobsQueue.grantSendMessages(worker);
     worker.addToRolePolicy(new iam.PolicyStatement({
       sid: "BedrockInvoke", effect: iam.Effect.ALLOW,
       actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
