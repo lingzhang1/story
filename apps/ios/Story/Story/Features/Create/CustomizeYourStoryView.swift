@@ -97,7 +97,34 @@ struct CustomizeYourStoryView: View {
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
                 }
 
-                // SECTION — Editing approach (TOP: the primary creative decision). Shown ONLY when Visual-first
+                // SECTION — Creative Direction (OPTIONAL; Stage 2) — TOP of the sheet (the primary creative
+                // input). Shown only when there are referenceable Moments. Natural-language instructions + typed
+                // "Moment N" references + a visual picker; typed references resolve against the stable numbering
+                // snapshot. Hard references that don't resolve BLOCK Create (never silently dropped). Empty =>
+                // request byte-identical to today.
+                if numbering.count > 0 {
+                    section(title: "Creative Direction",
+                            subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
+                        StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
+                                       text: $creativeDirection, minHeight: 110)
+                        Button { showReferencePicker = true } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
+                                Text("Add Moment reference").font(StoryTheme.body(13, .medium))
+                            }
+                            .foregroundStyle(StoryTheme.gold)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        MomentReferenceChipRow(chips: chips) { id in chips.removeAll { $0.id == id } }
+                        if let clarification {
+                            Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
+                        }
+                    }
+                }
+
+                // SECTION — Editing approach (the primary structural decision). Shown ONLY when Visual-first
                 // can actually be honored (the feature flag is the deployment safety gate), so an unavailable
                 // option is never presented. Both approaches preserve length, music, and original sounds.
                 if visualFirstAvailable {
@@ -144,32 +171,6 @@ struct CustomizeYourStoryView: View {
                     soundRow(.immersive, "Immersive", "Bring natural sounds, voices and atmosphere forward")
                     soundRow(.balanced, "Balanced", "Blend original sounds with background music")
                     soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
-                }
-
-                // SECTION — Creative Direction (OPTIONAL; Stage 2). Shown only when there are referenceable
-                // Moments. Natural-language instructions + typed "Moment N" references + a visual picker; typed
-                // references resolve against the stable numbering snapshot. Hard references that don't resolve
-                // BLOCK Create (never silently dropped). Empty => request byte-identical to today.
-                if numbering.count > 0 {
-                    section(title: "Creative Direction",
-                            subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
-                        StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
-                                       text: $creativeDirection, minHeight: 110)
-                        Button { showReferencePicker = true } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
-                                Text("Add Moment reference").font(StoryTheme.body(13, .medium))
-                            }
-                            .foregroundStyle(StoryTheme.gold)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                        MomentReferenceChipRow(chips: chips) { id in chips.removeAll { $0.id == id } }
-                        if let clarification {
-                            Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
-                        }
-                    }
                 }
 
                 Button { attemptCreate() } label: {
