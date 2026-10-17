@@ -15,6 +15,10 @@ struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
+    /// When set, this host launches a CREATE ANOTHER VERSION from that parent (Explore + Customize), not a
+    /// fresh original create. Nil = fresh original create. Either way this screen NEVER reopens an existing
+    /// result — StoryHomeView decides reopen vs create at the Create tap; the preview is always a create.
+    var forceNewVersionFrom: GeneratedOutputModel? = nil
 
     // R-c Batch B: coordinator-driven create/result navigation. The visible Create
     // button is still an intentional disabled state (Batch C flips availability on
@@ -310,7 +314,6 @@ struct CreateStoryPreviewView: View {
             let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
             if probe.hasRecoverablePendingOperation(storyId: story.id) {
                 MediaEngineV1.beacon("preview-route: RESUME story=\(story.id.uuidString.prefix(8))")
-                // Music resolve is async; do it off the main actor, then show the resume screen.
                 Task {
                     resumePreresolvedMusic = await PendingOperationRecovery.resolveMusicForResume(
                         storyId: story.id, story: story, context: context)
@@ -318,22 +321,14 @@ struct CreateStoryPreviewView: View {
                 }
                 return
             }
-            let decision = ReopenDecision.decide(
-                outputs: story.generatedOutputs,
-                isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
-                fileExists: { RenderOutputStore.shared.exists(relative: $0) })
-            let outs = story.generatedOutputs.count
-            let withFile = story.generatedOutputs.filter { ($0.relativeFilePath.map { RenderOutputStore.shared.exists(relative: $0) } ?? false) }.count
-            let stale = story.generatedOutputs.filter { StoryCreationCoordinator.isOutputStale(output: $0, story: story) }.count
-            if case .showResult(let outputId) = decision {
-                MediaEngineV1.beacon("preview-route: RESULT story=\(story.id.uuidString.prefix(8)) outs=\(outs) withFile=\(withFile) stale=\(stale)")
-                reopenOutput = story.generatedOutputs.first { $0.id == outputId }
-                return
-            }
-            let plannable = StoryCreationReadiness.evaluate(story: story, context: context).isPlannable
-            MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8)) outs=\(outs) withFile=\(withFile) stale=\(stale) plannable=\(plannable)")
-            if plannable {
-                startCreate()
+            // This host is ALWAYS a create (StoryHomeView routes reopen -> Result directly). Start the flow:
+            // a Create Another Version from a parent (Explore + Customize), else a fresh original create.
+            if let parent = forceNewVersionFrom {
+                MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
+                handleRecreate(from: parent)
+            } else {
+                MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8))")
+                beginCreateFlow()
             }
         }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating

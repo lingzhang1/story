@@ -24,6 +24,9 @@ struct StoryHomeView: View {
     /// When Create decides a good output already exists, push the Result directly (the "Here's what I'm
     /// working with" preview is never shown as a resting page).
     @State private var reopenOutput: GeneratedOutputModel?
+    /// Set when "Create another version" is tapped on the Result — carried into the create host so it launches
+    /// a new-version (Explore + Customize) flow rather than a fresh original create. Cleared after each use.
+    @State private var recreateParent: GeneratedOutputModel?
     @State private var pickerItems = false
     @State private var showMoments = false
     @State private var showAddMoments = false      // Phase 3: "Add Moments" source chooser
@@ -181,14 +184,22 @@ struct StoryHomeView: View {
             // The scan flow carries selected_opportunity into Director (survives rescan).
             SceneScanFlowView(captureContext: .story(story), selectedOpportunity: launch.opportunity)
         }
-        .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
+        .navigationDestination(isPresented: $showPreview) {
+            CreateStoryPreviewView(story: story, forceNewVersionFrom: recreateParent)
+        }
         .navigationDestination(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output,
-                            onHome: { if let onBack { onBack() } else { dismiss() } },
-                            onRecreate: { _ in
-                                // "Create another version" from the Result -> run the create flow (which shows
-                                // the Customize sheet). Routed through the preview host (auto-starts, no grid).
+                            onHome: {
+                                // Pop the Result first (clear the item binding), THEN run the Story's own back
+                                // so "Home" reaches the app Home instead of leaving the Result stuck on screen.
                                 reopenOutput = nil
+                                DispatchQueue.main.async { if let onBack { onBack() } else { dismiss() } }
+                            },
+                            onRecreate: { parent in
+                                // "Create another version" from the Result -> push the create host as a
+                                // NEW-VERSION flow (Explore + Customize), not a fresh original create.
+                                reopenOutput = nil
+                                recreateParent = parent
                                 DispatchQueue.main.async { showPreview = true }
                             })
         }
@@ -262,6 +273,7 @@ struct StoryHomeView: View {
         case .showResult(let outputId):
             reopenOutput = story.generatedOutputs.first { $0.id == outputId }
         case .create:
+            recreateParent = nil   // fresh original create (not a Create-Another-Version)
             showPreview = true
         }
     }
