@@ -311,18 +311,10 @@ struct CreateStoryPreviewView: View {
         .onAppear {
             guard !recoveryChecked else { return }
             recoveryChecked = true
-            let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
-            if probe.hasRecoverablePendingOperation(storyId: story.id) {
-                MediaEngineV1.beacon("preview-route: RESUME story=\(story.id.uuidString.prefix(8))")
-                Task {
-                    resumePreresolvedMusic = await PendingOperationRecovery.resolveMusicForResume(
-                        storyId: story.id, story: story, context: context)
-                    showResuming = true
-                }
-                return
-            }
-            // This host is ALWAYS a create (StoryHomeView routes reopen -> Result directly). Start the flow:
-            // a Create Another Version from a parent (Explore + Customize), else a fresh original create.
+            // This host ONLY starts a create (StoryHomeView routes reopen -> Result and in-flight resume
+            // elsewhere). It deliberately does NOT do recovery routing — doing so here raced the app-level
+            // PendingOperationRecovery on the SAME op and stuck the UI in a "Preparing" loop. A Create Another
+            // Version from a parent (Explore + Customize), else a fresh original create.
             if let parent = forceNewVersionFrom {
                 MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
                 handleRecreate(from: parent)
@@ -342,13 +334,6 @@ struct CreateStoryPreviewView: View {
                               sourceVersion: recreateSource,
                               onRequestRecreate: { src in handleRecreate(from: src) },
                               onCompleted: { out in showCreating = false; reopenOutput = out })
-        }
-        .fullScreenCover(isPresented: $showResuming) {
-            // P0 recovery: resume the existing unfinished operation (reuse the job, no new inference) and show
-            // the real progress UI, landing on Result. Not a fresh create.
-            StoryCreatingView(story: story, preresolvedMusic: resumePreresolvedMusic, musicIsPreresolved: true,
-                              onCompleted: { out in showResuming = false; reopenOutput = out },
-                              resumePending: true)
         }
         .fullScreenCover(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,

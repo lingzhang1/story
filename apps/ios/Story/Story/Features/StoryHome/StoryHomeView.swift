@@ -265,14 +265,6 @@ struct StoryHomeView: View {
     /// directly; otherwise push the create-flow host (which auto-starts duration + Customize + music; the
     /// "Here's what I'm working with" grid is never a resting page).
     private func startCreateOrOpen() {
-        // A live unfinished operation takes precedence: route into the create host, which resumes it (reusing
-        // the job, no re-inference) and shows honest progress. Checked synchronously so navigation fires.
-        let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
-        if probe.hasRecoverablePendingOperation(storyId: story.id) {
-            recreateParent = nil
-            showPreview = true   // the host's onAppear detects the recoverable op and resumes it
-            return
-        }
         let decision = ReopenDecision.decide(
             outputs: story.generatedOutputs,
             isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
