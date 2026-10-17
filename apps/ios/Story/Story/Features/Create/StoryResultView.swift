@@ -264,23 +264,32 @@ struct StoryResultView: View {
     }
 
     /// Observe (NOT drive) the app-level recovery: show the banner while a pending op exists, and surface the
-    /// new version when the Story's output count grows past the baseline captured on appear. Polls lightly;
-    /// starts no coordinator, so it cannot race the recovery owner.
+    /// new version once it lands. The recovery persists the new output via a DIFFERENT ModelContext, so the
+    /// view's cached `story.generatedOutputs` relationship does NOT update — we must RE-FETCH from the context
+    /// each poll. Starts no coordinator, so it cannot race the recovery owner.
     private func observePendingRecovery() async {
-        baselineOutputCount = story.generatedOutputs.count
+        let sid = story.id
+        let currentId = output.versionId ?? output.id
+        func freshOutputs() -> [GeneratedOutputModel] {
+            let desc = FetchDescriptor<GeneratedOutputModel>()
+            let all = (try? context.fetch(desc)) ?? []
+            return all.filter { $0.story?.id == sid }
+        }
+        baselineOutputCount = freshOutputs().count
         let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         for _ in 0..<150 {   // ~5 min at 2s
-            let hasPending = probe.hasRecoverablePendingOperation(storyId: story.id)
-            let newest = story.generatedOutputs.sorted { $0.createdAt > $1.createdAt }.first
-            if story.generatedOutputs.count > baselineOutputCount, let newest,
-               (newest.versionId ?? newest.id) != (output.versionId ?? output.id) {
+            let hasPending = probe.hasRecoverablePendingOperation(storyId: sid)
+            let outs = freshOutputs()
+            let newest = outs.sorted { $0.createdAt > $1.createdAt }.first
+            // A new version landed (count grew AND the newest isn't the one we're showing) -> surface it.
+            if outs.count > baselineOutputCount, let newest, (newest.versionId ?? newest.id) != currentId {
                 pendingInFlight = false
                 newVersionReady = newest
                 return
             }
             pendingInFlight = hasPending && newVersionReady == nil
-            if !hasPending && story.generatedOutputs.count <= baselineOutputCount {
-                // No pending op and nothing new — nothing to show (either never had one, or it failed/abandoned).
+            // Done with nothing new: the op finished/failed/abandoned (pending row gone) and no extra output.
+            if !hasPending && outs.count <= baselineOutputCount {
                 pendingInFlight = false
                 return
             }
