@@ -36,20 +36,31 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     def _as_list(v):
         return v if isinstance(v, list) else ([v] if v else [])
 
-    exclude = set(_as_list(directives.get("exclude")))
-    must_inc = _as_list(directives.get("must_include"))
-    opening = directives.get("opening")
-    ending = directives.get("ending")
-    after_pairs = [(p[0], p[1]) for p in (directives.get("order_after") or [])
+    # Case-INSENSITIVE id matching. Base-plan segment asset_ids are lowercase (moments[] payload is
+    # lowercased); directive ids historically arrived UPPERCASE, so a raw `in`/`==` silently failed to find
+    # them -> the reorder/exclude no-op'd and the "revised" plan came back byte-identical to the base. Fold
+    # every directive id to lowercase and match against lowercased segment asset_ids throughout.
+    def _lc(v):
+        return v.lower() if isinstance(v, str) else v
+
+    def _aid(s):
+        a = s.get("asset_id")
+        return a.lower() if isinstance(a, str) else a
+
+    exclude = set(_lc(x) for x in _as_list(directives.get("exclude")))
+    must_inc = [_lc(x) for x in _as_list(directives.get("must_include"))]
+    opening = _lc(directives.get("opening"))
+    ending = _lc(directives.get("ending"))
+    after_pairs = [(_lc(p[0]), _lc(p[1])) for p in (directives.get("order_after") or [])
                    if isinstance(p, (list, tuple)) and len(p) == 2]
-    adj_pairs = [(p[0], p[1]) for p in (directives.get("order_adjacent") or [])
+    adj_pairs = [(_lc(p[0]), _lc(p[1])) for p in (directives.get("order_adjacent") or [])
                  if isinstance(p, (list, tuple)) and len(p) == 2]
 
     # 1. Drop excluded segments (by asset_id).
-    kept = [copy.deepcopy(s) for s in segs if s.get("asset_id") not in exclude]
+    kept = [copy.deepcopy(s) for s in segs if _aid(s) not in exclude]
     if not kept:
         return None
-    present = {s.get("asset_id") for s in kept}
+    present = {_aid(s) for s in kept}
 
     # 2. must_include that is NOT already present cannot be satisfied by reordering alone -> fall back to AI
     #    (the AI path can pull a NEW segment from that Moment; this deterministic path never invents segments).
@@ -65,7 +76,7 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     #    position; a Moment used in multiple segments keeps its segments grouped in original relative order).
     order: list[str] = []
     for s in kept:
-        aid = s.get("asset_id")
+        aid = _aid(s)
         if aid not in order:
             order.append(aid)
 
@@ -100,7 +111,7 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     from collections import defaultdict, deque
     buckets: dict[str, deque] = defaultdict(deque)
     for s in kept:
-        buckets[s.get("asset_id")].append(s)
+        buckets[_aid(s)].append(s)   # key by lowercased asset_id to match the normalized `order` space
     new_segs: list[dict] = []
     for aid in order:
         q = buckets.get(aid)

@@ -338,7 +338,14 @@ class EditPlanInputs:
 # ---------------------------------------------------------------------------
 def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     errs: list[str] = []
-    moments = {m["id"]: m for m in inputs.moments}
+    # Case-INSENSITIVE Moment-id space. Clients disagree on UUID case: the moments[] payload and segment
+    # asset_ids arrive lowercased (StoryCreationCoordinator.momentsPayload), but directive ids historically
+    # arrived UPPERCASE (UUID.uuidString). A case-sensitive lookup here rejected every segment as "not a known
+    # Moment id" on the first pass (forcing a repair call on every job) and let the opening/ending/order
+    # directive silently go unenforced. Normalizing the key space to lowercase makes id identity robust to
+    # any client's casing. (The iOS fix lowercases directives too; this is defense-in-depth so a future drift
+    # can never again break enforcement invisibly.)
+    moments = {str(m["id"]).lower(): m for m in inputs.moments}
     has_analysis = inputs.music_analysis is not None
     segs = plan.get("segments", [])
     # A model that HONESTLY declares the Story infeasible (feasible=false + a reason) is ALLOWED to return no
@@ -355,9 +362,9 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     if len(set(orders)) != len(orders):
         errs.append(f"duplicate order values: {orders}")
     for i, s in enumerate(segs):
-        aid = s.get("asset_id")
+        aid = (str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None)
         if aid not in moments:
-            errs.append(f"seg{i}: asset_id '{aid}' is not a known Moment id")
+            errs.append(f"seg{i}: asset_id '{s.get('asset_id')}' is not a known Moment id")
             continue
         dur = moments[aid]["duration_seconds"]
         tl = _segment_timeline(s)
@@ -460,9 +467,21 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     directives = ctx.get("directives") or {}
     if not isinstance(directives, dict) or not any(directives.get(k) for k in _DIRECTIVE_KEYS):
         return []
+
+    # Case-INSENSITIVE id comparison (see validate_plan). Directive ids historically arrived UPPERCASE while
+    # segment asset_ids / moments ids are lowercase; a raw == never matched, so opening/ending/order went
+    # silently unenforced and every "new version" came back as the same default edit. Lowercase both sides.
+    def _norm(v):
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [_norm(x) for x in v]
+        return v
+    directives = {k: _norm(val) for k, val in directives.items()}
+
     errs: list[str] = []
     segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
-    used = [s.get("asset_id") for s in segs]
+    used = [(str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None) for s in segs]
     used_set = set(used)
 
     def _known(mid: str) -> bool:

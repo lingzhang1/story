@@ -83,13 +83,17 @@ struct ResolvedDirectives: Equatable {
     /// Encode to the backend wire shape (lowercased uuid strings). Omits empty slots so an absent directive is
     /// simply not present (behavior-unchanged on the backend).
     func wireDictionary() -> [String: Any] {
+        // Directive ids MUST be lowercased to match the moments[] ids and segment asset_ids, which the
+        // moments payload builder (StoryCreationCoordinator.momentsPayload) lowercases. The backend compares
+        // directive ids against those ids; an UPPERCASE uuidString here never matches -> the opening/ending/
+        // order directive is silently unenforced (every "new version" comes back as the same default edit).
         var d: [String: Any] = [:]
-        if !mustInclude.isEmpty { d["must_include"] = mustInclude.map { $0.uuidString } }
-        if !exclude.isEmpty { d["exclude"] = exclude.map { $0.uuidString } }
-        if let o = opening { d["opening"] = o.uuidString }
-        if let e = ending { d["ending"] = e.uuidString }
-        if !orderAfter.isEmpty { d["order_after"] = orderAfter.map { $0.map { $0.uuidString } } }
-        if !orderAdjacent.isEmpty { d["order_adjacent"] = orderAdjacent.map { $0.map { $0.uuidString } } }
+        if !mustInclude.isEmpty { d["must_include"] = mustInclude.map { $0.uuidString.lowercased() } }
+        if !exclude.isEmpty { d["exclude"] = exclude.map { $0.uuidString.lowercased() } }
+        if let o = opening { d["opening"] = o.uuidString.lowercased() }
+        if let e = ending { d["ending"] = e.uuidString.lowercased() }
+        if !orderAfter.isEmpty { d["order_after"] = orderAfter.map { $0.map { $0.uuidString.lowercased() } } }
+        if !orderAdjacent.isEmpty { d["order_adjacent"] = orderAdjacent.map { $0.map { $0.uuidString.lowercased() } } }
         return d
     }
 
@@ -97,16 +101,18 @@ struct ResolvedDirectives: Equatable {
     /// absent directive set leaves the request byte-identical to today.
     func jsonValue() -> JSONValue? {
         if isEmpty { return nil }
+        // Lowercase every id (see wireDictionary): moments[] ids + segment asset_ids are lowercased, so the
+        // backend's directive enforcement only matches when directive ids are lowercase too.
         var o: [String: JSONValue] = [:]
-        if !mustInclude.isEmpty { o["must_include"] = .array(mustInclude.map { .string($0.uuidString) }) }
-        if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString) }) }
-        if let op = opening { o["opening"] = .string(op.uuidString) }
-        if let en = ending { o["ending"] = .string(en.uuidString) }
+        if !mustInclude.isEmpty { o["must_include"] = .array(mustInclude.map { .string($0.uuidString.lowercased()) }) }
+        if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString.lowercased()) }) }
+        if let op = opening { o["opening"] = .string(op.uuidString.lowercased()) }
+        if let en = ending { o["ending"] = .string(en.uuidString.lowercased()) }
         if !orderAfter.isEmpty {
-            o["order_after"] = .array(orderAfter.map { .array($0.map { .string($0.uuidString) }) })
+            o["order_after"] = .array(orderAfter.map { .array($0.map { .string($0.uuidString.lowercased()) }) })
         }
         if !orderAdjacent.isEmpty {
-            o["order_adjacent"] = .array(orderAdjacent.map { .array($0.map { .string($0.uuidString) }) })
+            o["order_adjacent"] = .array(orderAdjacent.map { .array($0.map { .string($0.uuidString.lowercased()) }) })
         }
         return .object(o)
     }

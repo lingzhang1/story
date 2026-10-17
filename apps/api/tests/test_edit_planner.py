@@ -977,6 +977,25 @@ def test_directive_ending_satisfied_and_violated():
     assert any("ending" in e and "last segment must be" in e for e in bad)
 
 
+def test_directive_id_case_insensitive():
+    """Regression: a client that sends directive ids in a DIFFERENT case than the moments[]/segment ids
+    (iOS historically sent UPPERCASE UUID.uuidString directives while moments/asset_ids were lowercased) must
+    STILL be enforced — not silently ignored. A case-sensitive comparison here let "Start with Moment N" go
+    unenforced, so every "new version" came back as the same default edit."""
+    plan = _good_plan()  # order 0 is M1 (lowercase), order 1/last is M2 (lowercase)
+    # opening named in UPPERCASE must resolve to the same Moment -> satisfied (no opening error).
+    ok = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M1.upper()})))
+    assert [e for e in ok if "opening" in e] == []
+    # opening=M2 (uppercase) is NOT the first segment -> must be flagged, and must NOT be treated as an
+    # "unknown Moment" (the old case-sensitive bug flagged it "not in the eligible source set").
+    bad = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M2.upper()})))
+    assert any("opening" in e and "first segment must be" in e for e in bad)
+    assert not any("not in the eligible source set" in e for e in bad)
+    # exclude in uppercase still catches a used Moment.
+    exc = validate_plan(plan, _inputs(revision_context=_ctx({"exclude": [M2.upper()]})))
+    assert any("exclude" in e and "must NOT be used" in e for e in exc)
+
+
 def test_directive_unknown_moment_is_error_not_silent():
     # A reference to a Moment not in the eligible source set must be flagged (deleted/unavailable case),
     # never silently ignored or substituted.
@@ -1148,6 +1167,11 @@ def test_deterministic_transform_reorders_and_prunes():
     assert A(base, {"must_include": ["zz"]}) is None
     # order renumbered 0..n-1
     assert [s["order"] for s in sorted(A(base, {"opening": "c"})["segments"], key=lambda s: s["order"])] == [0, 1, 2, 3]
+    # Case-INSENSITIVE: an UPPERCASE directive id must move the matching lowercase segment (regression: the
+    # pure-reorder path used a case-sensitive `in`/`==`, so an UPPERCASE "opening" silently no-op'd and the
+    # "revised" plan came back identical to the base).
+    assert ids(A(base, {"opening": "C"})) == ["c", "a", "b", "d"]
+    assert ids(A(base, {"exclude": ["B"]})) == ["a", "c", "d"]
 
 
 def test_engine_deterministic_fast_path_zero_model_calls():
