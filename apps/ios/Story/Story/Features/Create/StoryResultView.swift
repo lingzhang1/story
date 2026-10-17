@@ -104,6 +104,13 @@ struct StoryResultView: View {
     @State private var reviseCoordinator: StoryCreationCoordinator?
     @State private var reviseWorking = false
     @State private var reviseError: String?
+    // In-flight recovery banner: a pending AI operation for this Story is being finished by the app-level
+    // recovery (invisible). We OBSERVE it (no new coordinator) and show a banner so the user knows a new
+    // version is coming, then offer to view it when it lands. `baselineOutputCount` is the version count when
+    // this screen appeared; a jump means recovery produced a new version.
+    @State private var pendingInFlight = false
+    @State private var baselineOutputCount = 0
+    @State private var newVersionReady: GeneratedOutputModel?
 
     private var playback: ResultPlayback {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
@@ -176,6 +183,7 @@ struct StoryResultView: View {
     private func playableBody(relativePath: String) -> some View {
         VStack(spacing: 0) {
             header
+            inFlightBanner
             // Large video surface — tap to play/pause (mirrors the harness AVPlayer pattern).
             ZStack {
                 if let player {
@@ -197,6 +205,7 @@ struct StoryResultView: View {
             .task(id: relativePath) {
                 player = AVPlayer(url: RenderOutputStore.shared.absoluteURL(for: relativePath))
             }
+            .task { await observePendingRecovery() }
 
             actionPanel
         }
@@ -215,6 +224,69 @@ struct StoryResultView: View {
         }
         .padding(.horizontal, StoryTheme.screenPadding)
         .padding(.top, 20)
+    }
+
+    /// Banner shown when a Create-Another-Version (or any AI op) is still being finished in the background by
+    /// the app-level recovery (you backgrounded mid-render). OBSERVER ONLY — it starts no coordinator. When the
+    /// recovery lands a new version, it flips to a tappable "View" that swaps the displayed output.
+    @ViewBuilder
+    private var inFlightBanner: some View {
+        if let ready = newVersionReady {
+            Button {
+                swappedOutput = ready
+                newVersionReady = nil
+                player?.pause(); player = nil; isPlaying = false
+                baselineOutputCount = story.generatedOutputs.count
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(StoryTheme.gold)
+                    Text("Your new version is ready — View").font(StoryTheme.body(13, .medium))
+                        .foregroundStyle(StoryTheme.cream)
+                    Spacer()
+                    Text("→").foregroundStyle(StoryTheme.gold)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(StoryTheme.surfaceAlt).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 10)
+        } else if pendingInFlight {
+            HStack(spacing: 8) {
+                ProgressView().tint(StoryTheme.gold).scaleEffect(0.8)
+                Text("Finishing your new version…").font(StoryTheme.body(13))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.7))
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(StoryTheme.surfaceAlt).clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 10)
+        }
+    }
+
+    /// Observe (NOT drive) the app-level recovery: show the banner while a pending op exists, and surface the
+    /// new version when the Story's output count grows past the baseline captured on appear. Polls lightly;
+    /// starts no coordinator, so it cannot race the recovery owner.
+    private func observePendingRecovery() async {
+        baselineOutputCount = story.generatedOutputs.count
+        let probe = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
+        for _ in 0..<150 {   // ~5 min at 2s
+            let hasPending = probe.hasRecoverablePendingOperation(storyId: story.id)
+            let newest = story.generatedOutputs.sorted { $0.createdAt > $1.createdAt }.first
+            if story.generatedOutputs.count > baselineOutputCount, let newest,
+               (newest.versionId ?? newest.id) != (output.versionId ?? output.id) {
+                pendingInFlight = false
+                newVersionReady = newest
+                return
+            }
+            pendingInFlight = hasPending && newVersionReady == nil
+            if !hasPending && story.generatedOutputs.count <= baselineOutputCount {
+                // No pending op and nothing new — nothing to show (either never had one, or it failed/abandoned).
+                pendingInFlight = false
+                return
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        pendingInFlight = false
     }
 
     private var actionPanel: some View {
