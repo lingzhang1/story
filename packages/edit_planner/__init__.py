@@ -1036,6 +1036,18 @@ class RealEditPlannerEngine:
                     break   # not truncated — accept this result
                 diag["truncation_escalations"] = diag.get("truncation_escalations", 0) + 1
                 # else: truncated — loop retries at the higher cap (if any left)
+            # Per-call diagnostics: which model actually served this call, and (if the primary failed over)
+            # WHY. last_fallback/last_error reflect THIS call; the end-of-generate read only sees the last one,
+            # so accumulate here. served_by is the fallback model when a fallback happened, else the primary.
+            fb = bool(getattr(self._gw, "last_fallback", False))
+            err = getattr(self._gw, "last_error", None)
+            served = getattr(self._gw, "fallback_model_id", None) if fb else getattr(self._gw, "primary_model_id", None)
+            diag.setdefault("calls", []).append({"fallback": fb, "served_by": served,
+                                                 "primary_error": (err if fb else None)})
+            if fb:
+                diag["any_fallback"] = True
+                if err and not diag.get("first_fallback_error"):
+                    diag["first_fallback_error"] = err   # WHY Opus failed on the first fail-over
             return result.data
 
         def _call_text(user_content: str) -> str:
@@ -1082,6 +1094,10 @@ class RealEditPlannerEngine:
         plan = _call(_build_user(inputs))
         raw_errs = validate_plan(plan, inputs)
         diag["first_pass_executable"] = not raw_errs
+        if raw_errs:
+            # WHAT the model's first plan violated (truncated) — so a repair/fallback is explainable instead
+            # of guessed. The first 5 error strings are plenty to classify duration vs speed vs directive.
+            diag["first_pass_errors"] = [str(e)[:160] for e in raw_errs[:5]]
         plan, notes = normalize_plan(plan, inputs)
         if notes:
             diag["normalized"] = True

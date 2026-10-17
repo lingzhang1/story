@@ -266,9 +266,21 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
             return "cancelled_midrun"
 
         diag_out = {k: diag.get(k) for k in ("model_calls", "used_fallback", "critique_attempted",
-                                             "critique_applied", "first_pass_executable")}
+                                             "critique_applied", "first_pass_executable",
+                                             "first_pass_errors", "any_fallback", "first_fallback_error",
+                                             "calls", "executability_repairs_used")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
+        # Greppable diagnostics line (CloudWatch): which model served each call, first-pass validator errors,
+        # and WHY the primary failed over — so Opus-vs-Sonnet reject behavior is analyzable without DynamoDB.
+        print(json.dumps({"msg": "worker_plan_diag", "job_id": job_id,
+                          "model_calls": diag_out.get("model_calls"),
+                          "first_pass_executable": diag_out.get("first_pass_executable"),
+                          "first_pass_errors": diag_out.get("first_pass_errors"),
+                          "any_fallback": diag_out.get("any_fallback"),
+                          "first_fallback_error": diag_out.get("first_fallback_error"),
+                          "calls": diag_out.get("calls"),
+                          "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)
         store.delete_staging(prefix)
