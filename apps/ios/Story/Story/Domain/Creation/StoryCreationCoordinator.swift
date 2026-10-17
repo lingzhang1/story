@@ -1011,8 +1011,13 @@ extension StoryCreationCoordinator {
 
     private func markPendingFailed(story: StoryModel, category: String?) {
         guard let row = fetchPending(storyId: story.id) else { return }
-        row.failureCategory = category; row.jobStatus = "failed"; row.updatedAt = .now
-        // Keep the row (not terminal-"saved"): reopen surfaces the failure and offers a fresh attempt.
+        row.failureCategory = category; row.jobStatus = "failed"
+        // Mark the op TERMINAL (abandoned) so the app-level recovery does NOT re-resume this failed job on
+        // every foreground (that caused an infinite resume->failed loop, and once planJobId was cleared it
+        // re-submitted a fresh explore job, losing the directive). The user retries via Create another version,
+        // which mints a NEW operation. A backend enqueue_lost / provider failure is surfaced once, not looped.
+        row.phase = "abandoned"
+        row.updatedAt = .now
         try? context.save()
     }
 
