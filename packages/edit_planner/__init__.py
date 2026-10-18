@@ -1161,10 +1161,14 @@ class RealEditPlannerEngine:
             target = _parse_target_clip_seconds(rc.get("soft_direction") or "")
             if target is not None:
                 from .deterministic_revision import apply_deterministic_retime
-                retimed = apply_deterministic_retime(rc["base_plan"], target)
+                _tgt = inputs.creative_intent.get("target_duration_seconds")
+                _min_total = (float(_tgt) * (1.0 - DURATION_UNDERSHOOT_TOLERANCE)
+                              if isinstance(_tgt, (int, float)) and _tgt > 0 else None)
+                retimed = apply_deterministic_retime(rc["base_plan"], target, min_total_seconds=_min_total)
                 if retimed is not None:
                     retimed, rnotes = normalize_plan(retimed, inputs)
-                    if not validate_plan(retimed, inputs) and retimed.get("feasible") is not False:
+                    rt_errs = validate_plan(retimed, inputs)
+                    if not rt_errs and retimed.get("feasible") is not False:
                         diag["final"] = "executable"
                         diag["revision_path"] = "deterministic_retime"
                         diag["model_calls"] = 0
@@ -1172,6 +1176,7 @@ class RealEditPlannerEngine:
                         diag["normalize_notes"] = rnotes
                         self.last_diagnostics = diag
                         return _to_contract(retimed, inputs)
+                    diag["retime_reject_errors"] = [str(e)[:120] for e in rt_errs[:5]]
                 diag["revision_path"] = "deterministic_retime_fallthrough"
 
         if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)

@@ -268,7 +268,8 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         diag_out = {k: diag.get(k) for k in ("model_calls", "used_fallback", "critique_attempted",
                                              "critique_applied", "first_pass_executable",
                                              "first_pass_errors", "any_fallback", "first_fallback_error",
-                                             "calls", "executability_repairs_used")}
+                                             "calls", "executability_repairs_used", "revision_path",
+                                             "retime_reject_errors")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
         # DIRECTIVE visibility: what revision_context the worker ACTUALLY received, the resolved opening id,
@@ -302,6 +303,8 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                           "first_fallback_error": diag_out.get("first_fallback_error"),
                           "calls": diag_out.get("calls"),
                           "rev_diag": rev_diag,
+                          "revision_path": diag_out.get("revision_path"),
+                          "retime_reject_errors": diag_out.get("retime_reject_errors"),
                           "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)

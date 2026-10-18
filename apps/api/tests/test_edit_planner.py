@@ -1309,6 +1309,26 @@ def test_deterministic_retime_preserves_clips_order_ranges():
     assert abs(segs[2]["output_duration_seconds"] - 5.0) < 0.01
 
 
+def test_deterministic_retime_respects_target_lower_bound():
+    # "shorten to 5s" on many clips can undershoot the target duration; the retime lifts per-clip durations
+    # (still preserving clips/order/ranges) so the total clears the lower bound and the plan validates.
+    from edit_planner.deterministic_revision import apply_deterministic_retime
+    def seg(o, a, s0, s1): return {"order": o, "asset_id": a, "source_start_seconds": s0,
+                                   "source_end_seconds": s1, "output_duration_seconds": 10.0,
+                                   "native_audio": "keep", "speed": 1.0}
+    # 3 clips, each span 10 (max legal output 20s each). Naive 5s each -> total 15s. Lower bound 48s.
+    base = {"schema_version": "edit_plan/2", "feasible": True,
+            "segments": [seg(0,"a",0,10), seg(1,"b",0,10), seg(2,"c",0,10)]}
+    out = apply_deterministic_retime(base, 5.0, min_total_seconds=48.0)
+    segs = sorted(out["segments"], key=lambda s: s["order"])
+    total = sum(s["output_duration_seconds"] for s in segs)
+    assert total >= 48.0, f"total {total} should clear the lower bound"
+    assert [s["asset_id"] for s in segs] == ["a","b","c"]   # clips still preserved
+    for s in segs:
+        spd = (s["source_end_seconds"]-s["source_start_seconds"]) / s["output_duration_seconds"]
+        assert 0.5 - 1e-6 <= spd <= 2.0 + 1e-6
+
+
 def test_parse_target_clip_seconds():
     from edit_planner import _parse_target_clip_seconds
     assert _parse_target_clip_seconds("shorten each clip to around 5s") == 5.0

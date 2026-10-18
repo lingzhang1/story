@@ -132,37 +132,59 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
 _SPEED_MIN, _SPEED_MAX = 0.5, 2.0
 
 
-def apply_deterministic_retime(base_plan: dict, target_clip_seconds: float) -> dict | None:
+def apply_deterministic_retime(base_plan: dict, target_clip_seconds: float,
+                               min_total_seconds: float | None = None) -> dict | None:
     """Phase 3 timing-only fast path. Re-time EVERY segment of the exact base plan toward `target_clip_seconds`
     WITHOUT a model call and WITHOUT changing which clips are used, their order, their source ranges, the
     soundtrack, native-audio policy or transitions — the owner's preservation contract for a pure pacing
     revise ("shorten each clip to ~5s"). Only `output_duration_seconds` (and the derived `speed`) change.
 
     For each segment: keep the source span [start,end]; set output_duration = clamp(target, so that
-    speed = span/output_duration stays within [0.5, 2.0]). A clip whose span cannot reach the target within the
-    speed envelope gets the closest in-envelope duration (never an illegal speed). Returns a new plan dict, or
-    None when the base plan is unusable (caller then falls back to the AI path). The caller MUST still run the
-    deterministic validator on the result — this function does not self-certify."""
+    speed = span/output_duration stays within [0.5, 2.0]). `min_total_seconds` (when given) is the target
+    duration's LOWER tolerance bound — shortening every clip to the literal per-clip target can drive the WHOLE
+    video under that bound, which the deterministic validator rejects; so if the naive re-time undershoots, we
+    lengthen clips back up PROPORTIONALLY (still preserving identities/order/ranges) just enough to clear the
+    bound. A clip whose span cannot reach a duration within the speed envelope gets the closest legal value.
+    Returns a new plan dict, or None when the base plan is unusable. The caller MUST run the validator."""
     import copy
     if not isinstance(base_plan, dict) or not base_plan.get("segments"):
         return None
     if not (isinstance(target_clip_seconds, (int, float)) and target_clip_seconds > 0):
         return None
     out = copy.deepcopy(base_plan)
+    # Per-segment legal output window [min_out, max_out] from the speed envelope; and the naive target-clamped
+    # value. Segments with no usable span keep their base duration and don't move.
+    windows = []  # (seg, span_or_None, min_out, max_out)
     for s in out.get("segments", []):
-        a = s.get("source_start_seconds")
-        b = s.get("source_end_seconds")
+        a = s.get("source_start_seconds"); b = s.get("source_end_seconds")
         if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or b <= a:
-            # No usable source span to re-time against — leave this segment exactly as the base had it.
-            continue
+            windows.append((s, None, None, None)); continue
         span = float(b) - float(a)
-        # speed = span / output_duration, so output_duration = span / speed. To honor the target while staying
-        # in the speed envelope: the shortest legal output is span/_SPEED_MAX, the longest is span/_SPEED_MIN.
-        min_out = span / _SPEED_MAX
-        max_out = span / _SPEED_MIN
-        new_out = max(min_out, min(float(target_clip_seconds), max_out))
-        s["output_duration_seconds"] = round(new_out, 3)
-        s["speed"] = round(span / new_out, 4)
+        windows.append((s, span, span / _SPEED_MAX, span / _SPEED_MIN))
+
+    def _assign(target_per_clip: float):
+        for s, span, lo, hi in windows:
+            if span is None:
+                continue
+            new_out = max(lo, min(float(target_per_clip), hi))
+            s["output_duration_seconds"] = round(new_out, 3)
+            s["speed"] = round(span / new_out, 4)
+
+    _assign(target_clip_seconds)
+    # If honoring the literal per-clip target undershoots the target-duration lower bound, raise the per-clip
+    # target uniformly until the total clears it (bounded search), keeping all clips and the envelope.
+    if min_total_seconds and min_total_seconds > 0:
+        def _total():
+            return sum((s.get("output_duration_seconds") or 0.0) for s in out["segments"])
+        if _total() < min_total_seconds:
+            # Max achievable total = sum of each clip's max_out. If even that can't reach the bound, give the
+            # longest legal duration to every clip (best effort) and let the validator decide.
+            lift = target_clip_seconds
+            for _ in range(24):  # bounded: widen the per-clip target toward each clip's max
+                lift *= 1.25
+                _assign(lift)
+                if _total() >= min_total_seconds:
+                    break
     return out
 
 
