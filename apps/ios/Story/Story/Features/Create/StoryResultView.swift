@@ -605,6 +605,11 @@ struct StoryResultView: View {
     /// re-plans with the exact base plan + resolved directives, and on success the displayed output swaps to
     /// the new version (the base and all prior versions are preserved in the Story's version list).
     private func startRevise(directives: ResolvedDirectives, instruction: String) {
+        // Phase 1/5: CAPTURE the selected base version NOW, by value, before any async work. `output` is a
+        // computed property (swappedOutput ?? initialOutput) that changes if the user taps a different version
+        // chip mid-job — reading it again inside the Task could bind the revise to the wrong parent. The sheet
+        // was opened on THIS version; the whole operation must use exactly it.
+        let base = output
         let coord = reviseCoordinator ?? StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         reviseCoordinator = coord
         reviseWorking = true
@@ -613,8 +618,8 @@ struct StoryResultView: View {
             // Carry the base version's soundtrack into the revise so the revised video keeps its music
             // (reviseVersion with no music would render silent). My Music resolves locally; a provider track
             // is re-resolved live (download + analysis) exactly as Change Music does. Nil => honestly no music.
-            let music = await resolveBaseMusic(for: output)
-            coord.reviseVersion(for: story, base: output, directives: directives,
+            let music = await resolveBaseMusic(for: base)
+            coord.reviseVersion(for: story, base: base, directives: directives,
                                 softDirection: instruction, music: music)
             while coord.isCreating { try? await Task.sleep(nanoseconds: 200_000_000) }
             reviseWorking = false

@@ -336,6 +336,32 @@ class EditPlanInputs:
 # Deterministic executability validator — the PRODUCTION hard gate.
 # Ported from evals/edit_planner. Returns [] when executable, else error strings.
 # ---------------------------------------------------------------------------
+import re as _re
+
+
+def _parse_target_clip_seconds(soft: str) -> float | None:
+    """Extract a PER-CLIP target duration from a pacing instruction, or None when the instruction is not a
+    clip-length ask (so 'make it more cinematic' never triggers the timing-only path). Requires BOTH a clip/
+    cut/shot/segment word AND an explicit seconds value, e.g. 'shorten each clip to around 5s', 'make the cuts
+    about 3 seconds', 'keep shots under 4 sec'. Conservative: anything ambiguous returns None and the request
+    takes the normal (model) path."""
+    low = (soft or "").lower()
+    if not low.strip():
+        return None
+    if not any(w in low for w in ("clip", "cut", "shot", "segment")):
+        return None
+    m = _re.search(r"(\d+(?:\.\d+)?)\s*(?:s\b|sec\b|secs\b|second|seconds)", low)
+    if not m:
+        m = _re.search(r"(?:around|about|under|to|~)\s*(\d+(?:\.\d+)?)", low)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val if 1.0 <= val <= 30.0 else None
+
+
 def _errors_are_non_visual(errs: list[str]) -> bool:
     """Phase 3 targeted repair: True when EVERY validator error is numeric/structural — fixable from the plan
     text + the exact errors without the model re-seeing contact sheets (duration, speed, source-range bounds,
@@ -1122,6 +1148,32 @@ class RealEditPlannerEngine:
         # validator passes AND there is no soft_direction (a creative request still needs the model). Any miss
         # falls through to normal planning (the targeted single-call path, since critique stays off by default).
         rc = inputs.revision_context or {}
+
+        # 0a: TIMING-ONLY deterministic fast path (preservation contract). A pure pacing/duration revise
+        # ("shorten each clip to ~5s", "make the clips about 3 seconds") must PRESERVE which clips are used,
+        # their order, source ranges, soundtrack, native-audio and transitions — only re-timing each segment.
+        # When a revise carries the exact base_plan and a parseable target clip length, we re-time
+        # deterministically (ZERO model calls) and adopt it only if the frozen validator passes. This is what
+        # keeps "shorten the clips" from silently re-picking the whole edit. Requires NO hard directives that
+        # would change structure (those take the structural path below); a bare pacing soft_direction is fine.
+        if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
+                and not rc.get("directives")):
+            target = _parse_target_clip_seconds(rc.get("soft_direction") or "")
+            if target is not None:
+                from .deterministic_revision import apply_deterministic_retime
+                retimed = apply_deterministic_retime(rc["base_plan"], target)
+                if retimed is not None:
+                    retimed, rnotes = normalize_plan(retimed, inputs)
+                    if not validate_plan(retimed, inputs) and retimed.get("feasible") is not False:
+                        diag["final"] = "executable"
+                        diag["revision_path"] = "deterministic_retime"
+                        diag["model_calls"] = 0
+                        diag["first_pass_executable"] = True
+                        diag["normalize_notes"] = rnotes
+                        self.last_diagnostics = diag
+                        return _to_contract(retimed, inputs)
+                diag["revision_path"] = "deterministic_retime_fallthrough"
+
         if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
                 and rc.get("directives") and not (rc.get("soft_direction") or "").strip()):
             from .deterministic_revision import apply_deterministic_revision

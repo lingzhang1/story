@@ -1282,6 +1282,46 @@ def test_deterministic_transform_reorders_and_prunes():
     assert ids(A(base, {"exclude": ["B"]})) == ["a", "c", "d"]
 
 
+def test_deterministic_retime_preserves_clips_order_ranges():
+    # Preservation contract: a timing-only re-time changes ONLY output_duration/speed; the clip set, order and
+    # source ranges are byte-identical. This is the fix for "shorten each clip to ~5s" silently re-picking.
+    from edit_planner.deterministic_revision import apply_deterministic_retime
+    def seg(o, a, s0, s1, outd): return {"order": o, "asset_id": a, "source_start_seconds": s0,
+                                         "source_end_seconds": s1, "output_duration_seconds": outd,
+                                         "native_audio": "keep", "speed": 1.0}
+    base = {"schema_version": "edit_plan/2", "feasible": True, "music_asset_id": "trk",
+            "segments": [seg(0, "a", 0.0, 10.0, 10.0), seg(1, "b", 2.0, 6.0, 4.0), seg(2, "c", 0.0, 3.0, 3.0)]}
+    out = apply_deterministic_retime(base, 5.0)
+    assert out is not None
+    segs = sorted(out["segments"], key=lambda s: s["order"])
+    # same clips, same order, same source ranges, same music.
+    assert [s["asset_id"] for s in segs] == ["a", "b", "c"]
+    assert [(s["source_start_seconds"], s["source_end_seconds"]) for s in segs] == [(0.0,10.0),(2.0,6.0),(0.0,3.0)]
+    assert out["music_asset_id"] == "trk"
+    # durations moved toward 5s, clamped so speed stays in [0.5, 2.0].
+    for s in segs:
+        span = s["source_end_seconds"] - s["source_start_seconds"]
+        spd = span / s["output_duration_seconds"]
+        assert 0.5 - 1e-6 <= spd <= 2.0 + 1e-6, f"speed {spd} out of envelope"
+    # clip 'a' (span 10) can't reach 5s without speed>2 -> clamped to span/2.0 = 5.0 at speed 2.0.
+    assert abs(segs[0]["output_duration_seconds"] - 5.0) < 0.01 and abs(segs[0]["speed"] - 2.0) < 0.01
+    # clip 'c' (span 3) targets 5s -> span/0.6 would exceed; max_out=span/0.5=6.0, so 5.0 is legal at speed 0.6.
+    assert abs(segs[2]["output_duration_seconds"] - 5.0) < 0.01
+
+
+def test_parse_target_clip_seconds():
+    from edit_planner import _parse_target_clip_seconds
+    assert _parse_target_clip_seconds("shorten each clip to around 5s") == 5.0
+    assert _parse_target_clip_seconds("make the cuts about 3 seconds") == 3.0
+    assert _parse_target_clip_seconds("keep shots under 4 sec") == 4.0
+    # Not a clip-length ask -> None (takes the model path, never the retime path).
+    assert _parse_target_clip_seconds("make it more cinematic") is None
+    assert _parse_target_clip_seconds("start with moment 5") is None
+    assert _parse_target_clip_seconds("") is None
+    # A seconds value with no clip/cut/shot word is NOT a per-clip ask.
+    assert _parse_target_clip_seconds("make it 30 seconds total") is None
+
+
 def test_engine_deterministic_fast_path_zero_model_calls():
     # A revise carrying base_plan + a structural directive and NO soft_direction must resolve with 0 model calls.
     a, b = M1, M2

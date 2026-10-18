@@ -127,4 +127,43 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     return out
 
 
-__all__ = ["apply_deterministic_revision"]
+# Renderer speed envelope — mirror of the validator's RENDERER_SPEED_MIN/MAX. A re-time must never produce a
+# segment outside it (the deterministic validator would reject the plan).
+_SPEED_MIN, _SPEED_MAX = 0.5, 2.0
+
+
+def apply_deterministic_retime(base_plan: dict, target_clip_seconds: float) -> dict | None:
+    """Phase 3 timing-only fast path. Re-time EVERY segment of the exact base plan toward `target_clip_seconds`
+    WITHOUT a model call and WITHOUT changing which clips are used, their order, their source ranges, the
+    soundtrack, native-audio policy or transitions — the owner's preservation contract for a pure pacing
+    revise ("shorten each clip to ~5s"). Only `output_duration_seconds` (and the derived `speed`) change.
+
+    For each segment: keep the source span [start,end]; set output_duration = clamp(target, so that
+    speed = span/output_duration stays within [0.5, 2.0]). A clip whose span cannot reach the target within the
+    speed envelope gets the closest in-envelope duration (never an illegal speed). Returns a new plan dict, or
+    None when the base plan is unusable (caller then falls back to the AI path). The caller MUST still run the
+    deterministic validator on the result — this function does not self-certify."""
+    import copy
+    if not isinstance(base_plan, dict) or not base_plan.get("segments"):
+        return None
+    if not (isinstance(target_clip_seconds, (int, float)) and target_clip_seconds > 0):
+        return None
+    out = copy.deepcopy(base_plan)
+    for s in out.get("segments", []):
+        a = s.get("source_start_seconds")
+        b = s.get("source_end_seconds")
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or b <= a:
+            # No usable source span to re-time against — leave this segment exactly as the base had it.
+            continue
+        span = float(b) - float(a)
+        # speed = span / output_duration, so output_duration = span / speed. To honor the target while staying
+        # in the speed envelope: the shortest legal output is span/_SPEED_MAX, the longest is span/_SPEED_MIN.
+        min_out = span / _SPEED_MAX
+        max_out = span / _SPEED_MIN
+        new_out = max(min_out, min(float(target_clip_seconds), max_out))
+        s["output_duration_seconds"] = round(new_out, 3)
+        s["speed"] = round(span / new_out, 4)
+    return out
+
+
+__all__ = ["apply_deterministic_revision", "apply_deterministic_retime"]
