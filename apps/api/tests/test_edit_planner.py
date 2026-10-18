@@ -1220,6 +1220,21 @@ def test_preflight_flags_include_exclude_conflict():
     assert any("both required and excluded" in e for e in errs)
 
 
+def test_preflight_flags_over_exclusion_leaves_too_few():
+    # Regression (device scenario #2): the interpreter produced excludes that stripped the Story down to <2
+    # eligible Moments; the planner then honestly failed 'invalid_after_repair'. Preflight must catch this
+    # BEFORE the expensive job and turn it into an upfront clarify.
+    from edit_planner import preflight_directives
+    a, b, c, d = str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+    eligible = {a, b, c, d}
+    # Excluding 3 of 4 leaves only 1 -> block.
+    errs = preflight_directives({"exclude": [a, b, c]}, eligible)
+    assert any("keep at least 2" in e for e in errs)
+    # Excluding 2 of 4 leaves 2 -> allowed (no over-exclusion error).
+    ok = preflight_directives({"exclude": [a, b]}, eligible)
+    assert not any("keep at least 2" in e for e in ok)
+
+
 def test_preflight_flags_contradictory_and_impossible_adjacency():
     from edit_planner import preflight_directives
     a, b, c = str(uuid4()), str(uuid4()), str(uuid4())

@@ -52,6 +52,11 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     case invalidPlan(String)           // our deterministic validator rejected the plan (pre-AVFoundation)
     case renderFailed(String)          // the renderer threw
     case alreadyCreating               // duplicate-job guard
+    /// The plan could not satisfy the hard directives even after repair (backend `invalid_after_repair`) —
+    /// typically too many exclusions / an over-constrained instruction. NOT transient: retrying the same
+    /// instruction fails identically, so the UI must ask the user to loosen/adjust the instruction, never
+    /// offer a plain Retry.
+    case directivesUnsatisfiable(String)
     /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
     /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
     /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
@@ -67,6 +72,8 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .invalidPlan(let r): return "The plan can't be rendered: \(r)"
         case .renderFailed(let r): return "Rendering failed: \(r)"
         case .alreadyCreating: return "A video is already being created for this Story."
+        case .directivesUnsatisfiable:
+            return "Your instruction couldn't be applied to this footage — it may exclude too much or conflict. Try adjusting it (for example, exclude fewer Moments)."
         case .insufficientMaterial(let achievable, let requested, let suggested):
             let a = Int(achievable.rounded()), req = Int(requested.rounded())
             if let s = suggested {
@@ -573,6 +580,7 @@ final class StoryCreationCoordinator {
                 markPendingFailed(story: story, category: final.failure?.rawValue)
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
+                case .invalidAfterRepair: return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
                 case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
                 default:                   return finishFailed(.planUnavailable)
                 }

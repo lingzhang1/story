@@ -633,6 +633,18 @@ def preflight_directives(directives: dict, eligible_ids: set[str]) -> list[str]:
     inc_set, exc_set = set(inc), set(exc)
     for mid in (inc_set & exc_set):
         errs.append(f"Moment '{mid}' is both required and excluded")
+
+    # Over-exclusion feasibility (Phase 4): an exclude set that leaves too few eligible Moments can never be
+    # planned into a watchable edit. The planner would honestly fail 'invalid_after_repair' on it, which is an
+    # expensive way to learn a fact we already know here. Blocking it preflight turns a hard failure into an
+    # upfront clarify. Threshold: at least 2 Moments must remain (one-clip "edits" are not a Story). Counts the
+    # eligible set the client actually sent, so it is exact for this request.
+    if exc_set and eligible_ids:
+        remaining = len(eligible_ids - exc_set)
+        if remaining < 2:
+            errs.append(
+                f"Excluding those Moments leaves only {remaining} to build from — keep at least 2. "
+                "Exclude fewer Moments.")
     ordered_ids = {x for pair in (after_pairs + adj_pairs) for x in pair}
     if opening:
         ordered_ids.add(opening)
