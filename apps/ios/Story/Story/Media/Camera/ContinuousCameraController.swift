@@ -30,7 +30,7 @@ import CoreImage
 enum ContinuousCaptureEvent {
     case ready                       // session running, safe to record
     case recordingStarted
-    case recordingFinished(URL, Double)
+    case recordingFinished(URL, Double, Date, CaptureLocationService.LocationFix?)   // url, duration, capturedAt, location
     case captureFailed(String)       // human-readable, non-semantic
     case interrupted                 // session interrupted (phone call, etc.)
     case presetsReady([Double])      // device-derived zoom presets available (strip can render)
@@ -207,6 +207,20 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         configureRotationCoordinator()
     }
 
+    /// Build the movie-file location metadata (ISO-6709) from a trustworthy fix, or [] when unknown.
+    /// Coordinates only — no place name is ever synthesized. Used as `AVCaptureMovieFileOutput.metadata`.
+    static func locationMetadata(for fix: CaptureLocationService.LocationFix?) -> [AVMetadataItem] {
+        guard let fix else { return [] }
+        // ISO-6709: "+DD.dddd+DDD.dddd/" (lat, lon, trailing slash). Positive = N/E.
+        let iso = String(format: "%+09.5f%+010.5f/", fix.latitude, fix.longitude)
+        let item = AVMutableMetadataItem()
+        item.identifier = .commonIdentifierLocation
+        item.keySpace = .common
+        item.key = AVMetadataKey.commonKeyLocation as NSString
+        item.value = iso as NSString
+        return [item]
+    }
+
     // MARK: - Device selection & capability detection (per-device, never assumed)
 
     /// The best video device at a POSITION: a virtual multi-camera (triple → dual → dual-wide) when
@@ -316,6 +330,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         activeTempURL = tempURL
         activeToken = token
         recordingStart = Date()
+        // Camera Metadata P0: embed a trustworthy capture-time GPS fix into the .mov itself (ISO-6709
+        // common metadata) so the original file carries location where available. nil fix → no location
+        // metadata (honest "unknown"), never fabricated. This does not touch the recording engine/path.
+        movieOutput.metadata = Self.locationMetadata(for: CaptureLocationService.shared.fix(at: Date()))
         movieOutput.startRecording(to: tempURL, recordingDelegate: self)
         // AVCaptureMovieFileOutput confirms the actual start via
         // didStartRecordingTo; flip to .recording there so the button can't be
@@ -380,7 +398,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             let dur = CMTimeGetSeconds(asset.duration)
             let duration = (dur.isFinite && dur > 0) ? dur : Date().timeIntervalSince(started)
             self.activeTempURL = nil   // ownership handed to the owner for adoption
-            self.delegate?.captureEvent(.recordingFinished(outputFileURL, duration))
+            // Location tagging (optional, non-blocking): read the trustworthy fix for the capture instant,
+            // or nil ("unknown"). `started` is the true capture time. Never blocks, never fabricates.
+            let fix = CaptureLocationService.shared.fix(at: started)
+            self.delegate?.captureEvent(.recordingFinished(outputFileURL, duration, started, fix))
         }
     }
 

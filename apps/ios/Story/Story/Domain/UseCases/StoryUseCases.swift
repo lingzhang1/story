@@ -180,13 +180,20 @@ final class StoryUseCases {
     @discardableResult
     func addExistingMedia(
         to story: StoryModel,
-        relativePaths: [(path: String, duration: Double)]
+        relativePaths: [ImportedMedia]
     ) throws -> [MomentModel] {
         var created: [MomentModel] = []
         for item in relativePaths {
+            // Camera Metadata P0: carry the ORIGINAL capture time + recovered location (nil = unknown) onto
+            // the imported asset. capturedAt is the file's own creation date, kept separate from createdAt
+            // (import time). Location recovered from embedded metadata; never fabricated.
             let asset = AssetModel(relativePath: item.path,
                                    durationSeconds: item.duration,
-                                   source: .existingMedia)
+                                   source: .existingMedia,
+                                   capturedAt: item.capturedAt,
+                                   latitude: item.latitude,
+                                   longitude: item.longitude,
+                                   locationAccuracyMeters: nil)
             created.append(try repository.addMoment(
                 to: story, source: .existingMedia, asset: asset, caption: nil))
         }

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Story can tag the Moments you record with where you captured them, so your travel memories remember the place. Location is optional and never added to the videos you share.</string>
     <key>UIAppFonts</key>
     <array>
         <string>Fraunces.ttf</string>

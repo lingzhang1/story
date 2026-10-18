@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import CoreLocation
 
 /// Pure, device-independent formatting for zoom-preset labels (unit-testable). ".5" for sub-1×,
 /// integer for whole values ("1", "2"), one decimal otherwise ("1.5"). Kept free of AVFoundation so
@@ -427,10 +428,10 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                 aiState = .off
             }
             startRecordingTimer()
-        case .recordingFinished(let url, let duration):
+        case .recordingFinished(let url, let duration, let capturedAt, let fix):
             isRecording = false
             stopRecordingTimer()
-            persist(tempURL: url, duration: duration)
+            persist(tempURL: url, duration: duration, capturedAt: capturedAt, location: fix)
         case .captureFailed(let message):
             isRecording = false
             stopRecordingTimer()
@@ -486,7 +487,9 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     // MARK: - Persistence (ONE path, serialized, deduped)
 
-    private func persist(tempURL: URL, duration: Double) {
+    private func persist(tempURL: URL, duration: Double,
+                         capturedAt: Date? = nil,
+                         location: CaptureLocationService.LocationFix? = nil) {
         let key = tempURL.path
         // Double-callback / rapid-tap dedup: never persist the same temp URL twice.
         guard !persistedURLs.contains(key), !inFlightURLs.contains(key) else {
@@ -518,6 +521,19 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
             persistedURLs.insert(key)
             inFlightURLs.remove(key)
 
+            // Camera Metadata P0: stamp the TRUE capture time + the trustworthy location fix (or leave nil
+            // = unknown) onto the asset. Additive fields; nothing else about the Moment changes. Saved with
+            // the context on the next save (the use case already inserted the asset).
+            if let asset = moment.asset {
+                asset.capturedAt = capturedAt
+                if let fix = location {
+                    asset.latitude = fix.latitude
+                    asset.longitude = fix.longitude
+                    asset.locationAccuracyMeters = fix.horizontalAccuracyMeters
+                }
+                try? context.save()
+            }
+
             // AU enqueue — AFTER the Moment is committed; never blocks the next
             // recording. Contextless here (no requested shot/beat in continuous mode).
             let auQueue = AssetUnderstandingQueue(context: context)
@@ -525,9 +541,15 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                             sourceCaptureId: captureSessionId, captureContext: nil)
             Task.detached { await auQueue.drain() }
 
-            // Add-only Photos copy — fire-and-forget, degrades silently.
+            // Add-only Photos copy — fire-and-forget, degrades silently. Carries the capture date + a
+            // trustworthy location so the user's own Photos copy is correctly dated and placed.
             let adoptedURL = MediaStore.shared.absoluteURL(for: relativePath)
-            PhotosSaver.saveVideoCopy(at: adoptedURL) { _ in }
+            let clLocation = location.map {
+                CLLocation(coordinate: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude),
+                           altitude: 0, horizontalAccuracy: $0.horizontalAccuracyMeters,
+                           verticalAccuracy: -1, timestamp: $0.timestamp)
+            }
+            PhotosSaver.saveVideoCopy(at: adoptedURL, creationDate: capturedAt, location: clLocation) { _ in }
 
             // Subtle save feedback + recent thumbnail AFTER success only.
             isSaving = !inFlightURLs.isEmpty

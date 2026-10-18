@@ -219,6 +219,19 @@ final class AssetModel {
     var sourceRaw: String
     var createdAt: Date
 
+    // Camera Metadata P0 (Part A) — ALL optional + defaulted = lightweight additive migration (an existing
+    // populated store decodes cleanly, matching the 60+ prior additive fields in this file). nil everywhere
+    // means "unknown" and is the honest default — location is NEVER fabricated.
+    //
+    // capturedAt: the TRUE capture instant (recording start for a capture; the PHAsset creationDate for an
+    //   import), kept SEPARATE from `createdAt` which is persist/import time. nil = original time unknown.
+    // latitude/longitude/locationAccuracyMeters: a trustworthy capture-time fix (freshness + horizontal
+    //   accuracy validated upstream), or nil when none was available. Coordinates + accuracy only — no place name.
+    var capturedAt: Date?
+    var latitude: Double?
+    var longitude: Double?
+    var locationAccuracyMeters: Double?
+
     var source: MomentSource {
         get { MomentSource(rawValue: sourceRaw) ?? .directed }
         set { sourceRaw = newValue.rawValue }
@@ -229,13 +242,21 @@ final class AssetModel {
         relativePath: String,
         durationSeconds: Double,
         source: MomentSource,
-        createdAt: Date = .now
+        createdAt: Date = .now,
+        capturedAt: Date? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        locationAccuracyMeters: Double? = nil
     ) {
         self.id = id
         self.relativePath = relativePath
         self.durationSeconds = durationSeconds
         self.sourceRaw = source.rawValue
         self.createdAt = createdAt
+        self.capturedAt = capturedAt
+        self.latitude = latitude
+        self.longitude = longitude
+        self.locationAccuracyMeters = locationAccuracyMeters
     }
 }
 

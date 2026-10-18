@@ -35,6 +35,9 @@ struct ContinuousCaptureView: View {
     @State private var reticleToken = 0
     @State private var zoomDialActive = false
     @State private var dialStartFraction: Double = 0
+    @State private var showLocationExplainer = false
+    // Once-ever (persisted): the benefit explainer is shown a single time, not on every camera open.
+    @AppStorage("story.location.explainerShown") private var locationExplainerShown = false
 
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
     private let ink = Color(red: 0.96, green: 0.94, blue: 0.91)
@@ -108,6 +111,22 @@ struct ContinuousCaptureView: View {
         .onAppear {
             model.configure(context: context, captureContext: captureContext, seedOpportunity: seedOpportunity)
             model.seedGuideIdeaIfNeeded()
+            // Location tagging (OPTIONAL): if the user has already allowed it, resume passive updates.
+            // If undetermined, show the benefit-first explainer ONCE — never auto-request, never block.
+            CaptureLocationService.shared.startIfAuthorized()
+            if CaptureLocationService.shared.authorizationStatus == .notDetermined && !locationExplainerShown {
+                locationExplainerShown = true
+                showLocationExplainer = true
+            }
+        }
+        .onDisappear { CaptureLocationService.shared.stop() }   // battery: stop updates when camera closes
+        // Benefit-FIRST explainer (safeguard 1): explain WHY before the system When-In-Use prompt. Camera
+        // startup + recording never wait on this — it's a non-blocking optional affordance.
+        .alert("Tag your Moments with location?", isPresented: $showLocationExplainer) {
+            Button("Enable location") { CaptureLocationService.shared.requestWhenInUseIfNeeded() }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Story can tag the Moments you record with where you captured them, so your travel memories remember the place. Location is optional, stays on your device, and is never added to the videos you share.")
         }
         // Phase 1: the recent-Moment thumbnail opens the GLOBAL library in a browse-only
         // (.recentBrowse) cover PRESENTED OVER the camera — the camera session beneath is
