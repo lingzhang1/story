@@ -241,7 +241,7 @@ enum MomentReferenceResolver {
         // ending; include/exclude verbs. Anything unmatched stays free-text soft direction (never invented).
         let patterns: [(DirectiveSlot, String)] = [
             // OPENING — verb-before-number ("start with / open on / begin with moment 5")
-            (.opening, #"(?:start|open|begin|lead)(?:ing)?\s+(?:with|on|off\s+with)?\s*moment\s+#?(\d+)"#),
+            (.opening, #"(?:start|open|begin|lead)(?:ing)?\s+(?:with|from|on|off\s+with)?\s*moment\s+#?(\d+)"#),
             // OPENING — number-before-cue ("use moment 5 to start", "moment 5 first", "moment 5 to open")
             (.opening, #"moment\s+#?(\d+)\s+(?:to\s+)?(?:start|open|begin|first|lead|up\s+front|at\s+the\s+(?:start|beginning)|as\s+the\s+(?:opening|first))"#),
             // ENDING — verb-before-number ("end with / finish on / close with moment 8")

@@ -44,6 +44,16 @@ final class MomentReferenceResolverTests: XCTestCase {
         XCTAssertEqual(slots[.ending], 15)
     }
 
+    // 3a. "Start from Moment N" (and "start with") parse to OPENING. Regression: the connector alternation
+    // originally listed only with/on/off-with, so "start FROM moment N" fell through to no opening at all —
+    // the clip never moved to the front despite the user asking for it.
+    func test_parse_opening_start_from_and_with() {
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start from Moment 5").first?.slot, .opening)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start from Moment 5").first?.number, 5)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start with Moment 5").first?.slot, .opening)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("start from moment 5 and make the cuts fast").first?.slot, .opening)
+    }
+
     // 3b. "do not use" / "don't use" parse as exclude; "put Moment N at the end" as ending.
     func test_parse_exclude_and_put_at_end_variants() {
         XCTAssertEqual(MomentReferenceResolver.parseTyped("do not use moment 4").first?.slot, .exclude)

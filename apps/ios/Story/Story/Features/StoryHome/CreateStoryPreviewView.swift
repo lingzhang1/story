@@ -356,8 +356,13 @@ struct CreateStoryPreviewView: View {
                 numbering: StoryMomentNumbering(story: story.moments),
                 momentForId: { id in story.moments.first { $0.id == id } },
                 initialCreativeDirection: story.creativeDirectionText ?? "",
+                // Seed ONLY must_include as visual chips. Chips are an INCLUDE-only control
+                // (CustomizeYourStoryView maps every chip to slot .include), so folding opening/ending/exclude
+                // ids in here silently DOWNGRADES them to must_include on every round-trip through this sheet —
+                // the opening directive was being destroyed, which is why "Start with Moment N" never moved the
+                // clip to the front. opening/ending survive via the typed creativeDirectionText above, not chips.
                 initialReferenceChipIds: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)
-                    .map { Array(Set($0.mustInclude + $0.exclude + [$0.opening, $0.ending].compactMap { $0 })) } ?? [],
+                    .map { $0.mustInclude } ?? [],
                 onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
                     acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
                                     directives: directives, soft: soft, chipIds: chipIds, music: music) },
