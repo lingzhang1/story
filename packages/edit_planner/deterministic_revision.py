@@ -134,55 +134,59 @@ _SPEED_MIN, _SPEED_MAX = 0.5, 2.0
 
 def apply_deterministic_retime(base_plan: dict, target_clip_seconds: float,
                                min_total_seconds: float | None = None) -> dict | None:
-    """Phase 3 timing-only fast path. Re-time EVERY segment of the exact base plan toward `target_clip_seconds`
-    WITHOUT a model call and WITHOUT changing which clips are used, their order, their source ranges, the
-    soundtrack, native-audio policy or transitions — the owner's preservation contract for a pure pacing
-    revise ("shorten each clip to ~5s"). Only `output_duration_seconds` (and the derived `speed`) change.
+    """Phase 3 timing-only fast path. Shorten EVERY segment toward `target_clip_seconds` WITHOUT a model call
+    and WITHOUT changing which clips are used, their order, the soundtrack, native-audio policy or transitions —
+    the owner's preservation contract for a pure pacing revise ("shorten each clip to ~5s").
 
-    For each segment: keep the source span [start,end]; set output_duration = clamp(target, so that
-    speed = span/output_duration stays within [0.5, 2.0]). `min_total_seconds` (when given) is the target
-    duration's LOWER tolerance bound — shortening every clip to the literal per-clip target can drive the WHOLE
-    video under that bound, which the deterministic validator rejects; so if the naive re-time undershoots, we
-    lengthen clips back up PROPORTIONALLY (still preserving identities/order/ranges) just enough to clear the
-    bound. A clip whose span cannot reach a duration within the speed envelope gets the closest legal value.
-    Returns a new plan dict, or None when the base plan is unusable. The caller MUST run the validator."""
+    "Shorten a clip to ~5s" means SHOW ~5 SECONDS OF THE FOOTAGE AT NORMAL SPEED — i.e. TRIM the source window
+    to ~5s and keep speed 1.0 — NOT cram the clip's whole span into a 5s output, which would force a ~2x
+    speed-up and pitch the native audio up. So for each segment we set the source window to the first
+    `target_clip_seconds` of its existing window (preserving the planner's chosen in-point), set
+    output_duration = that trimmed span, and KEEP speed at 1.0. A clip whose source window is ALREADY shorter
+    than the target keeps its full window (we never stretch footage that isn't there); only if a clip is so
+    short that it must be slowed to reach a floor do we touch speed, clamped to [0.5, 2.0].
+
+    `min_total_seconds` (target duration's lower bound, passed only for a user-EXACT duration) lifts the
+    per-clip trim length uniformly so the whole video still clears the bound while staying within each clip's
+    available source. Returns a new plan dict, or None when the base plan is unusable. Caller MUST validate."""
     import copy
     if not isinstance(base_plan, dict) or not base_plan.get("segments"):
         return None
     if not (isinstance(target_clip_seconds, (int, float)) and target_clip_seconds > 0):
         return None
     out = copy.deepcopy(base_plan)
-    # Per-segment legal output window [min_out, max_out] from the speed envelope; and the naive target-clamped
-    # value. Segments with no usable span keep their base duration and don't move.
-    windows = []  # (seg, span_or_None, min_out, max_out)
+    # Per-segment available source window. We trim the END toward start+target, never past the clip's own
+    # available footage (available = current window; we do not invent source beyond what the base chose).
+    windows = []  # (seg, start, avail_span) ; avail_span None => leave segment untouched
     for s in out.get("segments", []):
         a = s.get("source_start_seconds"); b = s.get("source_end_seconds")
         if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or b <= a:
-            windows.append((s, None, None, None)); continue
-        span = float(b) - float(a)
-        windows.append((s, span, span / _SPEED_MAX, span / _SPEED_MIN))
+            windows.append((s, None, None)); continue
+        windows.append((s, float(a), float(b) - float(a)))
 
-    def _assign(target_per_clip: float):
-        for s, span, lo, hi in windows:
-            if span is None:
+    def _assign(trim_to: float):
+        for s, start, avail in windows:
+            if avail is None:
                 continue
-            new_out = max(lo, min(float(target_per_clip), hi))
-            s["output_duration_seconds"] = round(new_out, 3)
-            s["speed"] = round(span / new_out, 4)
+            # Show at most `trim_to` seconds, but never more than the clip actually has.
+            keep = min(float(trim_to), avail)
+            s["source_start_seconds"] = round(start, 3)
+            s["source_end_seconds"] = round(start + keep, 3)
+            s["output_duration_seconds"] = round(keep, 3)   # normal speed: output == trimmed source span
+            s["speed"] = 1.0
 
     _assign(target_clip_seconds)
-    # If honoring the literal per-clip target undershoots the target-duration lower bound, raise the per-clip
-    # target uniformly until the total clears it (bounded search), keeping all clips and the envelope.
+    # For a user-EXACT target that the trimmed total undershoots, lengthen the per-clip trim uniformly (still
+    # bounded by each clip's available footage) until the total clears the lower bound — preserving clips,
+    # order and NORMAL speed throughout. Clips with little footage simply contribute what they have.
     if min_total_seconds and min_total_seconds > 0:
         def _total():
             return sum((s.get("output_duration_seconds") or 0.0) for s in out["segments"])
         if _total() < min_total_seconds:
-            # Max achievable total = sum of each clip's max_out. If even that can't reach the bound, give the
-            # longest legal duration to every clip (best effort) and let the validator decide.
-            lift = target_clip_seconds
-            for _ in range(24):  # bounded: widen the per-clip target toward each clip's max
-                lift *= 1.25
-                _assign(lift)
+            trim = target_clip_seconds
+            for _ in range(32):  # bounded: widen the per-clip trim toward each clip's available span
+                trim *= 1.25
+                _assign(trim)
                 if _total() >= min_total_seconds:
                     break
     return out

@@ -1282,9 +1282,10 @@ def test_deterministic_transform_reorders_and_prunes():
     assert ids(A(base, {"exclude": ["B"]})) == ["a", "c", "d"]
 
 
-def test_deterministic_retime_preserves_clips_order_ranges():
-    # Preservation contract: a timing-only re-time changes ONLY output_duration/speed; the clip set, order and
-    # source ranges are byte-identical. This is the fix for "shorten each clip to ~5s" silently re-picking.
+def test_deterministic_retime_trims_source_at_normal_speed():
+    # "shorten each clip to ~5s" means SHOW ~5s of footage at NORMAL speed (trim the source window), NOT cram
+    # the whole clip into 5s (which forces ~2x speed + pitched audio — the on-device bug). The clip SET, order
+    # and music are preserved; the source END is trimmed toward start+5s; speed stays 1.0.
     from edit_planner.deterministic_revision import apply_deterministic_retime
     def seg(o, a, s0, s1, outd): return {"order": o, "asset_id": a, "source_start_seconds": s0,
                                          "source_end_seconds": s1, "output_duration_seconds": outd,
@@ -1294,39 +1295,40 @@ def test_deterministic_retime_preserves_clips_order_ranges():
     out = apply_deterministic_retime(base, 5.0)
     assert out is not None
     segs = sorted(out["segments"], key=lambda s: s["order"])
-    # same clips, same order, same source ranges, same music.
-    assert [s["asset_id"] for s in segs] == ["a", "b", "c"]
-    assert [(s["source_start_seconds"], s["source_end_seconds"]) for s in segs] == [(0.0,10.0),(2.0,6.0),(0.0,3.0)]
-    assert out["music_asset_id"] == "trk"
-    # durations moved toward 5s, clamped so speed stays in [0.5, 2.0].
+    assert [s["asset_id"] for s in segs] == ["a", "b", "c"]   # clips + order preserved
+    assert out["music_asset_id"] == "trk"                     # soundtrack preserved
+    # EVERY segment plays at normal speed (no pitch-up of native audio).
     for s in segs:
-        span = s["source_end_seconds"] - s["source_start_seconds"]
-        spd = span / s["output_duration_seconds"]
-        assert 0.5 - 1e-6 <= spd <= 2.0 + 1e-6, f"speed {spd} out of envelope"
-    # clip 'a' (span 10) can't reach 5s without speed>2 -> clamped to span/2.0 = 5.0 at speed 2.0.
-    assert abs(segs[0]["output_duration_seconds"] - 5.0) < 0.01 and abs(segs[0]["speed"] - 2.0) < 0.01
-    # clip 'c' (span 3) targets 5s -> span/0.6 would exceed; max_out=span/0.5=6.0, so 5.0 is legal at speed 0.6.
-    assert abs(segs[2]["output_duration_seconds"] - 5.0) < 0.01
+        assert abs(s["speed"] - 1.0) < 1e-6, f"speed {s['speed']} should be normal (1.0)"
+        assert abs(s["output_duration_seconds"] - (s["source_end_seconds"] - s["source_start_seconds"])) < 1e-6
+    # clip 'a' (10s available) is TRIMMED to a 5s window at its original in-point, normal speed.
+    assert segs[0]["source_start_seconds"] == 0.0 and abs(segs[0]["source_end_seconds"] - 5.0) < 0.01
+    assert abs(segs[0]["output_duration_seconds"] - 5.0) < 0.01
+    # clip 'b' (4s available, < 5s target) keeps its whole window — we never stretch footage that isn't there.
+    assert (segs[1]["source_start_seconds"], segs[1]["source_end_seconds"]) == (2.0, 6.0)
+    assert abs(segs[1]["output_duration_seconds"] - 4.0) < 0.01
+    # clip 'c' (3s available) keeps its whole 3s window at normal speed.
+    assert abs(segs[2]["output_duration_seconds"] - 3.0) < 0.01
 
 
 def test_deterministic_retime_respects_target_lower_bound():
-    # "shorten to 5s" on many clips can undershoot the target duration; the retime lifts per-clip durations
-    # (still preserving clips/order/ranges) so the total clears the lower bound and the plan validates.
+    # A user-exact target the naive ~5s trim would undershoot: the trim window is widened uniformly (bounded by
+    # each clip's AVAILABLE footage) until the total clears the lower bound — all at NORMAL speed, clips kept.
     from edit_planner.deterministic_revision import apply_deterministic_retime
     def seg(o, a, s0, s1): return {"order": o, "asset_id": a, "source_start_seconds": s0,
                                    "source_end_seconds": s1, "output_duration_seconds": 10.0,
                                    "native_audio": "keep", "speed": 1.0}
-    # 3 clips, each span 10 (max legal output 20s each). Naive 5s each -> total 15s. Lower bound 48s.
+    # 3 clips, 10s available each. Naive 5s each -> total 15s. Reachable lower bound 24s (8s/clip <= 10 avail).
     base = {"schema_version": "edit_plan/2", "feasible": True,
             "segments": [seg(0,"a",0,10), seg(1,"b",0,10), seg(2,"c",0,10)]}
-    out = apply_deterministic_retime(base, 5.0, min_total_seconds=48.0)
+    out = apply_deterministic_retime(base, 5.0, min_total_seconds=24.0)
     segs = sorted(out["segments"], key=lambda s: s["order"])
     total = sum(s["output_duration_seconds"] for s in segs)
-    assert total >= 48.0, f"total {total} should clear the lower bound"
-    assert [s["asset_id"] for s in segs] == ["a","b","c"]   # clips still preserved
+    assert total >= 24.0, f"total {total} should clear the lower bound"
+    assert [s["asset_id"] for s in segs] == ["a","b","c"]   # clips preserved
     for s in segs:
-        spd = (s["source_end_seconds"]-s["source_start_seconds"]) / s["output_duration_seconds"]
-        assert 0.5 - 1e-6 <= spd <= 2.0 + 1e-6
+        assert abs(s["speed"] - 1.0) < 1e-6   # normal speed throughout (trim, not speed-up)
+        assert abs(s["output_duration_seconds"] - (s["source_end_seconds"]-s["source_start_seconds"])) < 1e-6
 
 
 def test_parse_target_clip_seconds():
