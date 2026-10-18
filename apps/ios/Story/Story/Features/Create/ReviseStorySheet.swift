@@ -21,6 +21,10 @@ struct ReviseStorySheet: View {
     @State private var chips: [MomentReferenceChipModel] = []
     @State private var showPicker = false
     @State private var clarification: String?
+    // Interpretation lifecycle (owner safeguards #1/#2) — mirror of CustomizeYourStoryView.
+    @State private var isInterpreting = false
+    @State private var interpretToken = UUID()
+    @State private var retryable = false
 
     private var numbering: StoryMomentNumbering { StoryMomentNumbering(story: story.moments) }
 
@@ -35,6 +39,10 @@ struct ReviseStorySheet: View {
 
                     StoryTextField(placeholder: "Start with Moment 8, drop Moment 4, make it more cinematic…",
                                    text: $instruction, minHeight: 140)
+                        .onChange(of: instruction) { _, _ in
+                            interpretToken = UUID()
+                            if retryable { retryable = false; clarification = nil }
+                        }
 
                     if !story.moments.isEmpty {
                         Button { showPicker = true } label: {
@@ -52,6 +60,18 @@ struct ReviseStorySheet: View {
                     if let clarification {
                         Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
                     }
+                    if retryable {
+                        Button { apply() } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
+                                Text("Retry").font(StoryTheme.body(13, .medium))
+                            }
+                            .foregroundStyle(StoryTheme.gold)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
                     Spacer(minLength: 8)
                 }
                 .padding(StoryTheme.screenPadding)
@@ -60,13 +80,13 @@ struct ReviseStorySheet: View {
             .navigationTitle("Revise").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.foregroundStyle(StoryTheme.textSecondary)
+                    Button("Cancel") { interpretToken = UUID(); dismiss() }.foregroundStyle(StoryTheme.textSecondary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") { apply() }
+                    Button(isInterpreting ? "Understanding…" : "Apply") { apply() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(canApply ? StoryTheme.gold : StoryTheme.textMuted)
-                        .disabled(!canApply)
+                        .foregroundStyle((canApply && !isInterpreting) ? StoryTheme.gold : StoryTheme.textMuted)
+                        .disabled(!canApply || isInterpreting)
                 }
             }
             .sheet(isPresented: $showPicker) {
@@ -88,28 +108,55 @@ struct ReviseStorySheet: View {
     }
 
     private func apply() {
+        guard !isInterpreting else { return }                         // duplicate-tap (#1)
+        let snapshotText = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapshotChips = chips
         let n = numbering
-        let typed = MomentReferenceResolver.parseTyped(instruction)
-        let chipRefs = chips.map { (slot: DirectiveSlot.include, id: $0.id) }
-        let ordering = MomentReferenceResolver.parseOrdering(instruction)
-        let implicit = MomentReferenceResolver.parseImplicitFollow(instruction)
-        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering, implicitFollow: implicit, in: n)
-        if result.needsClarification {
-            clarification = clarificationMessage(result.unresolved, numbering: n)
-            return   // never submit a revision with unresolved references
-        }
-        onApply(result.directives, instruction)
-        dismiss()
-    }
+        let token = UUID()
+        interpretToken = token
+        clarification = nil; retryable = false; isInterpreting = true
 
-    private func clarificationMessage(_ unresolved: [UnresolvedReference],
-                                      numbering: StoryMomentNumbering) -> String {
-        let parts = unresolved.map { u -> String in
-            switch u.reason {
-            case .numberOutOfRange(let num): return "Moment \(num) doesn't exist (this Story has \(numbering.count))"
-            case .momentUnavailable: return "a referenced Moment is no longer in this Story"
+        Task {
+            let outcome = await InterpretationCoordinator.interpret(
+                snapshotText, numbering: n,
+                summaryForId: { id in story.moments.first { $0.id == id }?.caption })
+            await MainActor.run {
+                guard interpretToken == token else { return }          // stale-drop (#1)
+                isInterpreting = false
+                let musicSuffix = outcome.unsupportedMusicNote.map { "\n\($0)" } ?? ""
+                switch outcome.kind {
+                case .serviceFailure:
+                    retryable = true
+                    clarification = (outcome.blocking.first ?? "Couldn't interpret that right now.") + musicSuffix
+                    return
+                case .clarify:
+                    clarification = clarificationText(outcome, numbering: n) + musicSuffix
+                    return
+                case .ok:
+                    break
+                }
+                // Merge include chips; the Revise path carries the EXACT base plan via onApply (unchanged
+                // semantics — revision operates on the selected version).
+                var directives = outcome.directives
+                for c in snapshotChips where !directives.mustInclude.contains(c.id) {
+                    directives.mustInclude.append(c.id)
+                }
+                if !musicSuffix.isEmpty { clarification = outcome.unsupportedMusicNote }  // non-blocking note
+                onApply(directives, snapshotText)
+                dismiss()
             }
         }
-        return "Please fix: " + parts.joined(separator: "; ") + "."
+    }
+
+    private func clarificationText(_ o: InterpretationOutcome, numbering: StoryMomentNumbering) -> String {
+        if !o.unresolvedMomentNumbers.isEmpty {
+            let list = o.unresolvedMomentNumbers.map { "Moment \($0)" }.joined(separator: ", ")
+            return "\(list) couldn't be matched (this Story has \(numbering.count)). Pick it with “Add Moment reference”, or rephrase."
+        }
+        if !o.unresolved.isEmpty {
+            return o.unresolved.joined(separator: " ") + " Try rephrasing, or use “Add Moment reference”."
+        }
+        if let b = o.blocking.first { return b }
+        return "Please rephrase your instruction so I can apply it."
     }
 }

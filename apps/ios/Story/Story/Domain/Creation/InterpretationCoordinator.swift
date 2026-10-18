@@ -17,12 +17,26 @@ import Foundation
 
 struct InterpretationOutcome: Equatable {
     enum Source: Equatable { case deterministic, server, deterministicFallbackAfterServerError }
+    /// The user-facing resolution class the UI must branch on (owner safeguard #2: distinguish ambiguous from
+    /// service failure from cancellation).
+    enum Kind: Equatable {
+        case ok                       // canSubmit — safe to launch planning
+        case clarify                  // unresolved/ambiguous references — show clarification (thumbnails when numeric)
+        case serviceFailure           // 503 / transport with a residual actionable clause — show RETRY
+    }
     var directives: ResolvedDirectives
     var softDirection: String
     var unresolved: [String]
     var blocking: [String]
     var canSubmit: Bool
     var source: Source
+    var kind: Kind
+    /// Moment display numbers the user referenced that could not be resolved — drives the thumbnail
+    /// clarification UI (owner #2). Empty when the ambiguity is non-numeric (e.g. a semantic reference).
+    var unresolvedMomentNumbers: [Int]
+    /// True when the instruction contained an explicit music/soundtrack ask the current interpreter cannot
+    /// express as a typed directive (owner #5: report honestly, never silently discard).
+    var unsupportedMusicNote: String?
 }
 
 enum InterpretationCoordinator {
@@ -37,7 +51,9 @@ enum InterpretationCoordinator {
         let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return InterpretationOutcome(directives: ResolvedDirectives(), softDirection: "",
-                                         unresolved: [], blocking: [], canSubmit: true, source: .deterministic)
+                                         unresolved: [], blocking: [], canSubmit: true,
+                                         source: .deterministic, kind: .ok,
+                                         unresolvedMomentNumbers: [], unsupportedMusicNote: nil)
         }
 
         // 1. Deterministic parse (fast, free, no model).
@@ -46,6 +62,7 @@ enum InterpretationCoordinator {
         let implicit = MomentReferenceResolver.parseImplicitFollow(trimmed)
         let det = MomentReferenceResolver.resolve(typed: typed, chips: [], ordering: ordering,
                                                   implicitFollow: implicit, in: numbering)
+        let musicNote = unsupportedMusicNote(trimmed)   // owner #5: never silently discard music asks
 
         // 2. Completeness gate — adopt deterministic ONLY if it consumed the whole ACTIONABLE instruction.
         if deterministicIsComplete(trimmed, typed: typed, ordering: ordering, implicit: implicit) {
@@ -54,32 +71,91 @@ enum InterpretationCoordinator {
                 return InterpretationOutcome(
                     directives: det.directives, softDirection: trimmed,
                     unresolved: det.unresolved.map(humanReadable), blocking: [],
-                    canSubmit: false, source: .deterministic)
+                    canSubmit: false, source: .deterministic, kind: .clarify,
+                    unresolvedMomentNumbers: unresolvedNumbers(det.unresolved),
+                    unsupportedMusicNote: musicNote)
             }
             return InterpretationOutcome(
                 directives: det.directives, softDirection: trimmed,
-                unresolved: [], blocking: [], canSubmit: true, source: .deterministic)
+                unresolved: [], blocking: [], canSubmit: true,
+                source: .deterministic, kind: .ok,
+                unresolvedMomentNumbers: [], unsupportedMusicNote: musicNote)
         }
 
         // 3. Incomplete / compound / uncertain -> server interpreter.
         do {
             let s = try await service.interpret(trimmed, numbering: numbering, summaryForId: summaryForId)
+            let kind: InterpretationOutcome.Kind = s.canSubmit ? .ok : .clarify
+            // Numeric unresolved references drive thumbnail clarify; non-numeric (semantic) stay text-only.
+            let nums = unresolvedNumbers(s.unresolved)
             return InterpretationOutcome(directives: s.directives, softDirection: s.softDirection,
                                          unresolved: s.unresolved, blocking: s.blocking,
-                                         canSubmit: s.canSubmit, source: .server)
-        } catch {
-            // Server unavailable: fall back to the deterministic result, but NEVER claim the dropped clauses
-            // were handled — if the deterministic parse left a residual actionable clause, mark not-submittable
-            // so the UI asks the user to simplify/clarify rather than silently shipping a partial directive set.
+                                         canSubmit: s.canSubmit, source: .server, kind: kind,
+                                         unresolvedMomentNumbers: nums, unsupportedMusicNote: musicNote)
+        } catch let e as InterpretServiceError {
+            // Distinguish SERVICE FAILURE (retry) from genuine ambiguity. A residual actionable clause we
+            // could not interpret because the service was down is a RETRY case, not a clarify — never ship a
+            // partial directive set as if it were understood (owner #2/#3).
             let residual = residualActionableClause(trimmed, typed: typed, ordering: ordering, implicit: implicit)
-            let unresolved = det.unresolved.map(humanReadable)
-                + (residual ? ["Part of your instruction wasn't understood — please simplify or rephrase it."] : [])
+            if residual {
+                _ = e   // 503 vs transport both surface as serviceFailure (retry); detail kept for logging only
+                return InterpretationOutcome(
+                    directives: det.directives, softDirection: trimmed,
+                    unresolved: det.unresolved.map(humanReadable),
+                    blocking: ["Couldn't reach the interpreter — tap Retry."],
+                    canSubmit: false, source: .deterministicFallbackAfterServerError,
+                    kind: .serviceFailure,
+                    unresolvedMomentNumbers: unresolvedNumbers(det.unresolved),
+                    unsupportedMusicNote: musicNote)
+            }
+            // No residual actionable clause: the deterministic result safely covers the whole instruction, so
+            // fall back to it cleanly (owner #2: deterministic fallback only when the whole instruction is
+            // safely understood).
             return InterpretationOutcome(
                 directives: det.directives, softDirection: trimmed,
-                unresolved: unresolved, blocking: [],
-                canSubmit: !det.needsClarification && !residual,
-                source: .deterministicFallbackAfterServerError)
+                unresolved: det.unresolved.map(humanReadable), blocking: [],
+                canSubmit: !det.needsClarification,
+                source: .deterministicFallbackAfterServerError,
+                kind: det.needsClarification ? .clarify : .ok,
+                unresolvedMomentNumbers: unresolvedNumbers(det.unresolved),
+                unsupportedMusicNote: musicNote)
+        } catch {
+            return InterpretationOutcome(
+                directives: det.directives, softDirection: trimmed,
+                unresolved: det.unresolved.map(humanReadable),
+                blocking: ["Couldn't reach the interpreter — tap Retry."],
+                canSubmit: false, source: .deterministicFallbackAfterServerError,
+                kind: .serviceFailure,
+                unresolvedMomentNumbers: unresolvedNumbers(det.unresolved),
+                unsupportedMusicNote: musicNote)
         }
+    }
+
+    /// Unresolved display numbers for thumbnail clarify — parse "Moment N" out of the human-readable strings.
+    static func unresolvedNumbers(_ unresolved: [String]) -> [Int] {
+        var out: [Int] = []
+        let re = try? NSRegularExpression(pattern: #"moment\s+#?(\d+)"#, options: [.caseInsensitive])
+        for s in unresolved {
+            let ns = s as NSString
+            re?.enumerateMatches(in: s, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+                if let m, m.numberOfRanges > 1, let n = Int(ns.substring(with: m.range(at: 1))) { out.append(n) }
+            }
+        }
+        return Array(Set(out)).sorted()
+    }
+
+    static func unresolvedNumbers(_ unresolved: [UnresolvedReference]) -> [Int] {
+        unresolved.compactMap { if case .numberOutOfRange(let n) = $0.reason { return n } else { return nil } }
+    }
+
+    /// Detect an EXPLICIT music/soundtrack ask so the UI can tell the user it isn't a typed directive yet
+    /// (deferred contract), instead of silently dropping it. Returns a short note or nil.
+    static func unsupportedMusicNote(_ text: String) -> String? {
+        let lower = text.lowercased()
+        let musicWords = ["soundtrack", "song", " track", "music", "tune", "score", "jazzy", "jazz",
+                          "acoustic", "upbeat", "beat drop", "lo-fi", "lofi", "orchestral"]
+        guard musicWords.contains(where: { lower.contains($0) }) else { return nil }
+        return "Music preferences aren't applied as a directive yet — this part is passed as a general note only."
     }
 
     // MARK: - Completeness

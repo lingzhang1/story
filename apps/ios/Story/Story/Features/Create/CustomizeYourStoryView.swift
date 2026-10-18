@@ -43,6 +43,12 @@ struct CustomizeYourStoryView: View {
     @State private var chips: [MomentReferenceChipModel]
     @State private var showReferencePicker = false
     @State private var clarification: String?
+    // Interpretation lifecycle (owner safeguards #1/#2): guard duplicate taps, drop stale async responses, and
+    // carry a retryable failure. `interpretToken` is bumped on every input edit / dismissal so a response that
+    // resolves AFTER the user changed the text or left the sheet is discarded instead of submitting.
+    @State private var isInterpreting = false
+    @State private var interpretToken = UUID()
+    @State private var retryableInstruction: String?   // non-nil => a Retry affordance is shown
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
          initialEditingApproach: EditingApproach = .default, visualFirstAvailable: Bool = false,
@@ -107,6 +113,12 @@ struct CustomizeYourStoryView: View {
                             subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
                         StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
                                        text: $creativeDirection, minHeight: 110)
+                            // Editing the instruction invalidates any in-flight interpretation (owner #1): a
+                            // response that resolves after this edit must NOT submit the old text.
+                            .onChange(of: creativeDirection) { _, _ in
+                                interpretToken = UUID()
+                                if retryableInstruction != nil { retryableInstruction = nil; clarification = nil }
+                            }
                         Button { showReferencePicker = true } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
@@ -120,6 +132,20 @@ struct CustomizeYourStoryView: View {
                         MomentReferenceChipRow(chips: chips) { id in chips.removeAll { $0.id == id } }
                         if let clarification {
                             Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
+                        }
+                        // Service failure (503/transport): the draft is preserved; offer an explicit Retry
+                        // rather than silently proceeding or discarding the instruction (owner #2).
+                        if retryableInstruction != nil {
+                            Button { attemptCreate() } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
+                                    Text("Retry").font(StoryTheme.body(13, .medium))
+                                }
+                                .foregroundStyle(StoryTheme.gold)
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -174,13 +200,19 @@ struct CustomizeYourStoryView: View {
                 }
 
                 Button { attemptCreate() } label: {
-                    Text("Create my Story").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
-                        .frame(maxWidth: .infinity).padding(.vertical, 16)
-                        .background(StoryTheme.cream).clipShape(Capsule())
+                    HStack(spacing: 8) {
+                        if isInterpreting { ProgressView().tint(StoryTheme.ink) }
+                        Text(isInterpreting ? "Understanding…" : "Create my Story")
+                            .font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 16)
+                    .background(StoryTheme.cream).clipShape(Capsule())
+                    .opacity(isInterpreting ? 0.7 : 1)
                 }
                 .buttonStyle(.plain)
+                .disabled(isInterpreting)   // duplicate-tap protection (#1)
 
-                Button("Cancel") { onCancel() }
+                Button("Cancel") { interpretToken = UUID(); onCancel() }
                     .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textMuted)
                     .frame(maxWidth: .infinity)
             }
@@ -188,6 +220,7 @@ struct CustomizeYourStoryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .presentationBackground(StoryTheme.ink)
+        .onDisappear { interpretToken = UUID() }   // drop any in-flight interpretation on dismissal (#1)
         .sheet(isPresented: $showReferencePicker) {
             MomentReferencePicker(
                 numbering: numbering,
@@ -201,37 +234,77 @@ struct CustomizeYourStoryView: View {
     }
 
     /// Resolve the typed references + chips against the stable snapshot. Hard references that cannot resolve
-    /// BLOCK creation with inline clarification (owner: never silently discard). The soft free text is forwarded
-    /// as-is (soft_direction) regardless of whether it also contained typed references. On success, hand the
-    /// resolved directives + the soft text + the chip ids out so the caller persists the draft and forwards them.
+    /// Interpret the instruction through the SHARED InterpretationCoordinator, then hand the resolved directives
+    /// to the caller. Owner safeguards: an immutable snapshot of the visible text + chips + numbering is taken
+    /// BEFORE the async call; a duplicate tap is ignored while interpreting; a response whose token no longer
+    /// matches (text edited or sheet dismissed) is DROPPED; a service failure keeps the draft and offers Retry;
+    /// unresolved references BLOCK submit with clarification. Never silently downgrade a hard clause.
     private func attemptCreate() {
-        let typed = MomentReferenceResolver.parseTyped(creativeDirection)
-        let chipRefs = chips.map { (slot: DirectiveSlot.include, id: $0.id) }
-        let ordering = MomentReferenceResolver.parseOrdering(creativeDirection)
-        let implicit = MomentReferenceResolver.parseImplicitFollow(creativeDirection)
-        let result = MomentReferenceResolver.resolve(typed: typed, chips: chipRefs, ordering: ordering,
-                                                     implicitFollow: implicit, in: numbering)
-        if result.needsClarification {
-            clarification = clarificationMessage(result.unresolved)
-            return   // never submit expensive generation with unresolved hard references
-        }
+        guard !isInterpreting else { return }                 // duplicate-tap protection (#1)
+        // Immutable submission snapshot (#1): the exact values the user sees right now.
+        let snapshotText = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snapshotChips = chips
+        let snapshotNumbering = numbering
+        let token = UUID()
+        interpretToken = token
         clarification = nil
-        let directives: ResolvedDirectives? = result.directives.isEmpty ? nil : result.directives
-        let soft = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Separate the music concern from the editing concern (owner Music-Routing §1). The caller routes the
-        // explicit music PREFERENCE to MusicPlan; beat-sync stays in `soft` for the edit planner only.
-        let music = MomentReferenceResolver.parseMusicIntent(creativeDirection)
-        onCreate(chosenSeconds, sound, length.wire, approach, directives, soft, chips.map(\.id), music)
-    }
+        retryableInstruction = nil
+        isInterpreting = true
 
-    private func clarificationMessage(_ unresolved: [UnresolvedReference]) -> String {
-        let parts = unresolved.map { u -> String in
-            switch u.reason {
-            case .numberOutOfRange(let n): return "Moment \(n) doesn't exist (this Story has \(numbering.count))"
-            case .momentUnavailable: return "a referenced Moment is no longer in this Story"
+        Task {
+            let outcome = await InterpretationCoordinator.interpret(
+                snapshotText, numbering: snapshotNumbering,
+                summaryForId: { id in momentForId(id)?.caption })
+
+            await MainActor.run {
+                // Stale-response drop (#1): the user edited the text or dismissed the sheet mid-flight.
+                guard interpretToken == token else { return }
+                isInterpreting = false
+
+                // Music ask the typed-directive contract can't express yet — surface honestly (#5).
+                let musicSuffix = outcome.unsupportedMusicNote.map { "\n\($0)" } ?? ""
+
+                switch outcome.kind {
+                case .serviceFailure:
+                    retryableInstruction = snapshotText     // preserve draft + offer Retry (#2)
+                    clarification = (outcome.blocking.first ?? "Couldn't interpret that right now.") + musicSuffix
+                    return
+                case .clarify:
+                    // Thumbnail clarification when numeric refs are unresolved, else text (#2).
+                    clarification = clarificationText(outcome) + musicSuffix
+                    return
+                case .ok:
+                    break
+                }
+
+                // Merge the visual-picker include chips into the interpreted directives (chips are include-only;
+                // the typed text owns opening/ending/ordering via the coordinator). Keeps BOTH inputs, one path.
+                var directives = outcome.directives
+                for c in snapshotChips where !directives.mustInclude.contains(c.id) {
+                    directives.mustInclude.append(c.id)
+                }
+                let finalDirectives: ResolvedDirectives? = directives.isEmpty ? nil : directives
+                let music = MomentReferenceResolver.parseMusicIntent(snapshotText)
+                if !musicSuffix.isEmpty { clarification = outcome.unsupportedMusicNote }  // non-blocking note
+                onCreate(chosenSeconds, sound, length.wire, approach, finalDirectives,
+                         snapshotText, snapshotChips.map(\.id), music)
             }
         }
-        return "Please fix: " + parts.joined(separator: "; ") + "."
+    }
+
+    /// Clarification copy for an unresolved/ambiguous interpretation. Numeric unresolved refs name the Moment
+    /// numbers (the picker lets the user pick visually); a non-numeric (semantic) ambiguity asks to rephrase or
+    /// use the picker — never silently dropped (#2/#6).
+    private func clarificationText(_ o: InterpretationOutcome) -> String {
+        if !o.unresolvedMomentNumbers.isEmpty {
+            let list = o.unresolvedMomentNumbers.map { "Moment \($0)" }.joined(separator: ", ")
+            return "\(list) couldn't be matched (this Story has \(numbering.count)). Pick it with “Add Moment reference”, or rephrase."
+        }
+        if !o.unresolved.isEmpty {
+            return o.unresolved.joined(separator: " ") + " Try rephrasing, or use “Add Moment reference” to pick it."
+        }
+        if let b = o.blocking.first { return b }
+        return "Please rephrase your instruction so I can apply it."
     }
 
     // MARK: - row builders
