@@ -204,32 +204,27 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     }
 
     /// Zoom presets expressed in the UI's "×" scale relative to the 1× wide lens. Derived from the
-    /// device's real `virtualDeviceSwitchOverVideoZoomFactors` (ultra-wide gives 0.5×, tele gives the
-    /// switch-over e.g. 2×/3×). Always includes 1×; a 2× digital preset is offered only when the
-    /// optical max does not already exceed it, and everything is clamped to maxAvailableVideoZoomFactor.
+    /// device's real `virtualDeviceSwitchOverVideoZoomFactors` (ultra-wide gives 0.5×, each tele gives a
+    /// switch-over e.g. 2×/3×/5×). The optical switch-overs are ANCHORS; `CameraZoomFormat.ladder`
+    /// fills integer digital steps between them so the ramp is gradual (a [0.5,1,5] device becomes
+    /// [0.5,1,2,3,5]) instead of a jarring 1→5 jump. Everything is clamped to the real max.
     private static func zoomPresets(for device: AVCaptureDevice) -> [Double] {
         // On a virtual device the base zoom (1.0 of videoZoomFactor) is the WIDEST active lens.
         // switchOver factors are videoZoomFactor thresholds where the lens changes.
         let switchOvers = device.virtualDeviceSwitchOverVideoZoomFactors.map { $0.doubleValue }
         let hasUltraWide = device.constituentDevices.contains { $0.deviceType == .builtInUltraWideCamera }
-        var presets: [Double] = []
+        // Real optical anchors in USER-× terms. With ultra-wide, raw factor 1.0 == 0.5× (1× == 2.0).
+        var anchors: [Double] = []
         if hasUltraWide {
-            // With ultra-wide present, videoZoomFactor 1.0 == 0.5× in user terms; 1× == factor 2.0.
-            presets.append(0.5)
-            presets.append(1.0)
-            // Any optical tele switch-over beyond the wide maps to its user-× (factor/2).
-            for f in switchOvers where f > 2.0 { presets.append((f / 2.0).rounded()) }
+            anchors.append(0.5)
+            anchors.append(1.0)
+            for f in switchOvers where f > 2.0 { anchors.append((f / 2.0).rounded()) }
         } else {
-            presets.append(1.0)
-            for f in switchOvers where f > 1.0 { presets.append(f.rounded()) }
+            anchors.append(1.0)
+            for f in switchOvers where f > 1.0 { anchors.append(f.rounded()) }
         }
-        // Offer a 2× digital step on phones that have no optical 2× (so there is a usable preset),
-        // only if nothing optical already reaches ~2×.
-        if !presets.contains(where: { $0 >= 2.0 }) { presets.append(2.0) }
-        // De-dup + sort + clamp to what the device can actually deliver.
         let maxUserZoom = device.maxAvailableVideoZoomFactor / (hasUltraWide ? 2.0 : 1.0)
-        let cleaned = Array(Set(presets)).sorted().filter { $0 <= maxUserZoom + 0.001 }
-        return cleaned.isEmpty ? [1.0] : cleaned
+        return CameraZoomFormat.ladder(anchors: anchors, maxUserZoom: maxUserZoom)
     }
 
     /// Convert a user-facing "×" value into the device's raw `videoZoomFactor`.

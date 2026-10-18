@@ -33,4 +33,37 @@ final class CameraControlsTests: XCTestCase {
         // SE-style (wide only + digital 2× fallback) — no ".5"
         XCTAssertEqual([1.0, 2.0].map(CameraZoomFormat.label), ["1", "2"])
     }
+
+    // MARK: - Gradual zoom ladder (owner fix: 0.5/1/5 was too big a step)
+
+    func testLadder_fillsIntermediateStepsBetweenOpticalAnchors() {
+        // Owner's device reported optical anchors [0.5, 1, 5] — must become a gradual ramp.
+        XCTAssertEqual(CameraZoomFormat.ladder(anchors: [0.5, 1, 5], maxUserZoom: 15),
+                       [0.5, 1, 2, 3, 4, 5])
+    }
+
+    func testLadder_preservesSubOneAnchorAndNeverInterpolatesBelowOne() {
+        // 0.5 kept exactly; nothing fabricated between 0.5 and 1.
+        let r = CameraZoomFormat.ladder(anchors: [0.5, 1, 3], maxUserZoom: 10)
+        XCTAssertEqual(r, [0.5, 1, 2, 3])
+        XCTAssertFalse(r.contains(where: { $0 > 0.5 && $0 < 1 }))
+    }
+
+    func testLadder_wideOnlyStillOffersGradualDigitalSteps() {
+        // A wide-only device (top anchor 1×) still gets a usable digital ramp up to the ceiling.
+        XCTAssertEqual(CameraZoomFormat.ladder(anchors: [1], maxUserZoom: 4), [1, 2, 3])
+    }
+
+    func testLadder_clampsToDeviceMax() {
+        XCTAssertEqual(CameraZoomFormat.ladder(anchors: [1], maxUserZoom: 2.5), [1, 2])
+        XCTAssertEqual(CameraZoomFormat.ladder(anchors: [0.5, 1, 5], maxUserZoom: 3),
+                       [0.5, 1, 2, 3])
+    }
+
+    func testLadder_alwaysIncludesOneAndIsSortedUnique() {
+        let r = CameraZoomFormat.ladder(anchors: [2, 2, 5], maxUserZoom: 8)
+        XCTAssertTrue(r.contains(1.0))
+        XCTAssertEqual(r, r.sorted())
+        XCTAssertEqual(r.count, Set(r).count)
+    }
 }

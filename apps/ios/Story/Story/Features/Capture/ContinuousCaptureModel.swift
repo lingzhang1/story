@@ -12,6 +12,31 @@ enum CameraZoomFormat {
         if z == z.rounded() { return "\(Int(z))" }
         return String(format: "%.1f", z)
     }
+
+    /// Build a GRADUAL preset ladder from the device's real optical anchors (e.g. [0.5, 1, 5]) by
+    /// filling integer digital steps between 1× and the top anchor, so the user sees a smooth ramp
+    /// (0.5, 1, 2, 3, 5) rather than a jarring 1→5 jump. Sub-1× anchors (0.5) are preserved exactly
+    /// and never interpolated (we never imply an optical lens that isn't there). De-duped, sorted,
+    /// clamped to `maxUserZoom`. Always returns at least [1.0].
+    static func ladder(anchors rawAnchors: [Double], maxUserZoom: Double) -> [Double] {
+        var anchors = rawAnchors
+        if !anchors.contains(where: { abs($0 - 1.0) < 0.01 }) { anchors.append(1.0) }
+        let topAnchor = anchors.max() ?? 1.0
+        // A wide-only device (top optical anchor == 1×) still gets gradual DIGITAL steps up to a sane
+        // cap (so there's a usable tele ramp); a device with optical tele fills up to that lens.
+        let digitalCeiling = 3.0
+        let top = min(max(topAnchor, digitalCeiling), maxUserZoom)
+        var set = Set<Double>()
+        // Keep every real anchor that fits (including sub-1× like 0.5 — never interpolated).
+        for a in anchors where a <= maxUserZoom + 0.001 { set.insert(a) }
+        // Fill integer steps from 2 up to `top` (digital zoom between/above optical lenses).
+        if top >= 2 {
+            var i = 2.0
+            while i <= top + 0.001 { set.insert(i); i += 1 }
+        }
+        let cleaned = set.sorted().filter { $0 <= maxUserZoom + 0.001 }
+        return cleaned.isEmpty ? [1.0] : cleaned
+    }
 }
 
 // ContinuousCaptureModel — the @MainActor brain behind ContinuousCaptureView.
