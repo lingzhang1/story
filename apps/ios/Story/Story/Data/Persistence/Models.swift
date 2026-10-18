@@ -869,3 +869,31 @@ final class PendingOperationModel {
     /// Non-terminal operations are the ones recovery acts on.
     var isRecoverable: Bool { phase != "saved" && phase != "abandoned" }
 }
+
+
+// ---------------------------------------------------------------------------
+// MusicPlan cache — latency P0. The MusicPlan LLM call (frozen music_plan/1, ~10s) was re-run on EVERY
+// "find music" open even when nothing changed. This caches the plan per Story keyed by a canonical fingerprint
+// of ALL inputs that feed /v1/music-plan (creative intent, music direction, story guide, coverage, sound
+// preference, target duration, prompt version). A hit skips the 10s inference; any input change -> fingerprint
+// miss -> recompute. ADVISORY/RECOMPUTABLE: never user-authored, safe to drop/rebuild. DERIVED, so a migration
+// failure that loses it only costs one recompute. Restart-safe (persisted). One row per Story (upsert).
+@Model
+final class MusicPlanCacheModel {
+    @Attribute(.unique) var storyId: UUID
+    var planJSON: String                 // the cached MusicPlan/1 wire JSON (snake_case), reused verbatim
+    var inputFingerprint: String         // stable hash of every output-affecting MusicPlan input + prompt ver
+    var promptVersion: String            // the music_plan prompt version the cached plan was produced under
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(storyId: UUID, planJSON: String, inputFingerprint: String,
+         promptVersion: String = "music_plan/1", createdAt: Date = .now, updatedAt: Date = .now) {
+        self.storyId = storyId
+        self.planJSON = planJSON
+        self.inputFingerprint = inputFingerprint
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
