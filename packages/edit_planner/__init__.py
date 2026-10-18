@@ -1268,7 +1268,18 @@ class RealEditPlannerEngine:
                         self.last_diagnostics = diag
                         return _to_contract(retimed, inputs)
                     diag["retime_reject_errors"] = [str(e)[:120] for e in rt_errs[:5]]
-                diag["revision_path"] = "deterministic_retime_fallthrough"
+                # Point 7 (owner 2026-10-18): a pure pacing/timing revise must NEVER fall through to
+                # unrestricted model replanning on a validation failure — re-timing is a deterministic clip-level
+                # transform that the model cannot improve, and a model replan is exactly the silent re-pick we
+                # are preventing. So a retime that cannot be made valid is surfaced as a clear limitation and the
+                # user's existing version is kept, rather than silently replanned. (In practice the trim-at-
+                # normal-speed transform only ever shortens within an already-valid window, so this is a
+                # belt-and-braces guard, visible via retime_reject_errors.)
+                diag["revision_path"] = "deterministic_retime_infeasible"
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "This pacing change could not be applied to your video without re-cutting it. "
+                    "Your current version was kept unchanged.")
 
         if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
                 and rc.get("directives") and not (rc.get("soft_direction") or "").strip()):

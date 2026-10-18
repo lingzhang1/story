@@ -1409,6 +1409,36 @@ def test_initial_creation_undershoot_unchanged():
     assert _undershoot_tolerance_for(_inputs()) == DURATION_UNDERSHOOT_TOLERANCE
 
 
+def test_timing_revise_validation_failure_never_replans(monkeypatch):
+    # Point 7: if a pacing/timing retime cannot be made valid, the engine raises a clear infeasible and NEVER
+    # falls through to an unrestricted model replan (which would be a silent re-pick). Force the retime to
+    # produce an invalid plan and assert the model is never called.
+    import edit_planner.deterministic_revision as dr
+    base_plan = _retimable_base_plan(target=30.0, span=6.0)
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s", "duration_target_source": "ai_recommended"}
+    # Make the retime return a plan the validator rejects (source range outside the moment's useful window).
+    def _bad(bp, target, min_total_seconds=None):
+        import copy
+        p = copy.deepcopy(bp)
+        for s in p["segments"]:
+            s["source_start_seconds"] = 999.0; s["source_end_seconds"] = 1004.0
+            s["output_duration_seconds"] = 5.0; s["speed"] = 1.0
+        return p
+    monkeypatch.setattr(dr, "apply_deterministic_retime", _bad)
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("a failed timing retime must NOT replan via the model")
+    eng = RealEditPlannerEngine(_Boom())
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc,
+                             creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
+    assert "kept unchanged" in str(ei.value).lower()
+    assert eng.last_diagnostics.get("revision_path") == "deterministic_retime_infeasible"
+    assert eng.last_diagnostics.get("model_calls", 0) == 0
+
+
 def test_preservation_gate_rejects_model_clip_repick():
     # A soft-only revise the model handles (not a parseable clip target) that comes back having re-picked a
     # DIFFERENT clip set must be rejected with a clear limitation — never shipped as a silent re-pick.
