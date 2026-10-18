@@ -2,6 +2,18 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+/// Pure, device-independent formatting for zoom-preset labels (unit-testable). ".5" for sub-1×,
+/// integer for whole values ("1", "2"), one decimal otherwise ("1.5"). Kept free of AVFoundation so
+/// it can be tested without a camera device (the preset DERIVATION needs real hardware and is a
+/// device-acceptance concern, not a unit test).
+enum CameraZoomFormat {
+    static func label(_ z: Double) -> String {
+        if z < 1 { return String(format: ".%d", Int((z * 10).rounded())) }
+        if z == z.rounded() { return "\(Int(z))" }
+        return String(format: "%.1f", z)
+    }
+}
+
 // ContinuousCaptureModel — the @MainActor brain behind ContinuousCaptureView.
 //
 // Owns the single CaptureContext-driven persistence path (identical rules to
@@ -46,6 +58,37 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     @Published var ideasCollapsed = false              // full card hidden but ideas retained (chip reopens)
     @Published var recordingElapsed: TimeInterval = 0  // live REC timer (Phase 2)
     @Published var scanProgress: Double = 0            // 0→1 across the scan window (determinate bar)
+
+    // Camera controls (Package B Increment 1) — thin passthroughs to the shared controller. The
+    // controller owns all device config (serialized + lock-guarded); the model only mirrors UI state.
+    @Published var torchOn = false                     // reflects the torch button toggle
+    @Published var currentUserZoom: Double = 1.0       // the active preset highlighted in the UI
+    /// Device-supported zoom presets (e.g. [0.5, 1, 2]) read from the real hardware. [1.0] until ready.
+    var zoomPresets: [Double] { controller?.zoomPresets ?? [1.0] }
+    /// Whether this device has a torch (UI hides the control when false).
+    var hasTorch: Bool { controller?.hasTorch ?? false }
+
+    /// Tap-to-focus at a view point (from the tap gesture). Also shows a brief focus reticle (UI state).
+    func focusAndExpose(atViewPoint point: CGPoint) {
+        controller?.focusAndExpose(atViewPoint: point)
+    }
+    /// Snap to a zoom preset (preset button).
+    func setZoomPreset(_ userZoom: Double) {
+        currentUserZoom = userZoom
+        controller?.setUserZoom(userZoom)
+    }
+    /// Continuous pinch zoom. `base` is captured at gesture start from the controller.
+    func pinchZoom(scale: CGFloat, base: CGFloat) {
+        controller?.applyPinchZoom(scale: scale, base: base)
+    }
+    /// The controller's current raw zoom factor (gesture start reads this).
+    var currentRawZoom: CGFloat { controller?.currentZoomFactor ?? 1.0 }
+    /// Toggle the torch.
+    func toggleTorch() {
+        torchOn.toggle()
+        controller?.setTorch(torchOn)
+    }
+
     private(set) var ideas: [DirectorDecisionDTO] = []
     private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
     private var recordingTimer: Timer?

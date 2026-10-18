@@ -31,6 +31,8 @@ struct ContinuousCaptureView: View {
     @StateObject private var model = ContinuousCaptureModel()
 
     @State private var showLibrary = false
+    @State private var focusReticle: CGPoint?
+    @State private var reticleToken = 0
 
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
     private let ink = Color(red: 0.96, green: 0.94, blue: 0.91)
@@ -41,6 +43,23 @@ struct ContinuousCaptureView: View {
 
             // Live camera preview (full-bleed), hosting the shared engine.
             ContinuousCameraHost(model: model).ignoresSafeArea()
+
+            // Camera-control gesture layer (Increment 1): pinch-to-zoom (works during recording) and
+            // tap-to-focus/expose. Transparent + full-bleed, UNDER the chrome VStack so buttons still win
+            // their taps. A brief focus reticle confirms the tap point.
+            CameraGestureLayer(
+                onTapFocus: { pt in
+                    model.focusAndExpose(atViewPoint: pt)
+                    showFocusReticle(at: pt)
+                },
+                onPinchChanged: { scale, base in model.pinchZoom(scale: scale, base: base) },
+                pinchBase: { model.currentRawZoom }
+            )
+            .ignoresSafeArea()
+
+            if let reticle = focusReticle {
+                FocusReticle().position(reticle).allowsHitTesting(false).transition(.opacity)
+            }
 
             // Chrome overlay (Figma V0.2.2).
             VStack {
@@ -97,6 +116,19 @@ struct ContinuousCaptureView: View {
                 .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
                 .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
+                // Torch toggle (trailing) — shown only where the device has a torch. Safe mid-record.
+                if model.hasTorch {
+                    Button {
+                        model.toggleTorch()
+                    } label: {
+                        Image(systemName: model.torchOn ? "bolt.fill" : "bolt.slash")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(model.torchOn ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.black.opacity(0.4), in: Circle())
+                    }
+                    .accessibilityLabel(model.torchOn ? "Turn torch off" : "Turn torch on")
+                }
             }
             if model.isRecording {
                 recordingIndicator
@@ -133,6 +165,11 @@ struct ContinuousCaptureView: View {
     // MARK: - Bottom: AI overlays · recent thumbnail · record button
     private var bottomControls: some View {
         VStack(spacing: 20) {
+            // Zoom presets (Increment 1) — derived from the REAL device (0.5× only where ultra-wide
+            // exists, etc.), so no fake optical lens is ever implied. Hidden if the device offers only 1×.
+            if model.zoomPresets.count > 1 {
+                zoomPresetStrip
+            }
             // AI Ideas region. The record button below stays live in EVERY state — scanning and
             // inference never block recording. While RECORDING, the full card is hidden; only an
             // optional compact one-line reminder of the active idea shows (Phase 2).
@@ -402,6 +439,41 @@ struct ContinuousCaptureView: View {
 
     private var panelBG: Color { Color(red: 0.09, green: 0.12, blue: 0.12).opacity(0.9) }
 
+    // Device-aware zoom presets. Labels read the real "×" values (0.5 shows as ".5", integers as "1"/"2").
+    // Tapping snaps the zoom; the active preset is highlighted. Safe during recording (device-level).
+    private var zoomPresetStrip: some View {
+        HStack(spacing: 8) {
+            ForEach(model.zoomPresets, id: \.self) { z in
+                let active = abs(model.currentUserZoom - z) < 0.01
+                Button { model.setZoomPreset(z) } label: {
+                    Text(zoomLabel(z))
+                        .font(.system(size: active ? 15 : 13, weight: .semibold))
+                        .foregroundStyle(active ? Color.black : .white)
+                        .frame(minWidth: 40, minHeight: 40)
+                        .background(active ? gold : Color.black.opacity(0.4), in: Circle())
+                }
+                .accessibilityLabel("Zoom \(zoomLabel(z)) times")
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 6)
+        .background(Color.black.opacity(0.25), in: Capsule())
+    }
+
+    private func zoomLabel(_ z: Double) -> String { CameraZoomFormat.label(z) }
+
+    /// Show the focus reticle at the tapped point, then fade it after ~0.9s (token-guarded so a newer
+    /// tap cancels an older fade).
+    private func showFocusReticle(at point: CGPoint) {
+        reticleToken += 1
+        let token = reticleToken
+        withAnimation(.easeOut(duration: 0.15)) { focusReticle = point }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            guard token == reticleToken else { return }
+            withAnimation(.easeIn(duration: 0.3)) { focusReticle = nil }
+        }
+    }
+
+
     @ViewBuilder
     private var recentThumbnail: some View {
         if let img = model.recentThumbnail {
@@ -445,3 +517,66 @@ private struct RecordingPulse: ViewModifier {
             }
     }
 }
+
+// MARK: - Camera gesture layer (Increment 1)
+
+// A transparent UIKit layer carrying a pinch recognizer (continuous zoom, captures its base zoom
+// at gesture start) and a single-tap recognizer (tap-to-focus/expose at the tapped point). UIKit is
+// used because precise simultaneous pinch + tap and a reliable tap LOCATION are cleaner than the
+// SwiftUI gesture equivalents, and pinch must keep working while recording.
+private struct CameraGestureLayer: UIViewRepresentable {
+    let onTapFocus: (CGPoint) -> Void
+    let onPinchChanged: (CGFloat, CGFloat) -> Void
+    let pinchBase: () -> CGFloat
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        pinch.delegate = context.coordinator
+        v.addGestureRecognizer(pinch)
+        v.addGestureRecognizer(tap)
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onTapFocus = onTapFocus
+        context.coordinator.onPinchChanged = onPinchChanged
+        context.coordinator.pinchBase = pinchBase
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(onTapFocus: onTapFocus, onPinchChanged: onPinchChanged, pinchBase: pinchBase) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTapFocus: (CGPoint) -> Void
+        var onPinchChanged: (CGFloat, CGFloat) -> Void
+        var pinchBase: () -> CGFloat
+        private var base: CGFloat = 1.0
+
+        init(onTapFocus: @escaping (CGPoint) -> Void, onPinchChanged: @escaping (CGFloat, CGFloat) -> Void, pinchBase: @escaping () -> CGFloat) {
+            self.onTapFocus = onTapFocus; self.onPinchChanged = onPinchChanged; self.pinchBase = pinchBase
+        }
+        @objc func handlePinch(_ g: UIPinchGestureRecognizer) {
+            if g.state == .began { base = pinchBase() }
+            onPinchChanged(g.scale, base)
+        }
+        @objc func handleTap(_ g: UITapGestureRecognizer) {
+            guard let v = g.view else { return }
+            onTapFocus(g.location(in: v))
+        }
+        // Allow pinch to run alongside the tap recognizer without conflict.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+// A brief focus/exposure reticle shown at the tapped point.
+private struct FocusReticle: View {
+    @State private var scale: CGFloat = 1.25
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(red: 0.98, green: 0.84, blue: 0.4), lineWidth: 1.5)
+            .frame(width: 72, height: 72)
+            .scaleEffect(scale)
+            .onAppear { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { scale = 1.0 } }
+    }
+}
+
