@@ -202,7 +202,7 @@ enum CapabilityClassifier {
         (#"color[- ]?correct|colou?r grad"#, "color correction"),
         (#"\bfilter\b|\bfilters\b|\blut\b"#, "filters"),
         (#"\bbright(er|ness)?\b|\bcontrast\b|\bsaturat|\bexposure\b|\bvibran|\btint\b|\bhue\b"#, "brightness/color adjustments"),
-        (#"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|film look|color (tone|tint)"#, "color tone changes"),
+        (#"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|film look|color (tone|tint)|more (blue|green|red|orange|yellow|purple|pink|golden|vivid|colou?rful)|(blue|green|red|orange|yellow|purple|golden)r\b|make .*(sky|colou?rs?|grass|water|sunset) "#, "color tone changes"),
         (#"\bglow\b|\bvignette\b|\bbloom\b|light leak"#, "glow/vignette effects"),
         (#"\bblur\b|\bsharpen\b|\bgrain\b"#, "blur/sharpen effects"),
         (#"\bzoom\b|\bcrop\b|\breframe\b|\bpan\b|ken burns|re-?frame|punch in"#, "zoom/reframe"),

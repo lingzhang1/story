@@ -15,7 +15,8 @@ final class PromptGuidanceTests: XCTestCase {
 
     func test_classifier_all_unsupported() {
         for t in ["make it warmer", "add a glow", "color correct the whole thing",
-                  "reframe to square", "increase the brightness", "add captions", "stabilize the shaky clip"] {
+                  "reframe to square", "increase the brightness", "add captions", "stabilize the shaky clip",
+                  "make the sky more blue", "make it bluer"] {
             guard case .allUnsupported = CapabilityClassifier.classify(t) else {
                 return XCTFail("expected allUnsupported for \(t)")
             }
@@ -27,6 +28,10 @@ final class PromptGuidanceTests: XCTestCase {
             return XCTFail("expected mixed")
         }
         XCTAssertTrue(nouns.contains("color tone changes"))
+        // Regression: the sky-blue phrasing that slipped through the first vocabulary.
+        guard case .mixed = CapabilityClassifier.classify("Shorten to 5s for each clip and make sky color more blue") else {
+            return XCTFail("expected mixed for sky-blue + shorten")
+        }
     }
 
     func test_phrase_formatting() {

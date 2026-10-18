@@ -1456,6 +1456,10 @@ def test_classify_unsupported_ops():
     m = c("shorten the clips and make it warmer")
     assert m["verdict"] == "mixed" and "color tone changes" in m["phrase"]
     assert c("")["verdict"] == "supported"
+    # Color-NOUN phrasings (regression: "make the sky more blue" slipped through the first vocabulary).
+    assert c("make the sky more blue")["verdict"] == "all_unsupported"
+    assert c("make it bluer")["verdict"] == "all_unsupported"
+    assert c("Shorten to 5s for each clip and make sky color more blue")["verdict"] == "mixed"
 
 
 def test_unsupported_revise_preserves_version_never_plans():

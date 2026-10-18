@@ -473,7 +473,9 @@ def _classify_unsupported_ops(instruction: str) -> dict:
         r"color[- ]?correct|colou?r grade|colou?r grading|white balance": "color correction",
         r"\bfilter\b|\bfilters\b|\blut\b|instagram filter": "filters",
         r"\bbright(er|ness)?\b|\bcontrast\b|\bsaturat|\bexposure\b|\bvibran|\btint\b|\bhue\b": "brightness/color adjustments",
-        r"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|cinematic colou?r|film look|color (tone|tint)": "color tone changes",
+        r"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|cinematic colou?r|film look|color (tone|tint)|"
+        r"more (blue|green|red|orange|yellow|purple|pink|golden|vivid|colou?rful)|"
+        r"(blue|green|red|orange|yellow|purple|golden)r\b|make .*(sky|colou?rs?|grass|water|sunset) ": "color tone changes",
         r"\bglow\b|\bvignette\b|\bbloom\b|light leak": "glow/vignette effects",
         r"\bblur\b|\bsharpen\b|\bgrain\b|\bnoise\b": "blur/sharpen effects",
         r"\bzoom\b|\bcrop\b|\breframe\b|\bpan\b|ken burns|re-?frame|punch in": "zoom/reframe",
