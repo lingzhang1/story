@@ -1439,7 +1439,67 @@ def test_timing_revise_validation_failure_never_replans(monkeypatch):
     assert eng.last_diagnostics.get("model_calls", 0) == 0
 
 
-def test_preservation_gate_rejects_model_clip_repick():
+# ---------------------------------------------------------------------------
+# Phase 5 — unsupported-operation handling (owner 2026-10-18): explain + preserve, never substitute.
+# ---------------------------------------------------------------------------
+def test_classify_unsupported_ops():
+    from edit_planner import _classify_unsupported_ops as c
+    # Unsupported capability asks.
+    for t in ["make it warmer", "add a glow", "color correct the whole thing", "reframe to square",
+              "increase the brightness", "add a vignette", "stabilize the shaky clip", "add captions"]:
+        assert c(t)["verdict"] == "all_unsupported", t
+    # Supported editing asks (no false positives).
+    for t in ["shorten each clip to 5s", "reorder the clips", "change the music", "faster cuts",
+              "make it more cinematic", "remove moment 3", "use moment 5 to open"]:
+        assert c(t)["verdict"] == "supported", t
+    # Mixed: a supported edit + an unsupported effect.
+    m = c("shorten the clips and make it warmer")
+    assert m["verdict"] == "mixed" and "color tone changes" in m["phrase"]
+    assert c("")["verdict"] == "supported"
+
+
+def test_unsupported_revise_preserves_version_never_plans():
+    # An all-unsupported revise must keep the version and explain — never call the model (which would return
+    # SOME re-cut plan = a silent substitution of a different edit for the one the user asked for).
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make the colors warmer and add a glow"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("an unsupported revise must NOT plan a substitute edit")
+    eng = RealEditPlannerEngine(_Boom())
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc, moments=[
+            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    msg = str(ei.value).lower()
+    assert "kept" in msg and "unchanged" in msg          # preserved
+    assert "color" in msg                                 # explains the specific limitation
+    assert eng.last_diagnostics["final"] == "unsupported_operation"
+    assert eng.last_diagnostics.get("model_calls", 0) == 0
+
+
+def test_mixed_revise_records_partial_note_and_still_plans():
+    # A mixed instruction (supported edit + unsupported effect) runs the supported part but records a note
+    # saying what could not be applied — not silently dropped, not a fabricated success.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s and make it warmer",
+          "duration_target_source": "ai_recommended"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("timing part should take the deterministic retime, no model call")
+    eng = RealEditPlannerEngine(_Boom())
+    eng.generate(_inputs(revision_context=rc,
+                         creative_intent={"target_duration_seconds": 18.0, "desired_feeling": ["calm"]}))
+    assert eng.last_diagnostics.get("partial_support_note")
+    assert "color tone changes" in eng.last_diagnostics["partial_support_note"]
+    assert eng.last_diagnostics["revision_path"] == "deterministic_retime"   # supported part ran
+
+
+
     # A soft-only revise the model handles (not a parseable clip target) that comes back having re-picked a
     # DIFFERENT clip set must be rejected with a clear limitation — never shipped as a silent re-pick.
     M3 = str(uuid4())

@@ -376,6 +376,8 @@ struct StoryResultView: View {
             return "Your instruction couldn't be applied to this footage — try adjusting it (for example, exclude fewer Moments)."
         case "material_infeasible":
             return "There isn't enough usable footage for that length — try a shorter video."
+        case "unsupported_operation":
+            return "That kind of edit isn't supported yet — this app can re-cut, re-time, reorder, set transitions and change the soundtrack, but not color, filters or visual effects. Your current version was kept."
         default:
             return "Something went wrong creating the new version. You can try again."
         }

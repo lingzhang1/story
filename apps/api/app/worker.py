@@ -313,6 +313,12 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         return "completed" if ok else "publish_lost_lease"
     except Exception as exc:  # noqa: BLE001 — classify everything into a terminal failure
         cat, detail = _classify(exc, locals().get("inputs"))
+        # Phase 5: an unsupported-operation refusal is an EditPlanInfeasibleError, but it is a CAPABILITY limit,
+        # not a material-insufficiency one — surface it under its own category so the app can explain the real
+        # reason (and keep the selected version) instead of the generic "not enough footage" copy.
+        _eng = locals().get("engine")
+        if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "unsupported_operation":
+            cat = "unsupported_operation"
         store.fail(job_id, cat, detail, token)
         store.delete_staging(prefix)
         return f"failed:{cat}"

@@ -452,6 +452,56 @@ def _preservation_violation(base_plan: dict | None, revised: dict, rc: dict) -> 
     return None
 
 
+def _classify_unsupported_ops(instruction: str) -> dict:
+    """Classify a revise instruction against MediaEngineV1's real capabilities, deterministically (no model).
+
+    Supported editing verbs (the renderer's actual scope): trim/shorten/lengthen, reorder/move, cut,
+    crossfade/fade/dissolve transitions, speed up/slow down (0.5-2.0x), native-audio keep/mute/duck, soundtrack
+    change, include/exclude/opening/ending a Moment. Unsupported (no renderer support): color grading, filters,
+    brightness/contrast/saturation/exposure/tint/warm/cool, glow/vignette/blur/sharpen, zoom/crop/reframe/pan,
+    stabilization, text/caption/sticker/overlay, green-screen.
+
+    Returns {verdict: 'supported'|'mixed'|'all_unsupported', unsupported: [matched terms], phrase: human list}.
+    'phrase' is a short natural list of what cannot be done, for the user-facing limitation message. The match
+    is word-boundary and case-insensitive; an empty/whitespace instruction is 'supported' (nothing to gate)."""
+    import re
+    text = (instruction or "").lower()
+    if not text.strip():
+        return {"verdict": "supported", "unsupported": [], "phrase": ""}
+    # Unsupported-capability vocabulary -> the human noun shown back to the user.
+    UNSUPPORTED = {
+        r"color[- ]?correct|colou?r grade|colou?r grading|white balance": "color correction",
+        r"\bfilter\b|\bfilters\b|\blut\b|instagram filter": "filters",
+        r"\bbright(er|ness)?\b|\bcontrast\b|\bsaturat|\bexposure\b|\bvibran|\btint\b|\bhue\b": "brightness/color adjustments",
+        r"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|cinematic colou?r|film look|color (tone|tint)": "color tone changes",
+        r"\bglow\b|\bvignette\b|\bbloom\b|light leak": "glow/vignette effects",
+        r"\bblur\b|\bsharpen\b|\bgrain\b|\bnoise\b": "blur/sharpen effects",
+        r"\bzoom\b|\bcrop\b|\breframe\b|\bpan\b|ken burns|re-?frame|punch in": "zoom/reframe",
+        r"\bstabili[sz]e|\bstabili[sz]ation|anti-?shake|smooth(ing)? shake": "stabilization",
+        r"\btext\b|\bcaption|\bsubtitle|\bsticker|\boverlay|\btitle card|lower third": "text/overlays",
+        r"green ?screen|chroma ?key|remove background|replace background": "background replacement",
+    }
+    # Supported editing vocabulary — presence of ANY of these alongside an unsupported term => MIXED. These are
+    # genuine edit VERBS/targets, not bare nouns like "clip"/"shot" which are commonly the OBJECT of an
+    # unsupported verb ("stabilize the clip", "blur the shot") and must not flip such a request to mixed.
+    SUPPORTED = (r"shorten|length|trim|\bcut\b|duration|pace|pacing|faster|slow(er)?|"
+                 r"\bspeed\b|reorder|rearrange|\bswap\b|opening|ending|move (moment|clip|shot|it)|"
+                 r"\binclude\b|\bexclude\b|\bremove\b|add moment|crossfade|\bfade\b|dissolve|transition|"
+                 r"\bmusic\b|soundtrack|\btrack\b|\bsong\b|native audio|\bmute\b|\bduck\b")
+    matched = []
+    for pat, noun in UNSUPPORTED.items():
+        if re.search(pat, text):
+            matched.append(noun)
+    if not matched:
+        return {"verdict": "supported", "unsupported": [], "phrase": ""}
+    # De-dup nouns, preserve order.
+    seen = set(); nouns = [n for n in matched if not (n in seen or seen.add(n))]
+    phrase = nouns[0] if len(nouns) == 1 else (", ".join(nouns[:-1]) + " or " + nouns[-1])
+    has_supported = bool(re.search(SUPPORTED, text))
+    return {"verdict": "mixed" if has_supported else "all_unsupported",
+            "unsupported": nouns, "phrase": phrase}
+
+
 def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     errs: list[str] = []
     # Case-INSENSITIVE Moment-id space. Clients disagree on UUID case: the moments[] payload and segment
@@ -1234,6 +1284,31 @@ class RealEditPlannerEngine:
         # validator passes AND there is no soft_direction (a creative request still needs the model). Any miss
         # falls through to normal planning (the targeted single-call path, since critique stays off by default).
         rc = inputs.revision_context or {}
+
+        # Phase 5 — UNSUPPORTED-OPERATION PREFLIGHT (owner 2026-10-18). MediaEngineV1 can only trim, order,
+        # set output duration, cut/crossfade/fade, 0.5-2.0x speed, native-audio policy and aspect-fit. It has NO
+        # color grading, filters, brightness/contrast/saturation, glow/vignette/blur, zoom/crop/reframe or
+        # stabilization. Without this guard an unsupported revise ("make it warmer", "add a glow") has no hard
+        # directive and no clip-length target, so it falls to the model, which returns SOME re-cut plan — a
+        # silent substitution of a different edit for the edit the user asked for. So, for a REVISE, we classify
+        # the instruction deterministically BEFORE planning: if the WHOLE actionable instruction is unsupported
+        # we keep the user's version and return a clear limitation (never plan, never claim success); if it is
+        # MIXED (some supported, some not) we record which parts cannot be applied so the supported part can run
+        # with an honest note. Initial creation is never gated here.
+        if rc.get("mode") == "revise":
+            _unsup = _classify_unsupported_ops(rc.get("soft_direction") or "")
+            if _unsup["verdict"] == "all_unsupported":
+                diag["final"] = "unsupported_operation"
+                diag["unsupported_ops"] = _unsup["unsupported"]
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "That edit isn't something this app can do yet — it only re-cuts, re-times, reorders and "
+                    f"sets transitions/soundtrack, not {_unsup['phrase']}. Your current version was kept "
+                    "unchanged.")
+            if _unsup["verdict"] == "mixed":
+                diag["unsupported_ops"] = _unsup["unsupported"]
+                diag["partial_support_note"] = (
+                    f"Applied the supported part; this app can't yet do {_unsup['phrase']}.")
 
         # 0a: TIMING-ONLY deterministic fast path (preservation contract). A pure pacing/duration revise
         # ("shorten each clip to ~5s", "make the clips about 3 seconds") must PRESERVE which clips are used,
