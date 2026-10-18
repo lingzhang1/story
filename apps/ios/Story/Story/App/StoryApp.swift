@@ -19,7 +19,8 @@ struct StoryApp: App {
             StoryMusicDirectionModel.self,
             MyMusicAssetModel.self,
             PendingOperationModel.self,
-            MusicPlanCacheModel.self
+            MusicPlanCacheModel.self,
+            DurationRecCacheModel.self
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {

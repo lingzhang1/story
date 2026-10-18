@@ -104,7 +104,8 @@ struct CreateStoryPreviewView: View {
             let payload = EditPlanRequestBuilder.momentsPayload(for: story, context: context)
             let rec: DurationRecommendation? = await {
                 guard let p = payload else { return nil }
-                return await durationService.recommend(creativeIntent: p.creativeIntent, moments: p.moments)
+                return await durationService.recommend(creativeIntent: p.creativeIntent, moments: p.moments,
+                                                       storyId: story.id, context: context)
             }()
             await MainActor.run {
                 recommendingDuration = false

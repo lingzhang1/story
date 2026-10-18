@@ -897,3 +897,29 @@ final class MusicPlanCacheModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Duration recommendation cache — latency P0. "Sizing your Story" is a ~4-9s LLM call
+// (duration_recommendation/1) re-run on every Customize open. Cache the recommendation per Story keyed by a
+// canonical fingerprint of its inputs (creative intent + the moments snapshot + prompt version). Advisory /
+// recomputable (same safety profile as the MusicPlan cache); one row per Story (upsert); restart-safe.
+@Model
+final class DurationRecCacheModel {
+    @Attribute(.unique) var storyId: UUID
+    var recommendationJSON: String       // cached DurationRecommendation wire JSON, decoded + reused verbatim
+    var inputFingerprint: String         // stable hash of creative intent + moments + prompt version
+    var promptVersion: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(storyId: UUID, recommendationJSON: String, inputFingerprint: String,
+         promptVersion: String = "duration_recommendation/1", createdAt: Date = .now, updatedAt: Date = .now) {
+        self.storyId = storyId
+        self.recommendationJSON = recommendationJSON
+        self.inputFingerprint = inputFingerprint
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
