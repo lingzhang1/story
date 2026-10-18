@@ -36,6 +36,25 @@ final class MusicPlanCacheTests: XCTestCase {
         XCTAssertNotEqual(base, MusicSelectionResolver.musicPlanFingerprint(intent: i, direction: d, guide: g, coverage: c, soundPreference: s, target: t, promptVersion: "music_plan/2"))
     }
 
+    func test_fingerprint_ignores_volatile_provenance() {
+        // Regression: the same semantic content with a DIFFERENT generated_at/updated_at/id must hash the
+        // same — otherwise a reopen with unchanged inputs misses the cache every time (observed in the field:
+        // two reopens -> two fingerprints -> two ~14s music_plan calls).
+        let a = MusicSelectionResolver.musicPlanFingerprint(
+            intent: .object(["theme": .string("travel"), "generated_at": .string("2026-10-17T22:00:00Z")]),
+            direction: .object(["mood": .string("calm"), "updated_at": .string("2026-10-17T22:00:00Z")]),
+            guide: .object(["dimensions": .array([.string("a")]), "id": .string("g1")]),
+            coverage: .object(["sufficiency": .string("sufficient"), "model_id": .string("m1")]),
+            soundPreference: "balanced", target: 90)
+        let b = MusicSelectionResolver.musicPlanFingerprint(
+            intent: .object(["theme": .string("travel"), "generated_at": .string("2026-10-17T23:30:00Z")]),
+            direction: .object(["mood": .string("calm"), "updated_at": .string("2026-10-18T01:00:00Z")]),
+            guide: .object(["dimensions": .array([.string("a")]), "id": .string("g2")]),
+            coverage: .object(["sufficiency": .string("sufficient"), "model_id": .string("m2")]),
+            soundPreference: "balanced", target: 90)
+        XCTAssertEqual(a, b, "fingerprint must ignore generated_at/updated_at/id/model_id")
+    }
+
     func test_fingerprint_key_order_independent() {
         // Sorted-keys canonicalization: the same object written in a different key order hashes identically.
         let a = MusicSelectionResolver.musicPlanFingerprint(

@@ -281,9 +281,29 @@ final class MusicSelectionResolver {
     static func musicPlanFingerprint(intent: JSONValue, direction: JSONValue, guide: JSONValue,
                                      coverage: JSONValue, soundPreference: String, target: Double,
                                      promptVersion: String = "music_plan/1") -> String {
+        // Provenance / volatile keys that change run-to-run (or when a Guide/Coverage/Direction is re-stamped)
+        // but do NOT affect the MusicPlan's content. Stripping them recursively is what makes a reopen with
+        // unchanged inputs hash IDENTICALLY — otherwise `generated_at` alone forces a cache miss every time
+        // (observed: two reopens produced two different fingerprints and both missed).
+        let volatileKeys: Set<String> = ["generated_at", "generatedat", "created_at", "createdat",
+                                         "updated_at", "updatedat", "timestamp", "id", "model_id", "modelid",
+                                         "prompt_version", "promptversion", "schema_version", "schemaversion",
+                                         "correlation_id", "correlationid"]
+        func strip(_ v: JSONValue) -> JSONValue {
+            switch v {
+            case .object(let d):
+                var out: [String: JSONValue] = [:]
+                for (k, val) in d where !volatileKeys.contains(k.lowercased()) { out[k] = strip(val) }
+                return .object(out)
+            case .array(let a):
+                return .array(a.map(strip))
+            default:
+                return v
+            }
+        }
         func canon(_ v: JSONValue) -> String {
             let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
-            return (try? enc.encode(v)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            return (try? enc.encode(strip(v))).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         }
         let joined = [promptVersion, String(format: "%.1f", target), soundPreference,
                       canon(intent), canon(direction), canon(guide), canon(coverage)].joined(separator: "|")
