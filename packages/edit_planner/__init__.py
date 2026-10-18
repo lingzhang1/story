@@ -376,6 +376,82 @@ def _errors_are_non_visual(errs: list[str]) -> bool:
     return True
 
 
+def _is_timing_only_revise(inputs: "EditPlanInputs") -> bool:
+    """A revise whose ONLY requested change is per-clip pacing/duration — no hard directives (which change
+    structure) and a soft_direction that parses as a clip-length target. These are the revises where honoring
+    the pacing legitimately changes the TOTAL duration, so the AI-recommended length must not block them."""
+    rc = inputs.revision_context or {}
+    if rc.get("mode") != "revise":
+        return False
+    if rc.get("directives"):
+        return False
+    return _parse_target_clip_seconds(rc.get("soft_direction") or "") is not None
+
+
+def _duration_target_source(inputs: "EditPlanInputs") -> str:
+    """Provenance of the NUMERIC target duration, independent of the editorial mode (Highlights/Full/Custom are
+    editorial PREFERENCES; their numeric length may still be AI-recommended). 'user_exact' => the user typed an
+    exact length and it is authoritative; 'ai_recommended' => the number came from a recommendation. Absent/
+    unknown provenance is treated as user_exact (the safe, strict default — we never weaken a length we are not
+    certain is only a recommendation)."""
+    rc = inputs.revision_context or {}
+    src = (rc.get("duration_target_source") or "").strip().lower()
+    return src if src in ("user_exact", "ai_recommended") else "user_exact"
+
+
+def _undershoot_tolerance_for(inputs: "EditPlanInputs") -> float | None:
+    """The effective undershoot floor for THIS operation. Returns the strict default for initial creation and
+    for any revise with an explicit user duration; returns None (no lower bound) ONLY for a timing-only revise
+    whose target length is AI-recommended, so honoring the user's pacing can shorten the whole video without
+    being rejected. Never relaxes the overshoot/feasibility checks — this governs the lower bound alone."""
+    if _is_timing_only_revise(inputs) and _duration_target_source(inputs) == "ai_recommended":
+        return None
+    return DURATION_UNDERSHOOT_TOLERANCE
+
+
+def _preservation_violation(base_plan: dict | None, revised: dict, rc: dict) -> str | None:
+    """Return a short human reason when a targeted revise's `revised` plan changed the base plan's CLIP SET
+    beyond what the request authorized, else None. Preservation is defined over the set of source clips used
+    (segment asset_ids, case-insensitive) — identity of WHAT footage appears, not its timing or order.
+
+      * timing-only / soft-only revise (no hard directives): the clip set must be IDENTICAL — no clip added,
+        none removed. (Order/duration/speed are allowed to change; that is what the revise does.)
+      * directive revise: only clips NAMED by the directives may enter or leave; every other base clip must
+        still be present and no unrelated clip may appear.
+
+    This is a backstop against a consulted model silently re-picking footage; it never fabricates success and
+    never substitutes a different video — on violation the caller keeps the user's existing version."""
+    if not isinstance(base_plan, dict):
+        return None
+    def _ids(p):
+        out = []
+        for s in (p.get("segments") or []):
+            a = s.get("asset_id")
+            if a:
+                out.append(str(a).lower())
+        return out
+    base_ids = set(_ids(base_plan))
+    rev_ids = set(_ids(revised))
+    if not base_ids:
+        return None
+    # Clips the directives explicitly authorize changing (their referenced asset ids, any case).
+    authorized = set()
+    for d in (rc.get("directives") or []):
+        for k in ("asset_id", "id", "moment_id", "target_id"):
+            v = d.get(k) if isinstance(d, dict) else None
+            if v:
+                authorized.add(str(v).lower())
+    removed = base_ids - rev_ids - authorized
+    added = rev_ids - base_ids - authorized
+    if removed and added:
+        return f"{len(removed)} clip(s) dropped and {len(added)} new clip(s) introduced"
+    if removed:
+        return f"{len(removed)} clip(s) you did not ask to remove were dropped"
+    if added:
+        return f"{len(added)} clip(s) you did not ask for were introduced"
+    return None
+
+
 def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     errs: list[str] = []
     # Case-INSENSITIVE Moment-id space. Clients disagree on UUID case: the moments[] payload and segment
@@ -457,13 +533,23 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     # video far SHORTER than requested feels broken/empty, so we keep the tight lower bound. A near-zero /
     # degenerate plan (the "model gave up" case) is still rejected by the lower bound. The repair pass still
     # nudges toward the exact target; this only governs when we ACCEPT vs reject.
+    #
+    # OPERATION-SCOPED duration precedence (owner decision 2026-10-18): the undershoot bound exists to reject a
+    # degenerate/empty plan against a length the USER asked for. But when the length was only AI-RECOMMENDED and
+    # the user's revise instruction is a timing-only pacing change ("shorten each clip to ~5s"), the user's
+    # revise intent OUTRANKS the AI's length guess — honoring the pacing may legitimately make the whole video
+    # shorter. In that one case we relax the undershoot floor so a correctly-shortened plan is NOT rejected (and
+    # therefore never silently re-planned). We do NOT touch overshoot, feasibility, speed, or source-range
+    # checks, and we do NOT relax anything for an EXPLICIT user duration or for initial creation. The policy is
+    # derived from the request's revision_context provenance; absent it, behavior is exactly as before.
+    undershoot_tol = _undershoot_tolerance_for(inputs)
     if total_out and not declared_infeasible:
         over = (total_out - target) / target     # >0 => longer than asked, <0 => shorter
         if over > DURATION_OVERSHOOT_TOLERANCE:
             errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
                         f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
-        elif over < -DURATION_UNDERSHOOT_TOLERANCE:
-            errs.append(f"total output {total_out:.1f}s is >{int(DURATION_UNDERSHOOT_TOLERANCE*100)}% "
+        elif undershoot_tol is not None and over < -undershoot_tol:
+            errs.append(f"total output {total_out:.1f}s is >{int(undershoot_tol*100)}% "
                         f"SHORT of target {target}s (lower bound)")
     if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
         errs.append("feasible=false but no infeasible_reason given")
@@ -1161,9 +1247,14 @@ class RealEditPlannerEngine:
             target = _parse_target_clip_seconds(rc.get("soft_direction") or "")
             if target is not None:
                 from .deterministic_revision import apply_deterministic_retime
+                # Duration precedence: honor the pacing. Only when the target length is a USER-EXACT requirement
+                # do we lift shot durations to keep the total near it; for an AI-RECOMMENDED target we let the
+                # video shorten (the relaxed undershoot floor accepts it) rather than uniformly lengthening
+                # shots just to satisfy a number the user never fixed.
                 _tgt = inputs.creative_intent.get("target_duration_seconds")
+                _exact = _duration_target_source(inputs) == "user_exact"
                 _min_total = (float(_tgt) * (1.0 - DURATION_UNDERSHOOT_TOLERANCE)
-                              if isinstance(_tgt, (int, float)) and _tgt > 0 else None)
+                              if _exact and isinstance(_tgt, (int, float)) and _tgt > 0 else None)
                 retimed = apply_deterministic_retime(rc["base_plan"], target, min_total_seconds=_min_total)
                 if retimed is not None:
                     retimed, rnotes = normalize_plan(retimed, inputs)
@@ -1194,6 +1285,19 @@ class RealEditPlannerEngine:
                     self.last_diagnostics = diag
                     return _to_contract(fast, inputs)
             diag["revision_path"] = "deterministic_fallthrough"
+
+        # SAFE-FALLBACK BOUNDARY (owner decision 2026-10-18): a TARGETED revise that reached here (both
+        # deterministic fast paths missed) must NOT silently become an unrestricted from-scratch replan that is
+        # free to re-pick every clip. The only from-scratch replans allowed are: initial creation (no revise
+        # context), Explore (mode=explore, which intends a fresh alternative), and a revise that EXPLICITLY
+        # authorizes broad redesign (revision_context.allow_broad_replan == True). Every other targeted revise
+        # takes the base-plan-carrying call (_build_user already injects the revision block with the base plan +
+        # preservation framing) and is then PRESERVATION-CHECKED against the base before we accept it. If the
+        # model's revise changed clips it was not asked to change, we reject with a clear limitation rather than
+        # ship a silent re-pick. (This increment enforces the boundary + the check; richer bounded repairs are
+        # a later increment.)
+        _is_targeted_revise = (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
+                               and not rc.get("allow_broad_replan"))
 
         # 1-3: initial generation, safe normalization, executability validation.
         plan = _call(_build_user(inputs))
@@ -1244,6 +1348,22 @@ class RealEditPlannerEngine:
             diag["final"] = "infeasible"
             self.last_diagnostics = diag
             raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
+
+        # 6a: PRESERVATION GATE (owner decision 2026-10-18). For a targeted revise (not broad-replan), the model
+        # plan must not have changed the base plan's CLIP SET beyond what the request authorized. A timing-only
+        # or soft-pacing revise is NOT allowed to drop or introduce clips at all; a structural directive revise
+        # may only touch the clips its directives name. If the accepted plan silently re-picked footage, we
+        # reject with a clear limitation rather than ship a different video. This is the backstop that makes the
+        # no-silent-replan boundary observable even when the model is consulted. Feasibility already passed.
+        if _is_targeted_revise:
+            pres_err = _preservation_violation(rc.get("base_plan"), plan, rc)
+            if pres_err:
+                diag["final"] = "preservation_violation"
+                diag["preservation_error"] = pres_err
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "This revision could not be applied without changing parts of your video you did not ask "
+                    f"to change ({pres_err}). Your current version was kept unchanged.")
 
         # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
         # after we already hold a VALID executable plan and only when a creative brief exists to critique

@@ -291,6 +291,7 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
             "seg0": _seg0,
             "opening_honored": (_open_l == _seg0) if _open_l else None,
             "soft": (str(_rc.get("soft_direction"))[:80] if _rc.get("soft_direction") else None),
+            "dur_src": _rc.get("duration_target_source"),
         }
         diag_out["rev_diag"] = rev_diag
         # Greppable diagnostics line (CloudWatch): which model served each call, first-pass validator errors,

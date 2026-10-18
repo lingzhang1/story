@@ -197,4 +197,55 @@ final class MomentReferenceIntegrationTests: XCTestCase {
         XCTAssertNil(s.creativeDirectivesJSON)
         XCTAssertNil(StoryCreationCoordinator.composeRevisionContext(base: nil, story: s))
     }
+
+    // MARK: - duration_target_source provenance (P0 revision precedence, owner 2026-10-18)
+
+    private func durSrc(_ ctxVal: JSONValue?) -> String? {
+        guard case .object(let o)? = ctxVal, case .string(let v)? = o["duration_target_source"] else { return nil }
+        return v
+    }
+
+    func test_compose_custom_mode_marks_user_exact() {
+        let s = story()
+        s.editorialMode = "custom"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["schema_version": .string("edit_plan/2")]),
+                                       "soft_direction": .string("shorten each clip to ~5s")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "user_exact")
+    }
+
+    func test_compose_highlights_mode_marks_ai_recommended() {
+        let s = story()
+        s.editorialMode = "highlights"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["schema_version": .string("edit_plan/2")]),
+                                       "soft_direction": .string("shorten each clip to ~5s")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "ai_recommended")
+    }
+
+    func test_compose_full_mode_marks_ai_recommended() {
+        let s = story()
+        s.editorialMode = "full"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")])])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "ai_recommended")
+    }
+
+    func test_compose_no_editorial_mode_omits_source() {
+        let s = story()
+        s.editorialMode = nil
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")])])
+        XCTAssertNil(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)))
+    }
+
+    func test_compose_does_not_clobber_base_duration_source() {
+        // A revise that already carries an explicit source (e.g. a newer explicit duration instruction) wins.
+        let s = story()
+        s.editorialMode = "highlights"   // would otherwise say ai_recommended
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")]),
+                                       "duration_target_source": .string("user_exact")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "user_exact")
+    }
 }

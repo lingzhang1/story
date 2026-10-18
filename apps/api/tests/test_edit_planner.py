@@ -1342,6 +1342,142 @@ def test_parse_target_clip_seconds():
     assert _parse_target_clip_seconds("make it 30 seconds total") is None
 
 
+# ---------------------------------------------------------------------------
+# P0 Revision Constraint Priority (owner 2026-10-18): duration provenance, operation-scoped validation,
+# the no-silent-replan boundary, and the preservation gate.
+# ---------------------------------------------------------------------------
+def _retimable_base_plan(target, span=6.0):
+    """A base plan whose clips, re-timed toward ~5s, would UNDERSHOOT `target` — the exact situation that used
+    to be rejected and re-planned. Uses only the known moments M1/M2 so the retimed plan validates."""
+    def seg(o, aid, s0, s1): return {"order": o, "asset_id": aid, "source_start_seconds": s0,
+                                     "source_end_seconds": s1, "output_duration_seconds": 12.0,
+                                     "native_audio": "keep", "speed": 1.0}
+    return {"schema_version": "edit_plan/2", "target_duration_seconds": target, "feasible": True,
+            "segments": [seg(0, M1, 0.0, span), seg(1, M2, 0.0, span)]}
+
+
+def test_undershoot_relaxed_for_ai_recommended_timing_revise():
+    # Timing-only revise + AI-recommended target: the undershoot floor is lifted, so a shortened plan validates
+    # without any model call and WITHOUT lengthening shots. Clips preserved, total allowed to shrink.
+    base_plan = _retimable_base_plan(target=30.0, span=6.0)
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s and keep the highlights",
+          "duration_target_source": "ai_recommended"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("ai_recommended timing revise must stay deterministic (0 model calls)")
+    eng = RealEditPlannerEngine(_Boom())
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
+    assert eng.last_diagnostics["revision_path"] == "deterministic_retime"
+    assert eng.last_diagnostics["model_calls"] == 0
+    # same clips, in the same order, each shortened toward ~5s (total < old 30s target, and that is allowed).
+    ids = [str(s.asset_id) for s in plan.segments]
+    assert ids == [s["asset_id"] for s in base_plan["segments"]]
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert total < 30.0
+
+
+def test_user_exact_timing_revise_keeps_strict_lower_bound():
+    # Same instruction but the user fixed the length exactly -> the lower bound stays strict and the retime
+    # lifts shot durations to keep the total near the target (clips still preserved).
+    base_plan = _retimable_base_plan(target=18.0, span=12.0)   # span 12 => room to lift up to 24s/clip
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s",
+          "duration_target_source": "user_exact"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("must stay deterministic")
+    eng = RealEditPlannerEngine(_Boom())
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 18.0, "desired_feeling": ["calm"]},
+                                moments=[
+        {"id": M1, "duration_seconds": 13.0, "useful_segments": [[0.0, 12.0]]},
+        {"id": M2, "duration_seconds": 13.0, "useful_segments": [[0.0, 12.0]]}]))
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert total >= 18.0 * 0.8   # strict lower bound honored for the explicit length
+    assert [str(s.asset_id) for s in plan.segments] == [s["asset_id"] for s in base_plan["segments"]]
+
+
+def test_initial_creation_undershoot_unchanged():
+    # No revision_context => _undershoot_tolerance_for returns the strict default (creation behavior intact).
+    from edit_planner import _undershoot_tolerance_for, DURATION_UNDERSHOOT_TOLERANCE
+    assert _undershoot_tolerance_for(_inputs()) == DURATION_UNDERSHOOT_TOLERANCE
+
+
+def test_preservation_gate_rejects_model_clip_repick():
+    # A soft-only revise the model handles (not a parseable clip target) that comes back having re-picked a
+    # DIFFERENT clip set must be rejected with a clear limitation — never shipped as a silent re-pick.
+    M3 = str(uuid4())
+    base_plan = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}   # no clip-length target => model path
+    # Model drops M2 and introduces M3 — a silent re-pick the gate must reject.
+    repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M3, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=repicked))
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc, moments=[
+            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+            {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert "did not ask" in str(ei.value).lower()
+    assert eng.last_diagnostics["final"] == "preservation_violation"
+
+
+def test_preservation_gate_allows_model_preserving_revise():
+    # Same soft revise, but the model preserves the clip set (only re-times/reorders) -> accepted.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}
+    # output_duration == source span (speed 1.0) to satisfy the consistency check; total 13.5s vs a 14s target.
+    preserved = {"target_duration_seconds": 14.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 6.0,
+         "output_duration_seconds": 5.5, "speed": 1.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=preserved))
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 14.0, "desired_feeling": ["calm"]},
+                                moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert {str(s.asset_id) for s in plan.segments} == {M1, M2}
+
+
+def test_broad_replan_flag_bypasses_preservation_gate():
+    # When the user explicitly authorizes a broad redesign, a changed clip set is allowed.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "completely redesign this", "allow_broad_replan": True}
+    repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=repicked))
+    plan = eng.generate(_inputs(revision_context=rc, moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert eng.last_diagnostics.get("final") != "preservation_violation"
+
+
+def test_duration_target_source_defaults_to_user_exact():
+    from edit_planner import _duration_target_source
+    assert _duration_target_source(_inputs()) == "user_exact"
+    assert _duration_target_source(_inputs(revision_context={"duration_target_source": "ai_recommended"})) == "ai_recommended"
+    assert _duration_target_source(_inputs(revision_context={"duration_target_source": "garbage"})) == "user_exact"
+
+
 def test_engine_deterministic_fast_path_zero_model_calls():
     # A revise carrying base_plan + a structural directive and NO soft_direction must resolve with 0 model calls.
     a, b = M1, M2

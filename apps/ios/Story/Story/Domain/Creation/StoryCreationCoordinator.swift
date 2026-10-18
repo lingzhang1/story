@@ -225,6 +225,19 @@ final class StoryCreationCoordinator {
         if obj["directives"] == nil, let directives { obj["directives"] = directives }
         // Fold the soft creative direction when present and the base has not supplied one.
         if obj["soft_direction"] == nil, let soft { obj["soft_direction"] = .string(soft) }
+        // Duration-target PROVENANCE (owner decision 2026-10-18): the NUMERIC target length's source, tracked
+        // separately from the editorial mode. A `.custom` editorial mode means the user typed an EXACT length
+        // (authoritative -> user_exact); Highlights/Full are explicit EDITORIAL preferences whose numeric
+        // duration is AI-recommended (-> ai_recommended), so a timing-only revise may legitimately shorten the
+        // whole video below it. Absent an editorial mode we say nothing and the planner defaults to the strict
+        // user_exact behavior. Never clobber a source the base context already carries.
+        if obj["duration_target_source"] == nil {
+            switch (story.editorialMode ?? "").lowercased() {
+            case "custom":            obj["duration_target_source"] = .string("user_exact")
+            case "highlights", "full": obj["duration_target_source"] = .string("ai_recommended")
+            default: break
+            }
+        }
         return .object(obj)
     }
 
