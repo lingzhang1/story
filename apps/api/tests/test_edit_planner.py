@@ -1355,3 +1355,17 @@ def test_preflight_flags_contradictory_and_impossible_adjacency():
 def test_preflight_empty_is_noop():
     from edit_planner import preflight_directives
     assert preflight_directives({}, set()) == []
+
+
+def test_repair_errors_non_visual_classification():
+    # Phase 3 targeted repair: numeric/structural errors send NO images; a useful_segment error keeps them.
+    from edit_planner import _errors_are_non_visual
+    assert _errors_are_non_visual(["seg0: speed 4.0 out of range [0.5, 2.0]"])
+    assert _errors_are_non_visual(["seg2: source_end 12.0 exceeds Moment duration 9.8",
+                                   "segment order not monotonic: [0, 2, 1]"])
+    assert _errors_are_non_visual(["directive opening: first segment must be Moment 'x' but is 'y'"])
+    # A useful-segment coverage error benefits from frames -> keep images (not non-visual).
+    assert not _errors_are_non_visual(["seg1: source range [1.0,3.0] overlaps NO useful_segment [[4.0,6.0]]"])
+    # Mixed: any visual marker keeps images.
+    assert not _errors_are_non_visual(["seg0: speed 4.0 out of range",
+                                       "seg1: source range overlaps NO useful_segment"])

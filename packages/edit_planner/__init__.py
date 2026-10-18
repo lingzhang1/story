@@ -336,6 +336,20 @@ class EditPlanInputs:
 # Deterministic executability validator — the PRODUCTION hard gate.
 # Ported from evals/edit_planner. Returns [] when executable, else error strings.
 # ---------------------------------------------------------------------------
+def _errors_are_non_visual(errs: list[str]) -> bool:
+    """Phase 3 targeted repair: True when EVERY validator error is numeric/structural — fixable from the plan
+    text + the exact errors without the model re-seeing contact sheets (duration, speed, source-range bounds,
+    ordering, native-audio, unknown-id, directive placement). KEEP images only when an error implicates what a
+    clip CONTAINS — today the single visual-judgement case is a source range overlapping NO useful_segment
+    (re-picking a usable range can benefit from frames). Conservative: any useful_segment marker keeps images."""
+    visual_markers = ("useful_segment",)
+    for e in errs:
+        low = str(e).lower()
+        if any(m in low for m in visual_markers):
+            return False
+    return True
+
+
 def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     errs: list[str] = []
     # Case-INSENSITIVE Moment-id space. Clients disagree on UUID case: the moments[] payload and segment
@@ -1039,11 +1053,14 @@ class RealEditPlannerEngine:
             "last_stop_reason": None, "last_output_tokens": 0, "max_tokens": self._max_tokens,
         }
 
-        def _call(user_content: str) -> dict:
+        def _call(user_content: str, images: list | None = None) -> dict:
             # Escalate the output cap on truncation: if the model stops at max_tokens (a truncated, usually
             # empty plan), retry ONCE at the ceiling before giving up. Proven root cause of the 24-Moment
             # 'no segments' 503. The retry is bounded (one escalation) so a genuinely runaway plan still fails
             # fast rather than looping.
+            # `images` defaults to the full payload; a repair may pass a SMALLER set (Phase 3) when the
+            # validator errors are purely numeric/structural and re-sending every contact sheet is wasted cost.
+            call_images = list(inputs.images) if images is None else images
             caps = [self._max_tokens]
             if self._max_tokens_ceiling > self._max_tokens:
                 caps.append(self._max_tokens_ceiling)
@@ -1053,7 +1070,7 @@ class RealEditPlannerEngine:
                     task=TASK, schema=SCHEMA, prompt_version=PROMPT_VERSION, system=self._system,
                     user_content=user_content, max_repair_attempts=2,
                     max_tokens=cap, temperature=0.0,
-                    images=list(inputs.images))   # MVP multimodal: contact sheets ride every call (incl. repair)
+                    images=call_images)
                 result = self._gw.generate_structured(req)  # raises StructuredOutputError/ProviderError
                 diag["model_calls"] += 1
                 u = result.usage
@@ -1141,7 +1158,15 @@ class RealEditPlannerEngine:
                 break
             diag["executability_repairs_used"] += 1
             diag["repaired"] = True
-            plan = _call(_build_repair(inputs, plan, errs))
+            # Phase 3 — targeted repair payload. A repair whose errors are purely NUMERIC/STRUCTURAL (duration,
+            # speed, source range, ordering, native-audio, directive placement, unknown-id) does not need the
+            # model to re-see pixels — the fix is arithmetic/positional over the plan text + the exact errors.
+            # So we drop the full contact-sheet payload for those repairs (big cost saving). We KEEP images only
+            # when an error implicates what a clip CONTAINS (useful-segment coverage) — i.e. a judgement that
+            # genuinely benefits from frames — never assuming reduced visual input is free (owner safeguard).
+            repair_images = [] if _errors_are_non_visual(errs) else list(inputs.images)
+            diag["repair_images_sent"] = len(repair_images)
+            plan = _call(_build_repair(inputs, plan, errs), images=repair_images)
             plan, notes = normalize_plan(plan, inputs)
             if notes:
                 diag["normalized"] = True

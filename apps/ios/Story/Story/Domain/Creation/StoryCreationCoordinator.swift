@@ -240,6 +240,34 @@ final class StoryCreationCoordinator {
         return tag
     }
 
+    // Phase 2 scope-classifier readers over the revision_context JSONValue.
+    /// True when the context carries at least one populated hard directive (opening/ending/include/exclude/order).
+    static func revisionHasHardDirectives(_ ctx: JSONValue?) -> Bool {
+        guard case .object(let o)? = ctx, case .object(let d)? = o["directives"] else { return false }
+        let keys = ["opening", "ending", "must_include", "exclude", "order_after", "order_adjacent"]
+        for k in keys {
+            switch d[k] {
+            case .some(.string(let s)) where !s.isEmpty: return true
+            case .some(.array(let a)) where !a.isEmpty: return true
+            default: continue
+            }
+        }
+        return false
+    }
+
+    /// The free-text soft creative/pacing direction, or "" when absent.
+    static func revisionSoftDirection(_ ctx: JSONValue?) -> String {
+        guard case .object(let o)? = ctx, case .string(let s)? = o["soft_direction"] else { return "" }
+        return s
+    }
+
+    /// True when the context carries the exact base EditPlan (required to edit in place and preserve edits).
+    static func revisionHasBasePlan(_ ctx: JSONValue?) -> Bool {
+        guard case .object(let o)? = ctx else { return false }
+        if case .object(let bp)? = o["base_plan"] { return !bp.isEmpty }
+        return false
+    }
+
     init(
         planner: EditPlanning,
         renderer: StoryRendering = MediaEngineRenderer(),
@@ -454,7 +482,23 @@ final class StoryCreationCoordinator {
         state = .planning
         var plan: EditPlanV2
         let requested = story.effectiveEditingApproach
-        let wantMultimodal = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
+        // Phase 2 — revision scope routing. For a REVISE, the amount of planning is decided by the actual
+        // change scope, not by requested.requiresMultimodal alone: a targeted change (pacing tweak, single-shot
+        // swap, localized edit) runs text-light (no contact sheets) over the exact base plan, preserving
+        // unaffected edits; only a BROAD "rebuild" reinterpretation sends the full multimodal payload. A visual
+        // ask ("most beautiful shot") stays targeted but DOES carry images. Non-revise ops are unchanged.
+        let isRevise = (pendingOperationType == "revision")
+        let reviseScope: RevisionScope? = isRevise
+            ? RevisionScopeClassifier.classify(
+                hasHardDirectives: Self.revisionHasHardDirectives(pendingRevisionContext),
+                softDirection: Self.revisionSoftDirection(pendingRevisionContext),
+                hasBasePlan: Self.revisionHasBasePlan(pendingRevisionContext))
+            : nil
+        let wantMultimodal: Bool = {
+            let base = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
+            guard base, let scope = reviseScope else { return base }
+            return scope.sendsSheets   // targeted text-light revise -> no sheets; full/visual -> sheets
+        }()
         do {
             // ---- ASYNC Edit Planning (Phase 2): submit a job, poll to completion. Removes the ~120s App
             // Runner ceiling; the worker runs the SAME core. BOTH approaches use this one path. ----
@@ -486,7 +530,10 @@ final class StoryCreationCoordinator {
                 if pendingOperationType == "another_version" {
                     return StoryMultimodalPlanning.critiqueExploreEnabled   // conditional; default OFF
                 }
-                return true   // original create / revision: unchanged
+                // Phase 2: a TARGETED revise (Path B) runs critique OFF by default — it is a bounded change,
+                // not a creative re-edit. Only a full re-edit (Path C) keeps the original revise behavior.
+                if let scope = reviseScope, scope != .fullReedit { return false }
+                return true   // original create / full-reedit revision: unchanged
             }()
 
             // Submit (or recover an in-flight job_id). Submit is IDEMPOTENT on operation_id, so a transport
