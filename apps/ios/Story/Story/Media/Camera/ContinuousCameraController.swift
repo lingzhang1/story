@@ -33,6 +33,8 @@ enum ContinuousCaptureEvent {
     case recordingFinished(URL, Double)
     case captureFailed(String)       // human-readable, non-semantic
     case interrupted                 // session interrupted (phone call, etc.)
+    case presetsReady([Double])      // device-derived zoom presets available (strip can render)
+    case zoomChanged(Double)         // live USER-× zoom factor (pinch/preset) for the strip
 }
 
 protocol ContinuousCameraControllerDelegate: AnyObject {
@@ -176,6 +178,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
 
         // Compute device-supported zoom presets from the ACTUAL hardware (no fake lenses).
         if let camera = device { self.zoomPresets = Self.zoomPresets(for: camera) }
+        // Publish presets to the owner immediately so the zoom strip renders on OPEN (not lazily on
+        // first tap). Dispatched to main because the delegate drives @Published UI state.
+        let presets = self.zoomPresets
+        DispatchQueue.main.async { [weak self] in self?.delegate?.captureEvent(.presetsReady(presets)) }
 
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
@@ -233,6 +239,20 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         let hasUltraWide = videoDevice?.constituentDevices.contains {
             $0.deviceType == .builtInUltraWideCamera } ?? false
         return CGFloat(userZoom * (hasUltraWide ? 2.0 : 1.0))
+    }
+
+    /// Inverse of `rawZoomFactor`: the device's raw `videoZoomFactor` expressed in user-× terms, so the
+    /// UI strip can show the live magnification (e.g. "2.7×") and highlight the nearest preset.
+    private func userZoom(forRawFactor raw: CGFloat) -> Double {
+        let hasUltraWide = videoDevice?.constituentDevices.contains {
+            $0.deviceType == .builtInUltraWideCamera } ?? false
+        return Double(raw) / (hasUltraWide ? 2.0 : 1.0)
+    }
+
+    /// Report the device's current zoom (user-×) to the owner on the main actor (drives the strip).
+    private func reportZoom() {
+        let user = userZoom(forRawFactor: videoDevice?.videoZoomFactor ?? 1.0)
+        DispatchQueue.main.async { [weak self] in self?.delegate?.captureEvent(.zoomChanged(user)) }
     }
 
     // MARK: - Interruption / backgrounding guards
@@ -470,6 +490,7 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             let clamped = max(device.minAvailableVideoZoomFactor,
                               min(raw, device.maxAvailableVideoZoomFactor))
             device.videoZoomFactor = clamped
+            self.reportZoom()
         }
     }
 
@@ -477,11 +498,12 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     /// at gesture start (`base`), so the ramp feels natural. Works during recording (device-level,
     /// no topology change). Clamped to the device's real min/max.
     func applyPinchZoom(scale: CGFloat, base: CGFloat) {
-        configureDevice { device in
+        configureDevice { [weak self] device in
             let target = base * scale
             let clamped = max(device.minAvailableVideoZoomFactor,
                               min(target, device.maxAvailableVideoZoomFactor))
             device.videoZoomFactor = clamped
+            self?.reportZoom()
         }
     }
 

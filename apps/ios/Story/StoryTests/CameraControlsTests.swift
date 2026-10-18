@@ -66,4 +66,21 @@ final class CameraControlsTests: XCTestCase {
         XCTAssertEqual(r, r.sorted())
         XCTAssertEqual(r.count, Set(r).count)
     }
+
+    // MARK: - Live magnification label (active chip shows the exact zoom, native pattern)
+
+    func testLiveLabel_integerSnapsToWholeTimes() {
+        XCTAssertEqual(CameraZoomFormat.liveLabel(1.0), "1×")
+        XCTAssertEqual(CameraZoomFormat.liveLabel(2.0), "2×")
+        XCTAssertEqual(CameraZoomFormat.liveLabel(2.02), "2×")   // within snap tolerance
+    }
+
+    func testLiveLabel_betweenPresetsShowsOneDecimal() {
+        XCTAssertEqual(CameraZoomFormat.liveLabel(2.7), "2.7×")
+        XCTAssertEqual(CameraZoomFormat.liveLabel(1.4), "1.4×")
+    }
+
+    func testLiveLabel_subOneShowsLeadingDot() {
+        XCTAssertEqual(CameraZoomFormat.liveLabel(0.5), ".5×")
+    }
 }

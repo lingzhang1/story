@@ -13,6 +13,14 @@ enum CameraZoomFormat {
         return String(format: "%.1f", z)
     }
 
+    /// The live magnification shown on the ACTIVE zoom chip: "2.7×" style (one decimal + ×), "1×"/"2×"
+    /// when sitting on/near an integer, ".5×" sub-1×. Separate from `label` (plain preset text).
+    static func liveLabel(_ z: Double) -> String {
+        if z < 1 { return label(z) + "×" }
+        if abs(z - z.rounded()) < 0.05 { return "\(Int(z.rounded()))×" }
+        return String(format: "%.1f×", z)
+    }
+
     /// Build a GRADUAL preset ladder from the device's real optical anchors (e.g. [0.5, 1, 5]) by
     /// filling integer digital steps between 1× and the top anchor, so the user sees a smooth ramp
     /// (0.5, 1, 2, 3, 5) rather than a jarring 1→5 jump. Sub-1× anchors (0.5) are preserved exactly
@@ -87,9 +95,14 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     // Camera controls (Package B Increment 1) — thin passthroughs to the shared controller. The
     // controller owns all device config (serialized + lock-guarded); the model only mirrors UI state.
     @Published var torchOn = false                     // reflects the torch button toggle
-    @Published var currentUserZoom: Double = 1.0       // the active preset highlighted in the UI
-    /// Device-supported zoom presets (e.g. [0.5, 1, 2]) read from the real hardware. [1.0] until ready.
-    var zoomPresets: [Double] { controller?.zoomPresets ?? [1.0] }
+    @Published var currentUserZoom: Double = 1.0       // live magnification (pinch/preset); drives the strip
+    /// Device-supported zoom presets, PUBLISHED by the controller via `.presetsReady` as soon as they
+    /// are computed — so the strip renders on OPEN, not lazily on the first tap. [1.0] until ready.
+    @Published var publishedZoomPresets: [Double] = [1.0]
+    /// What the UI reads. Prefers the published copy; falls back to a live controller read.
+    var zoomPresets: [Double] {
+        publishedZoomPresets.count > 1 ? publishedZoomPresets : (controller?.zoomPresets ?? publishedZoomPresets)
+    }
     /// Whether this device has a torch (UI hides the control when false).
     var hasTorch: Bool { controller?.hasTorch ?? false }
 
@@ -369,6 +382,13 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         case .interrupted:
             isRecording = false
             stopRecordingTimer()
+        case .presetsReady(let presets):
+            // The strip now renders from the model's OWN published copy (not a lazy controller read),
+            // so it appears on OPEN instead of only after the first tap forces a re-render.
+            publishedZoomPresets = presets
+        case .zoomChanged(let userZoom):
+            // Live magnification from pinch or a preset tap — drives the active-chip value + highlight.
+            currentUserZoom = userZoom
         }
     }
 

@@ -448,25 +448,44 @@ struct ContinuousCaptureView: View {
 
     private var panelBG: Color { Color(red: 0.09, green: 0.12, blue: 0.12).opacity(0.9) }
 
-    // Device-aware zoom presets. Labels read the real "×" values (0.5 shows as ".5", integers as "1"/"2").
-    // Tapping snaps the zoom; the active preset is highlighted. Safe during recording (device-level).
+    // Device-aware zoom presets. The chip NEAREST the live magnification is "active": it enlarges and
+    // shows the exact current value (e.g. "2.7×", gold) like the native camera; the others show their
+    // plain preset label (".5", "1", "5"). Tapping snaps to that preset. Updates live during pinch.
     private var zoomPresetStrip: some View {
-        HStack(spacing: 8) {
-            ForEach(model.zoomPresets, id: \.self) { z in
-                let active = abs(model.currentUserZoom - z) < 0.01
+        let presets = model.zoomPresets
+        let activeIdx = nearestPresetIndex(presets, to: model.currentUserZoom)
+        return HStack(spacing: 8) {
+            ForEach(Array(presets.enumerated()), id: \.element) { idx, z in
+                let active = idx == activeIdx
                 Button { model.setZoomPreset(z) } label: {
-                    Text(zoomLabel(z))
+                    Text(active ? liveZoomLabel(model.currentUserZoom) : zoomLabel(z))
                         .font(.system(size: active ? 15 : 13, weight: .semibold))
-                        .foregroundStyle(active ? Color.black : .white)
-                        .frame(minWidth: 40, minHeight: 40)
-                        .background(active ? gold : Color.black.opacity(0.4), in: Circle())
+                        .foregroundStyle(active ? gold : .white)
+                        .frame(minWidth: active ? 48 : 40, minHeight: active ? 48 : 40)
+                        .background(active ? Color.black.opacity(0.55) : Color.black.opacity(0.4), in: Circle())
+                        .overlay(Circle().stroke(active ? gold.opacity(0.9) : .clear, lineWidth: 1.5))
                 }
-                .accessibilityLabel("Zoom \(zoomLabel(z)) times")
+                .accessibilityLabel(active ? "Zoom \(liveZoomLabel(model.currentUserZoom))" : "Zoom \(zoomLabel(z)) times")
             }
         }
         .padding(.horizontal, 6).padding(.vertical, 6)
         .background(Color.black.opacity(0.25), in: Capsule())
+        .animation(.easeOut(duration: 0.12), value: activeIdx)
     }
+
+    /// Index of the preset closest to the live magnification (so pinch highlights the right chip).
+    private func nearestPresetIndex(_ presets: [Double], to value: Double) -> Int {
+        guard !presets.isEmpty else { return 0 }
+        var best = 0; var bestDelta = Double.greatestFiniteMagnitude
+        for (i, p) in presets.enumerated() {
+            let d = abs(p - value)
+            if d < bestDelta { bestDelta = d; best = i }
+        }
+        return best
+    }
+
+    /// The live value shown on the active chip (delegates to the pure, tested helper).
+    private func liveZoomLabel(_ z: Double) -> String { CameraZoomFormat.liveLabel(z) }
 
     private func zoomLabel(_ z: Double) -> String { CameraZoomFormat.label(z) }
 
