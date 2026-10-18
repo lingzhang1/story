@@ -465,7 +465,9 @@ struct StoryResultView: View {
                 }
                 .foregroundStyle(pendingInFlight ? StoryTheme.cream.opacity(0.25) : StoryTheme.cream.opacity(0.7))
                 .padding(.horizontal, 16).padding(.vertical, 13)
+                .frame(maxWidth: .infinity)
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(StoryTheme.cream.opacity(0.12), lineWidth: 1))
+                .contentShape(Rectangle())   // whole capsule is tappable, not just the icon/text glyphs
             }
             .buttonStyle(.plain)
             .disabled(pendingInFlight)
@@ -509,6 +511,7 @@ struct StoryResultView: View {
             .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.22))
             .frame(maxWidth: .infinity).padding(.vertical, 16)
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(StoryTheme.cream.opacity(enabled ? 0.14 : 0.06), lineWidth: 1))
+            .contentShape(Rectangle())   // whole tile tappable, not just the glyphs
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
