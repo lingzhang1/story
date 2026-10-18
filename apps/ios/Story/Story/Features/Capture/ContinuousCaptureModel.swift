@@ -67,70 +67,46 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     private var persistedURLs = Set<String>()     // temp URLs already persisted (double-callback guard)
 
     // Guide/Idea seed: the specific opportunity the user tapped Shoot/Reshoot on (Story Guide
-    // possibility or Story Idea Show-me). When present, the camera shows THIS idea by default
-    // on open — NO scene scan required — so Reshoot lands on the continuous camera already
-    // showing the guide's own idea. nil for plain "Shoot a moment" (no seed, pill shows "Get an AI shot idea").
-    private var seedOpportunity: SelectedOpportunityDTO?
+    // possibility or Story Idea Show-me). When present, the camera shows THIS idea IMMEDIATELY on
+    // open — NO network call, NO scan — because the possibility already carries its own label +
+    // purpose text (loaded on the Story screen). The idea card renders straight from this text, so
+    // Reshoot lands on the continuous camera already showing that exact guide idea with zero latency.
+    // nil for plain "Shoot a moment" (no seed; the pill shows "Get an AI shot idea").
+    private var seededIdea: SeededIdea?
     private var seedConsumed = false
+
+    /// An instant, network-free idea rendered directly from the tapped guide possibility / Story Idea.
+    struct SeededIdea: Equatable {
+        let title: String        // the possibility/idea label — the card headline
+        let body: String         // its semantic purpose — the card instruction line
+        let seconds: Int?        // optional target duration (seeds carry none today)
+    }
 
     func configure(context: ModelContext, captureContext: CaptureContext,
                    seedOpportunity: SelectedOpportunityDTO? = nil) {
         self.context = context
         self.captureContext = captureContext
-        self.seedOpportunity = seedOpportunity
-    }
-
-    /// Produce the seeded guide/idea as the DEFAULT in-camera idea, once, on first appear.
-    /// Reuses the Director opportunity path with NO scene understanding (scan-free) — the same
-    /// path Skip Scan uses — so the idea for this specific guide possibility shows immediately.
-    /// Runs at most once; a user Rescan/Dismiss afterwards behaves exactly as before.
-    func seedGuideIdeaIfNeeded() {
-        guard !seedConsumed, let opp = seedOpportunity else { return }
-        seedConsumed = true
-        aiGeneration &+= 1
-        let gen = aiGeneration
-        ideas = []; ideasOutput = nil; ideaIndex = 0
-        aiState = .thinking
-        Task { await runSeededDirector(opportunity: opp, generation: gen) }
-    }
-
-    /// Director call seeded by the chosen opportunity, WITHOUT frames (sceneUnderstanding nil).
-    /// Mirrors runDirector's stale-generation + failure handling so a record/dismiss mid-flight
-    /// never reopens an overlay or disables recording.
-    private func runSeededDirector(opportunity: SelectedOpportunityDTO, generation gen: Int) async {
-        guard gen == aiGeneration else { return }
-        guard let captureContext else { aiState = .off; return }
-        do {
-            let out = try await directorService.initialize(
-                creativeIntent: captureContext.directorIntent(),
-                sceneUnderstanding: nil,                    // scan-free: seed the idea from the opportunity alone
-                targetDurationSeconds: captureContext.targetDurationSeconds,
-                selectedOpportunity: opportunity)
-            guard gen == aiGeneration else { return }        // user started recording / dismissed
-            let candidates = out.candidates.isEmpty ? [out.decision] : out.candidates
-            let shots = candidates.filter { $0.action == .captureShot || $0.action == .retryShot }
-            if shots.isEmpty {
-                // Director declined this scene-agnostically — keep the camera usable; let the
-                // user scan for a scene-specific idea instead of showing an empty seed.
-                aiState = .off
-            } else {
-                ideas = shots
-                ideasOutput = out
-                ideaIndex = 0
-                ideasCollapsed = false
-                aiState = .ideas
-            }
-        } catch {
-            guard gen == aiGeneration else { return }
-            // Seed failed/throttled — recording still works; the AI pill returns so the user can retry.
-            aiState = .off
+        if let opp = seedOpportunity, !seedConsumed {
+            // Build the idea card from text we ALREADY have — no Director call, no spinner.
+            let title = opp.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = (opp.purpose ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty { self.seededIdea = SeededIdea(title: title, body: body, seconds: nil) }
         }
+    }
+
+    /// Show the seeded guide idea as the DEFAULT in-camera idea, instantly, once, on first appear.
+    /// Pure local state change — no network, so the card appears the moment Reshoot opens the camera.
+    func seedGuideIdeaIfNeeded() {
+        guard !seedConsumed, seededIdea != nil else { return }
+        seedConsumed = true
+        aiState = .ideas
     }
 
     func toggleRecording() { controller?.toggleRecording() }
 
-    /// Whether we hold cached ideas that can be reopened without a new scan (drives the chip).
-    var hasCachedIdeas: Bool { !ideas.isEmpty }
+    /// Whether we hold a shot idea that can be reopened without a new scan (drives the chip):
+    /// either live cached Director ideas OR an instant seeded guide idea.
+    var hasCachedIdeas: Bool { !ideas.isEmpty || seededIdea != nil }
 
     /// AI Ideas — user-initiated. If ideas are already cached and merely collapsed, REOPEN them
     /// (no inference). Otherwise start a fresh scene scan on the LIVE session (does not stop any
@@ -185,15 +161,21 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     private var isFailed: Bool { if case .failed = aiState { return true } else { return false } }
 
     // MARK: - Current idea accessors (for the overlay)
+    //
+    // A SEEDED idea (from a Guide Reshoot / Story Idea) renders instantly from local text and takes
+    // precedence until the user Rescans — then live Director `ideas` replace it (seed cleared).
 
     var currentIdeaTitle: String {
-        ideasOutput?.concept.title ?? "Shot idea"
+        if let s = seededIdea, ideas.isEmpty { return s.title }
+        return ideasOutput?.concept.title ?? "Shot idea"
     }
     var currentIdeaBody: String {
+        if let s = seededIdea, ideas.isEmpty { return s.body }
         guard ideaIndex < ideas.count else { return "" }
         return ideas[ideaIndex].shot?.instruction ?? ideasOutput?.concept.summary ?? ""
     }
     var currentIdeaSeconds: Int? {
+        if seededIdea != nil, ideas.isEmpty { return seededIdea?.seconds }
         guard ideaIndex < ideas.count else { return nil }
         if let d = ideas[ideaIndex].shot?.targetDurationSeconds, d > 0 { return Int(d.rounded()) }
         return nil
@@ -202,6 +184,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     /// A compact one-line reminder of the active idea, for the minimized recording state.
     var currentIdeaReminder: String? {
+        if let s = seededIdea, ideas.isEmpty { return s.title.isEmpty ? nil : s.title }
         guard hasCachedIdeas else { return nil }
         let t = currentIdeaTitle
         return t.isEmpty ? nil : t
@@ -211,6 +194,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         aiGeneration &+= 1
         let gen = aiGeneration
         ideas = []; ideasOutput = nil; ideaIndex = 0
+        seededIdea = nil            // Rescan replaces the seeded guide idea with live, scene-specific ideas
         scanProgress = 0
         aiState = .scanning
         guard let controller else { aiState = .failed("Camera unavailable."); return }

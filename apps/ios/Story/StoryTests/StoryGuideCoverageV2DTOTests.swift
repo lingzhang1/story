@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import Story
 
 // E2-c DTO + Director entry-point tests (runnable in XCTest). Lifecycle/persistence tests live in
@@ -88,5 +89,76 @@ final class StoryGuideCoverageV2DTOTests: XCTestCase {
         let s = String(data: data, encoding: .utf8)!
         XCTAssertTrue(s.contains("story_guide_dimension_id"))
         XCTAssertTrue(s.contains("capture_possibility_label"))
+    }
+}
+
+// Guide Reshoot -> continuous camera seeds the guide's OWN idea INSTANTLY (no network, no scan).
+// Proves the fix for the ~5s delay: the idea card renders straight from the opportunity text the
+// Story screen already holds, so Reshoot shows that exact idea with zero latency.
+@MainActor
+final class ContinuousCaptureSeedTests: XCTestCase {
+
+    private func makeContainer() throws -> ModelContainer {
+        try ModelContainer(
+            for: StoryModel.self, MomentModel.self, StoryMomentLink.self, AssetModel.self,
+                 GeneratedOutputModel.self, LocalIdentityModel.self,
+                 MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
+                 StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+    }
+
+    func test_seededGuideIdea_showsInstantly_fromOpportunityText_noNetwork() throws {
+        let container = try makeContainer()
+        let story = StoryModel(title: "Girl in Dress", intentRawText: "cinematic dresses",
+                               intentTheme: "t", intentTone: "o", intentSummary: "cinematic dresses")
+        container.mainContext.insert(story)
+
+        let opp = SelectedOpportunityDTO(
+            storyGuideDimensionId: "dim_02", label: "Warm light on skin and fabric",
+            purpose: "golden light wrapping the dress", capturePossibilityLabel: "Warm light on skin and fabric")
+
+        let model = ContinuousCaptureModel()
+        model.configure(context: container.mainContext, captureContext: .story(story), seedOpportunity: opp)
+        // Before appear: no idea shown yet.
+        XCTAssertEqual(model.aiState, .off)
+        model.seedGuideIdeaIfNeeded()
+
+        // Instantly in the .ideas state with THAT guide idea — no .thinking/.scanning, no Director call.
+        XCTAssertEqual(model.aiState, .ideas)
+        XCTAssertTrue(model.hasCachedIdeas)
+        XCTAssertEqual(model.currentIdeaTitle, "Warm light on skin and fabric")
+        XCTAssertEqual(model.currentIdeaBody, "golden light wrapping the dress")
+        XCTAssertEqual(model.currentIdeaReminder, "Warm light on skin and fabric")
+    }
+
+    func test_noSeed_forPlainShootAMoment_showsPill() throws {
+        let container = try makeContainer()
+        let story = StoryModel(title: "S", intentRawText: "x", intentTheme: "t", intentTone: "o", intentSummary: "x")
+        container.mainContext.insert(story)
+
+        let model = ContinuousCaptureModel()
+        model.configure(context: container.mainContext, captureContext: .story(story), seedOpportunity: nil)
+        model.seedGuideIdeaIfNeeded()
+
+        XCTAssertEqual(model.aiState, .off)          // plain Shoot a moment: no seeded idea, pill shows
+        XCTAssertFalse(model.hasCachedIdeas)
+    }
+
+    func test_seedConsumedOnce_reappearDoesNotReseed() throws {
+        let container = try makeContainer()
+        let story = StoryModel(title: "S", intentRawText: "x", intentTheme: "t", intentTone: "o", intentSummary: "x")
+        container.mainContext.insert(story)
+        let opp = SelectedOpportunityDTO(storyGuideDimensionId: "d", label: "Idea A",
+                                         purpose: "p", capturePossibilityLabel: "Idea A")
+        let model = ContinuousCaptureModel()
+        model.configure(context: container.mainContext, captureContext: .story(story), seedOpportunity: opp)
+        model.seedGuideIdeaIfNeeded()
+        XCTAssertEqual(model.aiState, .ideas)
+        // Simulate the user dismissing the overlay, then a view re-appear re-calling configure/seed.
+        model.dismissIdeas()
+        model.configure(context: container.mainContext, captureContext: .story(story), seedOpportunity: opp)
+        model.seedGuideIdeaIfNeeded()
+        // Seed is consumed once — re-appear must NOT force the idea overlay back open.
+        XCTAssertNotEqual(model.aiState, .ideas)
     }
 }
