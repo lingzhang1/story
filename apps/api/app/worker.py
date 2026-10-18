@@ -271,6 +271,27 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                                              "calls", "executability_repairs_used")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
+        # DIRECTIVE visibility: what revision_context the worker ACTUALLY received, the resolved opening id,
+        # and whether the produced plan's first segment honored it. This is the only way to tell apart "the app
+        # sent no/stale directive" from "the directive was sent but not enforced" from "Moment N resolved to an
+        # unexpected id" — all three present as a byte-identical plan from the outside.
+        _rc = (b.get("revision_context") or {}) if isinstance(b.get("revision_context"), dict) else {}
+        _dir = _rc.get("directives") or {}
+        _moment_ids = {str(m.get("id")).lower() for m in b.get("moments", []) if isinstance(m, dict)}
+        _plan_segs = sorted(_plan_to_dict(plan).get("segments", []), key=lambda s: s.get("order", 0))
+        _seg0 = (str(_plan_segs[0].get("asset_id")).lower() if _plan_segs else None)
+        _open = _dir.get("opening")
+        _open_l = (str(_open).lower() if isinstance(_open, str) else None)
+        rev_diag = {
+            "mode": _rc.get("mode"),
+            "directive_keys": sorted(k for k in _dir.keys() if _dir.get(k)) if isinstance(_dir, dict) else None,
+            "opening": _open_l,
+            "opening_in_moments": (_open_l in _moment_ids) if _open_l else None,
+            "seg0": _seg0,
+            "opening_honored": (_open_l == _seg0) if _open_l else None,
+            "soft": (str(_rc.get("soft_direction"))[:80] if _rc.get("soft_direction") else None),
+        }
+        diag_out["rev_diag"] = rev_diag
         # Greppable diagnostics line (CloudWatch): which model served each call, first-pass validator errors,
         # and WHY the primary failed over — so Opus-vs-Sonnet reject behavior is analyzable without DynamoDB.
         print(json.dumps({"msg": "worker_plan_diag", "job_id": job_id,
@@ -280,6 +301,7 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                           "any_fallback": diag_out.get("any_fallback"),
                           "first_fallback_error": diag_out.get("first_fallback_error"),
                           "calls": diag_out.get("calls"),
+                          "rev_diag": rev_diag,
                           "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)
