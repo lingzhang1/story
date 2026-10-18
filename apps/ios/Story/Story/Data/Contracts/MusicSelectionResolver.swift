@@ -188,6 +188,43 @@ final class MusicSelectionResolver {
             trackTitle: title)
     }
 
+    /// Resolve a KNOWN provider track directly by its id, WITHOUT running a fresh recommendation. Used when a
+    /// Revise must carry the base version's existing soundtrack forward: re-recommending (resolveSelection's
+    /// path) can return a DIFFERENT top pick or fail entirely on a transient provider hiccup, silently dropping
+    /// music from the revised video. This path only needs the base's persisted role/priority/title/plan, so it
+    /// downloads + analyses the exact same track and never depends on the recommender. nil => download/analysis
+    /// failed (caller then runs the honest no-music path, same as before).
+    func resolveKnownTrack(trackId: String, musicPlanJSON: JSONValue,
+                           soundtrackRole: String, nativeAudioPriority: String,
+                           title: String) async -> StoryCreationCoordinator.MusicSelection? {
+        let analysis: MusicAnalysisV1
+        let analysisJSON: JSONValue
+        do {
+            let both = try await candidatesService.analysisBoth(trackId: trackId)
+            analysis = both.analysis; analysisJSON = both.raw
+        } catch {
+            MediaEngineV1.beacon("resolveKnown: analysis FAILED \(error)")
+            return nil
+        }
+        let url: URL
+        do { url = try await candidatesService.downloadSoundtrack(trackId: trackId) }
+        catch {
+            MediaEngineV1.beacon("resolveKnown: download FAILED \(error)")
+            return nil
+        }
+        MediaEngineV1.beacon("resolveKnown: OK track=\(trackId.prefix(8)) url=\(url.lastPathComponent)")
+        return StoryCreationCoordinator.MusicSelection(
+            musicPlanJSON: musicPlanJSON,
+            trackId: trackId,
+            analysisJSON: analysisJSON,
+            analysis: analysis,
+            soundtrackURL: url,
+            soundtrackRole: soundtrackRole,
+            nativeAudioPriority: nativeAudioPriority,
+            trackTitle: title)
+    }
+
+
     // MARK: - helpers
 
     /// True when the JSONValue is an object with at least one key (i.e. a real Guide/Coverage was passed).

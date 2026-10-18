@@ -494,11 +494,32 @@ struct StoryResultView: View {
         }
         if ref.hasPrefix("provider:") {
             let trackId = String(ref.dropFirst("provider:".count))
+            // Resolve the EXACT base track directly — do NOT re-run a recommendation. A fresh recommend could
+            // return a different top pick or fail on a transient provider hiccup, silently dropping the music
+            // (observed: a Revise rendered silent though the base had a soundtrack). The base output persisted
+            // everything we need (role/priority/title + the plan inside editPlanJSON).
             let resolver = MusicSelectionResolver(context: context)
-            guard let rec = await resolver.recommend(for: story, guideFramingSummary: nil) else { return nil }
-            return await resolver.resolveSelection(recommendation: rec, trackId: trackId)
+            let planJSON = basePlanMusicJSON(base)
+            return await resolver.resolveKnownTrack(
+                trackId: trackId,
+                musicPlanJSON: planJSON,
+                soundtrackRole: base.soundtrackRole ?? "supportive",
+                nativeAudioPriority: base.nativeAudioPriority ?? "selective",
+                title: base.soundtrackTitle ?? "Soundtrack")
         }
         return nil
+    }
+
+    /// The music_plan object from the base output's persisted edit plan, so a Revise reuses the SAME music plan
+    /// the base rendered with. Falls back to an empty object (the renderer treats music as a render-time
+    /// overlay via soundtrackURL, so an empty plan still renders the carried track).
+    private func basePlanMusicJSON(_ base: GeneratedOutputModel) -> JSONValue {
+        guard let s = base.editPlanJSON, let data = s.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let mp = obj["music_plan"] else { return .object([:]) }
+        if let mpData = try? JSONSerialization.data(withJSONObject: mp),
+           let v = try? JSONDecoder().decode(JSONValue.self, from: mpData) { return v }
+        return .object([:])
     }
 }
 
