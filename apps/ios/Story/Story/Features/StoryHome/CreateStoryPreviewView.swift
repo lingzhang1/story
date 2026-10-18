@@ -368,6 +368,13 @@ struct CreateStoryPreviewView: View {
                                     directives: directives, soft: soft, chipIds: chipIds, music: music) },
                 onCancel: { durationRec = nil })
                 .presentationDetents([.large])
+                // Force a FRESH view identity each time the sheet opens. CustomizeYourStoryView seeds its
+                // `creativeDirection` @State once from initialCreativeDirection; .sheet(item:) alone can reuse
+                // the view identity across presentations, so without this the editor keeps a STALE seed and the
+                // user's latest typed instruction is silently replaced by a prior operation's persisted text at
+                // submit (observed: "Start from Moment 15" submitted instead of the freshly typed input).
+                // rec.id is a fresh UUID per presentation, so this re-runs init and re-seeds the editor.
+                .id(rec.id)
         }
         .alert("Keep shooting", isPresented: $durationNoMaterial) {
             Button("OK", role: .cancel) { durationNoMaterial = false }
