@@ -180,9 +180,12 @@ struct StoryHomeView: View {
         .fullScreenCover(item: $pendingOpportunity, onDismiss: {
             Task { await refreshAfterCapture() }
         }) { launch in
-            // Opportunity-driven capture: Story Idea Show-me / Guide possibility Shoot.
-            // The scan flow carries selected_opportunity into Director (survives rescan).
-            SceneScanFlowView(captureContext: .story(story), selectedOpportunity: launch.opportunity)
+            // Opportunity-driven capture (Story Idea Show-me / Guide possibility Shoot/Reshoot).
+            // Uses the SAME continuous camera as "Shoot a moment" (no old scan-first Start/Skip
+            // Scan screen); the chosen opportunity seeds the in-camera AI idea as the default for
+            // this specific guide item (scan-free), so Reshoot lands straight on the camera already
+            // showing that idea.
+            ContinuousCaptureView(captureContext: .story(story), seedOpportunity: launch.opportunity)
         }
         .navigationDestination(isPresented: $showPreview) {
             CreateStoryPreviewView(story: story, forceNewVersionFrom: recreateParent)

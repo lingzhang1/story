@@ -66,9 +66,65 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     private var inFlightURLs = Set<String>()      // temp URLs currently being persisted
     private var persistedURLs = Set<String>()     // temp URLs already persisted (double-callback guard)
 
-    func configure(context: ModelContext, captureContext: CaptureContext) {
+    // Guide/Idea seed: the specific opportunity the user tapped Shoot/Reshoot on (Story Guide
+    // possibility or Story Idea Show-me). When present, the camera shows THIS idea by default
+    // on open — NO scene scan required — so Reshoot lands on the continuous camera already
+    // showing the guide's own idea. nil for plain "Shoot a moment" (no seed, pill shows "Get an AI shot idea").
+    private var seedOpportunity: SelectedOpportunityDTO?
+    private var seedConsumed = false
+
+    func configure(context: ModelContext, captureContext: CaptureContext,
+                   seedOpportunity: SelectedOpportunityDTO? = nil) {
         self.context = context
         self.captureContext = captureContext
+        self.seedOpportunity = seedOpportunity
+    }
+
+    /// Produce the seeded guide/idea as the DEFAULT in-camera idea, once, on first appear.
+    /// Reuses the Director opportunity path with NO scene understanding (scan-free) — the same
+    /// path Skip Scan uses — so the idea for this specific guide possibility shows immediately.
+    /// Runs at most once; a user Rescan/Dismiss afterwards behaves exactly as before.
+    func seedGuideIdeaIfNeeded() {
+        guard !seedConsumed, let opp = seedOpportunity else { return }
+        seedConsumed = true
+        aiGeneration &+= 1
+        let gen = aiGeneration
+        ideas = []; ideasOutput = nil; ideaIndex = 0
+        aiState = .thinking
+        Task { await runSeededDirector(opportunity: opp, generation: gen) }
+    }
+
+    /// Director call seeded by the chosen opportunity, WITHOUT frames (sceneUnderstanding nil).
+    /// Mirrors runDirector's stale-generation + failure handling so a record/dismiss mid-flight
+    /// never reopens an overlay or disables recording.
+    private func runSeededDirector(opportunity: SelectedOpportunityDTO, generation gen: Int) async {
+        guard gen == aiGeneration else { return }
+        guard let captureContext else { aiState = .off; return }
+        do {
+            let out = try await directorService.initialize(
+                creativeIntent: captureContext.directorIntent(),
+                sceneUnderstanding: nil,                    // scan-free: seed the idea from the opportunity alone
+                targetDurationSeconds: captureContext.targetDurationSeconds,
+                selectedOpportunity: opportunity)
+            guard gen == aiGeneration else { return }        // user started recording / dismissed
+            let candidates = out.candidates.isEmpty ? [out.decision] : out.candidates
+            let shots = candidates.filter { $0.action == .captureShot || $0.action == .retryShot }
+            if shots.isEmpty {
+                // Director declined this scene-agnostically — keep the camera usable; let the
+                // user scan for a scene-specific idea instead of showing an empty seed.
+                aiState = .off
+            } else {
+                ideas = shots
+                ideasOutput = out
+                ideaIndex = 0
+                ideasCollapsed = false
+                aiState = .ideas
+            }
+        } catch {
+            guard gen == aiGeneration else { return }
+            // Seed failed/throttled — recording still works; the AI pill returns so the user can retry.
+            aiState = .off
+        }
     }
 
     func toggleRecording() { controller?.toggleRecording() }

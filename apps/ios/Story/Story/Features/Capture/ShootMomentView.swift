@@ -11,9 +11,11 @@ import SwiftData
 //
 // AI Ideas remain available as an OPTIONAL action inside the camera (the "Get an
 // AI shot idea" pill), using this Story's CreativeIntent/Guide — the scan +
-// Director functionality is reused, not removed. The scan-FIRST flow
-// (SceneScanFlowView) is still used by the opportunity-driven path (Story Idea
-// "Show me" / Guide possibility "Shoot") in StoryHomeView.
+// Director functionality is reused, not removed. The opportunity-driven path
+// (Story Idea "Show me" / Guide possibility "Shoot"/"Reshoot") now ALSO uses this
+// continuous camera (StoryHomeView passes the chosen opportunity as a seed so the
+// camera opens already showing that guide idea); the old scan-first SceneScanFlowView
+// is no longer on the Shoot/Reshoot path.
 struct ShootMomentView: View {
     @Bindable var story: StoryModel
 

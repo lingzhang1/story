@@ -21,6 +21,10 @@ import UIKit
 // without AI (spec: AI is user-initiated and never required to record).
 struct ContinuousCaptureView: View {
     let captureContext: CaptureContext
+    /// Optional Story Guide possibility / Story Idea the user tapped Shoot/Reshoot on. When set, the
+    /// camera opens already showing THIS idea as the default in-camera AI idea (scan-free). nil for
+    /// the plain "Shoot a moment" entry (no seed).
+    var seedOpportunity: SelectedOpportunityDTO? = nil
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
@@ -60,7 +64,10 @@ struct ContinuousCaptureView: View {
             }
         }
         .statusBarHidden(true)
-        .onAppear { model.configure(context: context, captureContext: captureContext) }
+        .onAppear {
+            model.configure(context: context, captureContext: captureContext, seedOpportunity: seedOpportunity)
+            model.seedGuideIdeaIfNeeded()
+        }
         // Phase 1: the recent-Moment thumbnail opens the GLOBAL library in a browse-only
         // (.recentBrowse) cover PRESENTED OVER the camera — the camera session beneath is
         // preserved (not torn down), so closing returns straight to a ready camera. No new
