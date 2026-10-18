@@ -526,6 +526,17 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     /// The device's current raw zoom factor (gesture start reads this as its base).
     var currentZoomFactor: CGFloat { videoDevice?.videoZoomFactor ?? 1.0 }
 
+    /// The device's zoom range expressed in USER-× terms (for the continuous thumb-dial). On an
+    /// ultra-wide virtual device, raw 1.0 == user 0.5×, so user-min is raw-min / 2.
+    var userZoomRange: ClosedRange<Double> {
+        guard let d = videoDevice else { return 1...1 }
+        let hasUltraWide = d.constituentDevices.contains { $0.deviceType == .builtInUltraWideCamera }
+        let div = hasUltraWide ? 2.0 : 1.0
+        let lo = Double(d.minAvailableVideoZoomFactor) / div
+        let hi = Double(d.maxAvailableVideoZoomFactor) / div
+        return lo...max(lo, hi)
+    }
+
     /// Tap-to-focus + expose at a preview point (0..1 device coords from the preview layer). A tap also
     /// CLEARS any AE/AF lock and resumes continuous tracking — the native behavior (tap to re-meter).
     func focusAndExpose(atDevicePoint point: CGPoint) {

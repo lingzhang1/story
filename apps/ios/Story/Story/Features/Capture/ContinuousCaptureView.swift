@@ -33,6 +33,8 @@ struct ContinuousCaptureView: View {
     @State private var showLibrary = false
     @State private var focusReticle: CGPoint?
     @State private var reticleToken = 0
+    @State private var zoomDialActive = false
+    @State private var dialStartFraction: Double = 0
 
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
     private let ink = Color(red: 0.96, green: 0.94, blue: 0.91)
@@ -496,22 +498,51 @@ struct ContinuousCaptureView: View {
     private var zoomPresetStrip: some View {
         let presets = model.zoomPresets
         let activeIdx = nearestPresetIndex(presets, to: model.currentUserZoom)
-        return HStack(spacing: 8) {
-            ForEach(Array(presets.enumerated()), id: \.element) { idx, z in
-                let active = idx == activeIdx
-                Button { model.setZoomPreset(z) } label: {
-                    Text(active ? liveZoomLabel(model.currentUserZoom) : zoomLabel(z))
-                        .font(.system(size: active ? 15 : 13, weight: .semibold))
-                        .foregroundStyle(active ? gold : .white)
-                        .frame(minWidth: active ? 48 : 40, minHeight: active ? 48 : 40)
-                        .background(active ? Color.black.opacity(0.55) : Color.black.opacity(0.4), in: Circle())
-                        .overlay(Circle().stroke(active ? gold.opacity(0.9) : .clear, lineWidth: 1.5))
+        return ZStack {
+            // Compact chip row (default). Hidden while the thumb-dial is active.
+            if !zoomDialActive {
+                HStack(spacing: 8) {
+                    ForEach(Array(presets.enumerated()), id: \.element) { idx, z in
+                        let active = idx == activeIdx
+                        Button { model.setZoomPreset(z) } label: {
+                            Text(active ? liveZoomLabel(model.currentUserZoom) : zoomLabel(z))
+                                .font(.system(size: active ? 15 : 13, weight: .semibold))
+                                .foregroundStyle(active ? gold : .white)
+                                .frame(minWidth: active ? 48 : 40, minHeight: active ? 48 : 40)
+                                .background(active ? Color.black.opacity(0.55) : Color.black.opacity(0.4), in: Circle())
+                                .overlay(Circle().stroke(active ? gold.opacity(0.9) : .clear, lineWidth: 1.5))
+                        }
+                        .accessibilityLabel(active ? "Zoom \(liveZoomLabel(model.currentUserZoom))" : "Zoom \(zoomLabel(z)) times")
+                    }
                 }
-                .accessibilityLabel(active ? "Zoom \(liveZoomLabel(model.currentUserZoom))" : "Zoom \(zoomLabel(z)) times")
+                .padding(.horizontal, 6).padding(.vertical, 6)
+                .background(Color.black.opacity(0.25), in: Capsule())
+            } else {
+                // Thumb-dial (native pattern): a tick ruler + gold live readout while dragging.
+                ZoomDial(zoom: model.currentUserZoom, range: model.userZoomRange, presets: presets)
+                    .transition(.opacity)
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 6)
-        .background(Color.black.opacity(0.25), in: Capsule())
+        .frame(height: zoomDialActive ? 96 : 52)
+        .contentShape(Rectangle())
+        // Drag anywhere on the strip to fine-tune zoom with the thumb; release collapses to chips.
+        .gesture(
+            DragGesture(minimumDistance: 6)
+                .onChanged { g in
+                    if !zoomDialActive {
+                        zoomDialActive = true
+                        dialStartFraction = CameraZoomFormat.dialFraction(fromZoom: model.currentUserZoom, range: model.userZoomRange)
+                    }
+                    // Horizontal drag moves the dial; ~260pt of travel spans the full range.
+                    let delta = Double(g.translation.width) / 260.0
+                    let frac = dialStartFraction + delta
+                    let z = CameraZoomFormat.dialZoom(fromFraction: frac, range: model.userZoomRange)
+                    model.setDialZoom(z)
+                }
+                .onEnded { _ in
+                    withAnimation(.easeOut(duration: 0.18)) { zoomDialActive = false }
+                }
+        )
         .animation(.easeOut(duration: 0.12), value: activeIdx)
     }
 
@@ -650,7 +681,59 @@ private struct FocusReticle: View {
     }
 }
 
-// Vertical exposure "sun" slider (Increment 2) beside the focus reticle. Drag up → brighter (+EV),
+// Thumb-dial zoom ruler (native pattern): a horizontal tick ruler with preset labels and a centered
+// gold live "N.N×" readout, shown while the user drags across the zoom strip. Purely a display of the
+// current zoom + range; the drag gesture that drives it lives on the strip (so one gesture owns zoom).
+private struct ZoomDial: View {
+    let zoom: Double
+    let range: ClosedRange<Double>
+    let presets: [Double]
+    private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(CameraZoomFormat.liveLabel(zoom))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(gold)
+                .accessibilityLabel("Zoom \(CameraZoomFormat.liveLabel(zoom))")
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .top) {
+                    // Tick marks across the log range (minor ticks + labeled preset ticks).
+                    ForEach(tickFractions(count: 25), id: \.self) { f in
+                        Rectangle().fill(.white.opacity(0.35))
+                            .frame(width: 1, height: 8)
+                            .position(x: f * w, y: 6)
+                    }
+                    ForEach(presets, id: \.self) { p in
+                        let f = CameraZoomFormat.dialFraction(fromZoom: p, range: range)
+                        VStack(spacing: 2) {
+                            Rectangle().fill(.white.opacity(0.9)).frame(width: 1.5, height: 12)
+                            Text(CameraZoomFormat.label(p))
+                                .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                        }
+                        .position(x: f * w, y: 14)
+                    }
+                    // Center gold indicator = the current zoom position.
+                    let cf = CameraZoomFormat.dialFraction(fromZoom: zoom, range: range)
+                    Rectangle().fill(gold).frame(width: 2.5, height: 16)
+                        .position(x: cf * w, y: 6)
+                }
+            }
+            .frame(height: 34)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func tickFractions(count: Int) -> [CGFloat] {
+        guard count > 1 else { return [0] }
+        return (0..<count).map { CGFloat($0) / CGFloat(count - 1) }
+    }
+}
+
+// Vertical exposure "sun" slider (Increment 2) beside the focus reticle: drag up → brighter (+EV),
 // down → darker (−EV); maps a vertical drag to the device's real bias range. A sun icon rides the knob.
 private struct ExposureSlider: View {
     @Binding var value: Float

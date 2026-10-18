@@ -111,4 +111,35 @@ final class CameraControlsTests: XCTestCase {
     func testExposureFraction_zeroSpanIsSafe() {
         XCTAssertEqual(CameraZoomFormat.exposureFraction(fromEV: 1, range: 0...0), 0)
     }
+
+    // MARK: - Thumb-dial zoom mapping (log-scaled, native pattern)
+
+    func testDialZoom_endpointsMapToRangeEnds() {
+        let r = 0.5...15.0
+        XCTAssertEqual(CameraZoomFormat.dialZoom(fromFraction: 0, range: r), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(CameraZoomFormat.dialZoom(fromFraction: 1, range: r), 15.0, accuracy: 0.0001)
+    }
+
+    func testDialZoom_clampsOutOfRangeFraction() {
+        let r = 1.0...5.0
+        XCTAssertEqual(CameraZoomFormat.dialZoom(fromFraction: -0.3, range: r), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(CameraZoomFormat.dialZoom(fromFraction: 1.4, range: r), 5.0, accuracy: 0.0001)
+    }
+
+    func testDialFraction_isInverseOfZoom() {
+        let r = 0.5...15.0
+        for z in [0.5, 1.0, 1.7, 2.0, 5.0, 15.0] {
+            let f = CameraZoomFormat.dialFraction(fromZoom: z, range: r)
+            let back = CameraZoomFormat.dialZoom(fromFraction: f, range: r)
+            XCTAssertEqual(back, z, accuracy: 0.001)
+        }
+    }
+
+    func testDialZoom_logScaleGivesFinerLowEnd() {
+        // Log scale: the midpoint fraction sits at the geometric mean, not the arithmetic mean —
+        // so the low end gets more travel (finer control), like the native dial.
+        let r = 0.5...8.0
+        let mid = CameraZoomFormat.dialZoom(fromFraction: 0.5, range: r)
+        XCTAssertEqual(mid, 2.0, accuracy: 0.01)          // sqrt(0.5*8) = 2, not 4.25
+    }
 }

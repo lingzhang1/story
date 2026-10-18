@@ -33,6 +33,21 @@ enum CameraZoomFormat {
         return min(max((ev - range.lowerBound) / span, 0), 1)
     }
 
+    /// Thumb-dial zoom mapping (log-scaled, like the native camera dial so the low end is finer). A dial
+    /// fraction (0 = min zoom, 1 = max zoom) maps to a user-× value, and back. Pure/unit-testable.
+    static func dialZoom(fromFraction p: Double, range: ClosedRange<Double>) -> Double {
+        let lo = max(0.0001, range.lowerBound), hi = max(lo, range.upperBound)
+        let cp = min(max(p, 0), 1)
+        let v = lo * pow(hi / lo, cp)
+        return min(max(v, lo), hi)
+    }
+    static func dialFraction(fromZoom z: Double, range: ClosedRange<Double>) -> Double {
+        let lo = max(0.0001, range.lowerBound), hi = max(lo, range.upperBound)
+        guard hi > lo else { return 0 }
+        let cz = min(max(z, lo), hi)
+        return log(cz / lo) / log(hi / lo)
+    }
+
     /// Build a GRADUAL preset ladder from the device's real optical anchors (e.g. [0.5, 1, 5]) by
     /// filling integer digital steps between 1× and the top anchor, so the user sees a smooth ramp
     /// (0.5, 1, 2, 3, 5) rather than a jarring 1→5 jump. Sub-1× anchors (0.5) are preserved exactly
@@ -127,6 +142,14 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         currentUserZoom = userZoom
         controller?.setUserZoom(userZoom)
     }
+    /// Continuous absolute zoom from the thumb-dial (maps dial position → a user-× value). Reuses the
+    /// same clamped device setter as the presets; the controller reports the real value back via .zoomChanged.
+    func setDialZoom(_ userZoom: Double) {
+        currentUserZoom = userZoom
+        controller?.setUserZoom(userZoom)
+    }
+    /// The device's continuous user-× zoom range (for the dial extents). [1,1] until ready.
+    var userZoomRange: ClosedRange<Double> { controller?.userZoomRange ?? 1...1 }
     /// Continuous pinch zoom. `base` is captured at gesture start from the controller.
     func pinchZoom(scale: CGFloat, base: CGFloat) {
         controller?.applyPinchZoom(scale: scale, base: base)
