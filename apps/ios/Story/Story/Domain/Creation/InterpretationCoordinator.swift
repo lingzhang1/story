@@ -46,7 +46,7 @@ enum InterpretationCoordinator {
     /// NUMBER; summaries only help it pick the right number).
     static func interpret(_ instruction: String,
                           numbering: StoryMomentNumbering,
-                          service: InterpretService = InterpretService(),
+                          service: Interpreting = InterpretService(),
                           summaryForId: @escaping (UUID) -> String? = { _ in nil }) async -> InterpretationOutcome {
         let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {

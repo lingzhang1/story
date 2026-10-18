@@ -26,7 +26,15 @@ enum InterpretServiceError: Error {
     case transport
 }
 
-final class InterpretService {
+/// Seam for testing: the coordinator depends on this, so a stub can simulate server results/503 without a
+/// network. InterpretService is the production conformer.
+protocol Interpreting {
+    func interpret(_ instruction: String,
+                   numbering: StoryMomentNumbering,
+                   summaryForId: (UUID) -> String?) async throws -> InterpretedInstruction
+}
+
+final class InterpretService: Interpreting {
     private let baseURL: URL
     private let session: URLSession
     init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
