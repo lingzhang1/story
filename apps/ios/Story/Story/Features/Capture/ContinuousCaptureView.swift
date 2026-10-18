@@ -499,6 +499,8 @@ struct ContinuousCaptureView: View {
         let presets = model.zoomPresets
         let activeIdx = nearestPresetIndex(presets, to: model.currentUserZoom)
         return ZStack {
+            // Full-width transparent hit area so the drag starts anywhere on the strip (incl. gaps).
+            Color.black.opacity(0.001)
             // Compact chip row (default). Hidden while the thumb-dial is active.
             if !zoomDialActive {
                 HStack(spacing: 8) {
@@ -512,6 +514,7 @@ struct ContinuousCaptureView: View {
                                 .background(active ? Color.black.opacity(0.55) : Color.black.opacity(0.4), in: Circle())
                                 .overlay(Circle().stroke(active ? gold.opacity(0.9) : .clear, lineWidth: 1.5))
                         }
+                        .buttonStyle(.plain)
                         .accessibilityLabel(active ? "Zoom \(liveZoomLabel(model.currentUserZoom))" : "Zoom \(zoomLabel(z)) times")
                     }
                 }
@@ -523,18 +526,23 @@ struct ContinuousCaptureView: View {
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity)
         .frame(height: zoomDialActive ? 96 : 52)
         .contentShape(Rectangle())
         // Drag anywhere on the strip to fine-tune zoom with the thumb; release collapses to chips.
-        .gesture(
-            DragGesture(minimumDistance: 6)
+        // highPriorityGesture so a DRAG wins over the chip buttons — a plain tap (no movement past the
+        // threshold) still falls through to the button, so tap-to-snap and drag-to-dial coexist.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 10)
                 .onChanged { g in
                     if !zoomDialActive {
                         zoomDialActive = true
                         dialStartFraction = CameraZoomFormat.dialFraction(fromZoom: model.currentUserZoom, range: model.userZoomRange)
                     }
-                    // Horizontal drag moves the dial; ~260pt of travel spans the full range.
-                    let delta = Double(g.translation.width) / 260.0
+                    // Either axis drives the dial (horizontal OR vertical thumb movement). ~220pt of
+                    // travel spans the full range; right/up = zoom in, left/down = zoom out.
+                    let move = Double(g.translation.width - g.translation.height)
+                    let delta = move / 220.0
                     let frac = dialStartFraction + delta
                     let z = CameraZoomFormat.dialZoom(fromFraction: frac, range: model.userZoomRange)
                     model.setDialZoom(z)
