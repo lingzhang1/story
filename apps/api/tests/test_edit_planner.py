@@ -1150,6 +1150,114 @@ def test_interpret_revision_maps_numbers_to_ids_and_flags_unresolved():
 
 
 # ---------------------------------------------------------------------------
+# Interpreter OVERREACH — grounding guard (revision_interpret/2). The guard checks that an EXCLUDE directive is
+# supported by the user's words; it never silently drops, and it preserves legitimate "use only" restrictions.
+# These are INTERPRETATION-level (scripted gateway), not EditPlanner tests.
+# ---------------------------------------------------------------------------
+class _ScriptGW:
+    def __init__(self, d): self._d = d
+    def generate_structured(self, req):
+        from model_gateway import StructuredResult, Usage
+        return StructuredResult(data=self._d, usage=Usage())
+
+
+def _numbered(n):
+    return [{"number": i + 1, "id": f"id-{i+1}", "summary": f"m{i+1}"} for i in range(n)]
+
+
+def test_ground_flags_invented_exclude_from_ordering_only():
+    # The exact failed instruction: ordering-only, no omission words -> an exclude set is UNSUPPORTED.
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [4, 5, 7, 8, 9, 10], "opening": 13, "ending": 6,
+                    "order_after": [], "order_adjacent": [[2, 13]], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 13 first and Moment 2 immediately after. And use Moment 6 as end.",
+                           _numbered(15), gw)
+    flags = ground_directives(r)
+    assert any("unsupported_exclude" in f for f in flags)
+
+
+def test_ground_allows_exclude_with_omission_word():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [4], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Remove Moment 4.", _numbered(8), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_exclude_with_only_restriction():
+    # "use only A, B, C" is a legitimate restriction — an exclude of the others is SUPPORTED.
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [13, 2, 6], "exclude": [1, 3, 4, 5], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use only Moments 13, 2, and 6.", _numbered(15), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_nothing_except_restriction():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [13, 2, 6], "exclude": [1, 3], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Don't show anything except Moments 13, 2, and 6.", _numbered(15), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_exclude_but_include_mix():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [5], "exclude": [8], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 5 but exclude Moment 8.", _numbered(10), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_noop_when_no_exclude():
+    # Opening-only, no exclude -> nothing to flag (the correct v2 output for the failed instruction).
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 13, "ending": 6,
+                    "order_after": [], "order_adjacent": [[2, 13]], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 13 first and Moment 2 immediately after. And use Moment 6 as end.",
+                           _numbered(15), gw)
+    assert ground_directives(r) == []
+    assert r.directives.get("opening") == "id-13"
+    assert r.directives.get("ending") == "id-6"
+    assert r.directives.get("order_adjacent") == [["id-2", "id-13"]]
+    assert "exclude" not in r.directives
+
+
+def test_ground_soft_only_instruction_passes():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 5, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "make the cuts faster",
+                    "unsupported": []})
+    r = interpret_revision("Start with Moment 5 and make the cuts faster.", _numbered(8), gw)
+    assert ground_directives(r) == []
+    assert r.soft_direction == "make the cuts faster"
+
+
+def test_v2_is_active_prompt_version():
+    from edit_planner.revision_interpreter import PROMPT_VERSION, PROMPT_VERSION_V1
+    assert PROMPT_VERSION == "revision_interpret/2"
+    assert PROMPT_VERSION_V1 == "revision_interpret/1"
+
+
+def test_v1_prompt_still_selectable_for_comparison():
+    # The frozen v1 prompt must remain usable for A/B (never edited in place).
+    from edit_planner.revision_interpreter import interpret_revision, PROMPT_VERSION_V1
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 1, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("start with moment 1", _numbered(3), gw, prompt_version=PROMPT_VERSION_V1)
+    assert r.directives.get("opening") == "id-1"
+
+
+def test_exclude_is_supported_helper():
+    from edit_planner.revision_interpreter import exclude_is_supported
+    assert exclude_is_supported("remove moment 4")
+    assert exclude_is_supported("use only moments 1, 2, 3")
+    assert exclude_is_supported("don't use moment 8")
+    assert not exclude_is_supported("start with moment 5 then moment 2")
+    assert not exclude_is_supported("use moment 13 first and moment 6 as end")
+
+
+# ---------------------------------------------------------------------------
 # Phase 5 — deterministic revision fast path (zero model calls).
 # ---------------------------------------------------------------------------
 def test_deterministic_transform_reorders_and_prunes():
