@@ -63,10 +63,21 @@ struct ContinuousCaptureView: View {
                 // to the same full-screen space (own ZStack + ignoresSafeArea) — otherwise `.position`
                 // measures from the safe-area top and the box lands ~top-inset too low.
                 ZStack {
-                    FocusReticle().position(reticle)
+                    FocusReticle().position(reticle).allowsHitTesting(false)
+                    // Exposure sun-slider beside the reticle (Increment 2) — drag up = brighter, down =
+                    // darker, biasing the running auto-exposure. Shown only while the reticle is up, so it
+                    // stays out of the way otherwise. Hidden when the device reports no bias range.
+                    if model.exposureBiasRange.lowerBound < model.exposureBiasRange.upperBound {
+                        ExposureSlider(
+                            value: Binding(get: { model.exposureBias },
+                                           set: { model.setExposureBias($0) }),
+                            range: model.exposureBiasRange,
+                            onInteract: { showFocusReticle(at: reticle) }   // keep the reticle alive while adjusting
+                        )
+                        .position(x: min(reticle.x + 70, UIScreen.main.bounds.width - 30), y: reticle.y)
+                    }
                 }
                 .ignoresSafeArea()
-                .allowsHitTesting(false)
                 .transition(.opacity)
             }
 
@@ -125,18 +136,49 @@ struct ContinuousCaptureView: View {
                 .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
                 .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
-                // Torch toggle (trailing) — shown only where the device has a torch. Safe mid-record.
-                if model.hasTorch {
+                HStack(spacing: 10) {
+                    // AE/AF lock — locks focus+exposure at current values; a tap-to-focus clears it.
                     Button {
-                        model.toggleTorch()
+                        model.toggleAEAFLock()
                     } label: {
-                        Image(systemName: model.torchOn ? "bolt.fill" : "bolt.slash")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(model.torchOn ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
+                        Image(systemName: model.isAEAFLocked ? "lock.fill" : "lock.open")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(model.isAEAFLocked ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
                             .frame(width: 40, height: 40)
                             .background(Color.black.opacity(0.4), in: Circle())
                     }
-                    .accessibilityLabel(model.torchOn ? "Turn torch off" : "Turn torch on")
+                    .accessibilityLabel(model.isAEAFLocked ? "Unlock focus and exposure" : "Lock focus and exposure")
+
+                    // Torch toggle — shown only where the device has a torch. Safe mid-record.
+                    if model.hasTorch {
+                        Button {
+                            model.toggleTorch()
+                        } label: {
+                            Image(systemName: model.torchOn ? "bolt.fill" : "bolt.slash")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(model.torchOn ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
+                                .frame(width: 40, height: 40)
+                                .background(Color.black.opacity(0.4), in: Circle())
+                        }
+                        .accessibilityLabel(model.torchOn ? "Turn torch off" : "Turn torch on")
+                    }
+
+                    // Flip front/rear — gated OUT of recording (a mid-clip input swap would corrupt the
+                    // file). Hidden if no front camera exists.
+                    if model.hasFrontCamera {
+                        Button {
+                            model.switchCamera()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Color.black.opacity(0.4), in: Circle())
+                        }
+                        .disabled(model.isRecording)
+                        .opacity(model.isRecording ? 0.35 : 1)
+                        .accessibilityLabel("Switch camera")
+                    }
                 }
             }
             if model.isRecording {
@@ -605,6 +647,42 @@ private struct FocusReticle: View {
             .frame(width: 72, height: 72)
             .scaleEffect(scale)
             .onAppear { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { scale = 1.0 } }
+    }
+}
+
+// Vertical exposure "sun" slider (Increment 2) beside the focus reticle. Drag up → brighter (+EV),
+// down → darker (−EV); maps a vertical drag to the device's real bias range. A sun icon rides the knob.
+private struct ExposureSlider: View {
+    @Binding var value: Float
+    let range: ClosedRange<Float>
+    var onInteract: () -> Void
+    private let trackHeight: CGFloat = 140
+
+    var body: some View {
+        let frac = CGFloat(CameraZoomFormat.exposureFraction(fromEV: value, range: range))
+        ZStack(alignment: .center) {
+            Capsule()
+                .fill(Color.black.opacity(0.35))
+                .frame(width: 28, height: trackHeight)
+            Image(systemName: "sun.max.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(Color(red: 0.98, green: 0.84, blue: 0.4))
+                // frac 0 (min EV) sits at the bottom; frac 1 (max EV) at the top.
+                .offset(y: (0.5 - frac) * (trackHeight - 24))
+        }
+        .frame(width: 36, height: trackHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    onInteract()
+                    // Up (negative y) increases EV. Map the knob's y within the track to the range.
+                    let p = 1 - min(max(g.location.y / trackHeight, 0), 1)   // 0 bottom → 1 top
+                    value = CameraZoomFormat.exposureEV(fromFraction: Float(p), range: range)
+                }
+        )
+        .accessibilityLabel("Exposure")
+        .accessibilityValue(String(format: "%.1f EV", value))
     }
 }
 

@@ -35,6 +35,8 @@ enum ContinuousCaptureEvent {
     case interrupted                 // session interrupted (phone call, etc.)
     case presetsReady([Double])      // device-derived zoom presets available (strip can render)
     case zoomChanged(Double)         // live USER-× zoom factor (pinch/preset) for the strip
+    case aeafLockChanged(Bool)       // AE/AF lock engaged/released (Increment 2)
+    case cameraPositionChanged(Bool) // true = front camera now active (Increment 2)
 }
 
 protocol ContinuousCameraControllerDelegate: AnyObject {
@@ -60,6 +62,18 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     private let sessionQueue = DispatchQueue(label: "com.story.continuous.session")
     private var videoDevice: AVCaptureDevice?
     private var videoDeviceInput: AVCaptureDeviceInput?
+
+    // Increment 2 — front/rear switching. The CURRENT camera position; a swap rebuilds only the video
+    // input inside begin/commitConfiguration (audio + outputs stay), gated out of .recording by the UI.
+    private(set) var cameraPosition: AVCaptureDevice.Position = .back
+    /// Whether a front camera exists (UI hides the flip button otherwise).
+    var hasFrontCamera: Bool {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .builtInTrueDepthCamera],
+            mediaType: .video, position: .front).devices.isEmpty == false
+    }
+    // Increment 2 — AE/AF lock. When locked, a scene change does NOT re-meter/refocus until unlocked.
+    private(set) var isAELocked = false
 
     /// Device-supported zoom presets (e.g. 0.5×, 1×, 2×) derived from the ACTUAL virtual-device
     /// switch-over factors — NEVER a hardcoded lens list, so an SE with no ultra-wide/tele shows
@@ -147,7 +161,7 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         // real optical lenses as zoom-factor switch-over points, so pinch + presets cross 0.5×/2×
         // optically where the hardware has them, and fall back to pure wide on an SE. This is NOT a
         // hardcoded lens list — unavailable lenses simply never appear.
-        let device = Self.bestBackCamera()
+        let device = Self.bestCamera(position: .back)
         if let camera = device,
            let videoInput = try? AVCaptureDeviceInput(device: camera),
            session.canAddInput(videoInput) {
@@ -195,18 +209,20 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
 
     // MARK: - Device selection & capability detection (per-device, never assumed)
 
-    /// The best back video device: a virtual multi-camera (triple → dual → dual-wide) when present
-    /// so optical lenses are reachable via zoom, else the plain wide angle. Never fabricates lenses.
-    private static func bestBackCamera() -> AVCaptureDevice? {
+    /// The best video device at a POSITION: a virtual multi-camera (triple → dual → dual-wide) when
+    /// present so optical lenses are reachable via zoom, else the plain wide angle. Front typically has
+    /// only wide (+ TrueDepth). Never fabricates lenses.
+    private static func bestCamera(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
         let preferred: [AVCaptureDevice.DeviceType] = [
-            .builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera
+            .builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera,
+            .builtInWideAngleCamera, .builtInTrueDepthCamera
         ]
         let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: preferred, mediaType: .video, position: .back)
+            deviceTypes: preferred, mediaType: .video, position: position)
         for type in preferred {
             if let d = discovery.devices.first(where: { $0.deviceType == type }) { return d }
         }
-        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
     }
 
     /// Zoom presets expressed in the UI's "×" scale relative to the 1× wide lens. Derived from the
@@ -510,9 +526,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     /// The device's current raw zoom factor (gesture start reads this as its base).
     var currentZoomFactor: CGFloat { videoDevice?.videoZoomFactor ?? 1.0 }
 
-    /// Tap-to-focus + expose at a preview point (0..1 device coords from the preview layer).
+    /// Tap-to-focus + expose at a preview point (0..1 device coords from the preview layer). A tap also
+    /// CLEARS any AE/AF lock and resumes continuous tracking — the native behavior (tap to re-meter).
     func focusAndExpose(atDevicePoint point: CGPoint) {
-        configureDevice { device in
+        configureDevice { [weak self] device in
             if device.isFocusPointOfInterestSupported {
                 device.focusPointOfInterest = point
                 if device.isFocusModeSupported(.autoFocus) { device.focusMode = .autoFocus }
@@ -521,10 +538,14 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
                 device.exposurePointOfInterest = point
                 if device.isExposureModeSupported(.autoExpose) { device.exposureMode = .autoExpose }
             }
-            // Re-enable continuous tracking after a tap so the scene stays correctly exposed as it moves
-            // (AE/AF LOCK is Increment 2 — this is the tap-to-focus behavior only).
+            // Resume continuous tracking after a tap so the scene stays correctly focused/exposed as it
+            // moves — this also lifts an AE/AF lock (tap overrides lock, like the native camera).
             if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
             if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+            if let self, self.isAELocked {
+                self.isAELocked = false
+                DispatchQueue.main.async { self.delegate?.captureEvent(.aeafLockChanged(false)) }
+            }
         }
     }
 
@@ -546,6 +567,81 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             } else {
                 device.torchMode = .off
             }
+        }
+    }
+
+    // MARK: - Increment 2 controls — front/rear swap, exposure bias, AE/AF lock
+
+    /// Flip between back and front cameras. Rebuilds ONLY the video input inside begin/commitConfiguration
+    /// (audio input + movie/data outputs are untouched), then re-applies presets, orientation and zoom.
+    /// REFUSED while recording — the UI gates the button out of .recording, and this is a second guard
+    /// (a mid-clip input swap would corrupt the movie file). Runs on the session queue.
+    func switchCamera() {
+        guard phase != .recording, phase != .stopping else { return }
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            let target: AVCaptureDevice.Position = (self.cameraPosition == .back) ? .front : .back
+            guard let newDevice = Self.bestCamera(position: target),
+                  let newInput = try? AVCaptureDeviceInput(device: newDevice) else { return }
+            self.session.beginConfiguration()
+            if let old = self.videoDeviceInput { self.session.removeInput(old) }
+            if self.session.canAddInput(newInput) {
+                self.session.addInput(newInput)
+                self.videoDevice = newDevice
+                self.videoDeviceInput = newInput
+                self.cameraPosition = target
+            } else if let old = self.videoDeviceInput {
+                // Revert if the new input cannot be added (keep a working session).
+                self.session.addInput(old)
+            }
+            self.session.commitConfiguration()
+
+            // Re-derive presets for the new device, reset zoom to 1×, re-apply orientation.
+            let presets = Self.zoomPresets(for: newDevice)
+            self.zoomPresets = presets
+            try? newDevice.lockForConfiguration()
+            newDevice.videoZoomFactor = self.rawZoomFactor(forUserZoom: 1.0)
+            newDevice.unlockForConfiguration()
+            self.isAELocked = false
+            let pos = self.cameraPosition
+            DispatchQueue.main.async {
+                self.delegate?.captureEvent(.presetsReady(presets))
+                self.delegate?.captureEvent(.zoomChanged(1.0))
+                self.delegate?.captureEvent(.aeafLockChanged(false))
+                self.delegate?.captureEvent(.cameraPositionChanged(pos == .front))
+                self.applyRotationForCurrentAPI()
+            }
+        }
+    }
+
+    /// Manual exposure bias in EV (e.g. −2…+2). Clamped to the device's real min/max target bias.
+    /// Independent of recording. Does NOT engage the AE/AF lock — it biases the running auto-exposure.
+    func setExposureBias(_ ev: Float) {
+        configureDevice { device in
+            let clamped = max(device.minExposureTargetBias, min(ev, device.maxExposureTargetBias))
+            device.setExposureTargetBias(clamped, completionHandler: nil)
+        }
+    }
+
+    /// The device's supported exposure-bias range (UI uses it to size the slider). Defaults to 0…0.
+    var exposureBiasRange: ClosedRange<Float> {
+        guard let d = videoDevice else { return 0...0 }
+        return d.minExposureTargetBias...d.maxExposureTargetBias
+    }
+
+    /// Lock / unlock Auto-Exposure AND Auto-Focus at their current values (long-press AE/AF lock). While
+    /// locked a scene change does NOT re-meter/refocus; a tap-to-focus clears the lock. Safe mid-record.
+    func setAEAFLock(_ locked: Bool) {
+        configureDevice { [weak self] device in
+            if locked {
+                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+            } else {
+                if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+                if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+            }
+            self?.isAELocked = locked
+            DispatchQueue.main.async { self?.delegate?.captureEvent(.aeafLockChanged(locked)) }
         }
     }
 
@@ -614,6 +710,30 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         guard phase != .recording, phase != .stopping else { return }
         if let mc = movieOutput.connection(with: .video), mc.isVideoRotationAngleSupported(angle) {
             mc.videoRotationAngle = angle
+        }
+    }
+
+    /// Version-agnostic rotation apply (used after a camera swap / on demand).
+    private func applyRotationForCurrentAPI() {
+        if #available(iOS 17.0, *) {
+            // Rebuild the coordinator for the CURRENT device — a front/rear swap changes the device, and
+            // the old coordinator would report the wrong device's angles (orientation-hardening).
+            if let device = videoDevice {
+                rotationObservations.removeAll()
+                let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+                self.rotationCoordinator = coordinator
+                rotationObservations = [
+                    coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak self] _, _ in
+                        DispatchQueue.main.async { self?.applyRotation() }
+                    },
+                    coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] _, _ in
+                        DispatchQueue.main.async { self?.applyRotation() }
+                    }
+                ]
+            }
+            applyRotation()
+        } else {
+            applyLegacyRotation()
         }
     }
 

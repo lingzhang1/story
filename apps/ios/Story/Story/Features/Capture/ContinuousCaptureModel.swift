@@ -21,6 +21,18 @@ enum CameraZoomFormat {
         return String(format: "%.1f×", z)
     }
 
+    /// Map an exposure-slider fraction (0 = bottom/min EV, 1 = top/max EV) to an EV value in `range`,
+    /// and back. Pure so the Increment-2 exposure slider's math is unit-testable without a camera.
+    static func exposureEV(fromFraction p: Float, range: ClosedRange<Float>) -> Float {
+        let clampedP = min(max(p, 0), 1)
+        return range.lowerBound + clampedP * (range.upperBound - range.lowerBound)
+    }
+    static func exposureFraction(fromEV ev: Float, range: ClosedRange<Float>) -> Float {
+        let span = range.upperBound - range.lowerBound
+        guard span > 0 else { return 0 }
+        return min(max((ev - range.lowerBound) / span, 0), 1)
+    }
+
     /// Build a GRADUAL preset ladder from the device's real optical anchors (e.g. [0.5, 1, 5]) by
     /// filling integer digital steps between 1× and the top anchor, so the user sees a smooth ramp
     /// (0.5, 1, 2, 3, 5) rather than a jarring 1→5 jump. Sub-1× anchors (0.5) are preserved exactly
@@ -125,6 +137,28 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     func toggleTorch() {
         torchOn.toggle()
         controller?.setTorch(torchOn)
+    }
+
+    // Increment 2 — front/rear, exposure bias, AE/AF lock.
+    @Published var isFrontCamera = false
+    @Published var isAEAFLocked = false
+    @Published var exposureBias: Float = 0        // live EV bias (slider position)
+    var hasFrontCamera: Bool { controller?.hasFrontCamera ?? false }
+    var exposureBiasRange: ClosedRange<Float> { controller?.exposureBiasRange ?? 0...0 }
+
+    /// Flip front/rear (UI gates this out of recording). Resets zoom to 1× on the new camera.
+    func switchCamera() {
+        guard !isRecording else { return }
+        controller?.switchCamera()
+    }
+    /// Manual exposure bias from the slider.
+    func setExposureBias(_ ev: Float) {
+        exposureBias = ev
+        controller?.setExposureBias(ev)
+    }
+    /// Long-press AE/AF lock toggle.
+    func toggleAEAFLock() {
+        controller?.setAEAFLock(!isAEAFLocked)
     }
 
     private(set) var ideas: [DirectorDecisionDTO] = []
@@ -389,6 +423,14 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         case .zoomChanged(let userZoom):
             // Live magnification from pinch or a preset tap — drives the active-chip value + highlight.
             currentUserZoom = userZoom
+        case .aeafLockChanged(let locked):
+            isAEAFLocked = locked
+        case .cameraPositionChanged(let front):
+            isFrontCamera = front
+            // A swap resets zoom to 1× and clears torch (front has none); reflect it.
+            currentUserZoom = 1.0
+            if front { torchOn = false }
+            exposureBias = 0
         }
     }
 

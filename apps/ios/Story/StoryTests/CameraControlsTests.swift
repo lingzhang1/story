@@ -83,4 +83,32 @@ final class CameraControlsTests: XCTestCase {
     func testLiveLabel_subOneShowsLeadingDot() {
         XCTAssertEqual(CameraZoomFormat.liveLabel(0.5), ".5×")
     }
+
+    // MARK: - Increment 2: exposure slider fraction <-> EV mapping (pure)
+
+    func testExposureEV_fractionEndpointsMapToRangeEnds() {
+        let r: ClosedRange<Float> = -2...2
+        XCTAssertEqual(CameraZoomFormat.exposureEV(fromFraction: 0, range: r), -2, accuracy: 0.0001)
+        XCTAssertEqual(CameraZoomFormat.exposureEV(fromFraction: 1, range: r), 2, accuracy: 0.0001)
+        XCTAssertEqual(CameraZoomFormat.exposureEV(fromFraction: 0.5, range: r), 0, accuracy: 0.0001)
+    }
+
+    func testExposureEV_clampsOutOfRangeFraction() {
+        let r: ClosedRange<Float> = -3...3
+        XCTAssertEqual(CameraZoomFormat.exposureEV(fromFraction: -0.5, range: r), -3, accuracy: 0.0001)
+        XCTAssertEqual(CameraZoomFormat.exposureEV(fromFraction: 1.5, range: r), 3, accuracy: 0.0001)
+    }
+
+    func testExposureFraction_isInverseOfEV() {
+        let r: ClosedRange<Float> = -2...2
+        for ev in stride(from: Float(-2), through: 2, by: 0.5) {
+            let p = CameraZoomFormat.exposureFraction(fromEV: ev, range: r)
+            let back = CameraZoomFormat.exposureEV(fromFraction: p, range: r)
+            XCTAssertEqual(back, ev, accuracy: 0.0001)
+        }
+    }
+
+    func testExposureFraction_zeroSpanIsSafe() {
+        XCTAssertEqual(CameraZoomFormat.exposureFraction(fromEV: 1, range: 0...0), 0)
+    }
 }
