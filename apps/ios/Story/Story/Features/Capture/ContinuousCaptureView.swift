@@ -58,7 +58,16 @@ struct ContinuousCaptureView: View {
             .ignoresSafeArea()
 
             if let reticle = focusReticle {
-                FocusReticle().position(reticle).allowsHitTesting(false).transition(.opacity)
+                // The reticle MUST share the gesture layer's coordinate space. The gesture UIView is
+                // full-bleed (ignores the safe area), so `pt` is in FULL-SCREEN coords. Pin this overlay
+                // to the same full-screen space (own ZStack + ignoresSafeArea) — otherwise `.position`
+                // measures from the safe-area top and the box lands ~top-inset too low.
+                ZStack {
+                    FocusReticle().position(reticle)
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             // Chrome overlay (Figma V0.2.2).
