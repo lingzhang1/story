@@ -57,6 +57,10 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     /// instruction fails identically, so the UI must ask the user to loosen/adjust the instruction, never
     /// offer a plain Retry.
     case directivesUnsatisfiable(String)
+    /// The requested edit is not something the renderer can do (color/filters/effects/reframe/stabilize/
+    /// overlays — backend `unsupported_operation`). NOT transient: retrying fails identically, so the UI
+    /// explains the limitation and never offers a plain Retry. The selected version is kept unchanged.
+    case unsupportedOperation(String)
     /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
     /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
     /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
@@ -74,6 +78,12 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .alreadyCreating: return "A video is already being created for this Story."
         case .directivesUnsatisfiable:
             return "Your instruction couldn't be applied to this footage — it may exclude too much or conflict. Try adjusting it (for example, exclude fewer Moments)."
+        case .unsupportedOperation(let detail):
+            // Prefer the backend's specific capability message; fall back to a clear generic one.
+            let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return d.isEmpty
+                ? "That kind of edit isn't supported yet — this app can re-cut, re-time, reorder, set transitions and change the soundtrack, but not color, filters or visual effects. Your current version was kept."
+                : d
         case .insufficientMaterial(let achievable, let requested, let suggested):
             let a = Int(achievable.rounded()), req = Int(requested.rounded())
             if let s = suggested {
@@ -641,6 +651,7 @@ final class StoryCreationCoordinator {
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
                 case .invalidAfterRepair: return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                case .unsupportedOperation: return finishFailed(.unsupportedOperation(final.failureDetail ?? ""))
                 case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
                 default:                   return finishFailed(.planUnavailable)
                 }
