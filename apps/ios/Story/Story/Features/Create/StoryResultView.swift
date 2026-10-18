@@ -167,7 +167,7 @@ struct StoryResultView: View {
             }
         }
         .sheet(isPresented: $showRevise) {
-            ReviseStorySheet(story: story, base: output) { directives, instruction in
+            ReviseStorySheet(story: story, base: output, versionLabel: baseVersionLabel) { directives, instruction in
                 startRevise(directives: directives, instruction: instruction)
             }
         }
@@ -221,6 +221,16 @@ struct StoryResultView: View {
     /// view's relationship (fine for display; the ready-swap path re-fetches). A single version shows no row.
     private var versions: [GeneratedOutputModel] {
         story.generatedOutputs.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// The display label ("V3") of the version currently selected for editing — the SAME numbering as the chip
+    /// row (position in the sorted list). Passed to Revise so it can show "Editing Version N".
+    private var baseVersionLabel: String {
+        let currentId = output.versionId ?? output.id
+        if let idx = versions.firstIndex(where: { ($0.versionId ?? $0.id) == currentId }) {
+            return "V\(idx + 1)"
+        }
+        return "this version"
     }
 
     /// Inline version selector (redesign MVP). Simplest UI for the version count: nothing for 1 version, a

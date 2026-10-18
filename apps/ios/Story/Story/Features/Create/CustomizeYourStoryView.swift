@@ -147,6 +147,16 @@ struct CustomizeYourStoryView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        // Prompt guidance (owner P0): compact "Try asking Story…" examples that APPEND editable
+                        // text (never auto-submit), with a capability info affordance. The opening example uses
+                        // a REAL Moment number from the snapshot (never a hardcoded nonexistent N).
+                        PromptSuggestionChips(
+                            title: "Try asking Story…",
+                            suggestions: PromptSuggestions.customize(firstMomentNumber: numbering.items.first?.number),
+                            text: $creativeDirection,
+                            onInsert: { interpretToken = UUID()
+                                        if retryableInstruction != nil { retryableInstruction = nil; clarification = nil } })
+                        CapabilityInfoButton()
                     }
                 }
 
