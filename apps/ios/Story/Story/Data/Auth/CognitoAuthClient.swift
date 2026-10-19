@@ -15,6 +15,7 @@ enum CognitoAuthError: Error, LocalizedError {
     case badCode                // wrong OTP
     case expiredCode            // OTP expired — a new one is needed
     case tooManyAttempts        // challenge exhausted; restart the flow
+    case inviteOnly             // no EMAIL_OTP path / not a provisioned invited user (no enumeration)
     case decoding
     case noChallengeSession
 
@@ -24,6 +25,8 @@ enum CognitoAuthError: Error, LocalizedError {
         case .badCode: return "That code is incorrect. Check it and try again."
         case .expiredCode: return "That code has expired. Request a new one."
         case .tooManyAttempts: return "Too many tries. Request a new code to continue."
+        case .inviteOnly:
+            return "YoTale is invite-only right now. If you have an invite, use the exact email it was sent to — or request access at yotale.ai."
         case .service(let m): return m
         case .decoding, .noChallengeSession: return "Sign-in failed. Please try again."
         }
@@ -42,20 +45,20 @@ actor CognitoAuthClient {
     init(urlSession: URLSession = .shared) { self.urlSession = urlSession }
 
     // ---- Email OTP ----------------------------------------------------------------------------------
-    /// Step 1: request a code via the NATIVE passwordless flow — no SignUp, no temporary password.
+    /// Step 1: request an Email OTP via the NATIVE USER_AUTH flow — no SignUp, no password, no Lambda.
     ///
-    /// The dev pool has `PreventUserExistenceErrors=ENABLED`, `EMAIL_OTP` as an allowed first-auth factor, and
-    /// self-signup enabled. Verified against the live pool: a plain
-    /// `InitiateAuth(USER_AUTH, PREFERRED_CHALLENGE=EMAIL_OTP)` returns `ChallengeName=EMAIL_OTP` with
-    /// `CODE_DELIVERY_*` for BOTH a brand-new email and a returning one — Cognito creates/confirms the account
-    /// atomically on the first successful code verification, so there is no phantom unconfirmed user and no
-    /// client-generated credential. New-user-signup vs existing-user-sign-in is therefore a single UX step at
-    /// this layer (anti-enumeration by design); the new-vs-returning distinction is resolved AFTER verification
-    /// by the backend identity claim (a first verify mints a new StoryUser, a returning verify resolves it).
+    /// YoTale beta is INVITE-ONLY (Option D): testers are pre-provisioned as CONFIRMED Cognito users by the
+    /// admin invite procedure, so the only path that should ever succeed is the EXISTING-user EMAIL_OTP flow.
     ///
-    /// Returns a challenge ONLY when Cognito reports a dispatched code (`CODE_DELIVERY_DELIVERY_MEDIUM`). A
-    /// `SELECT_CHALLENGE` (EMAIL_OTP not offered) or any response without a delivery medium is surfaced as an
-    /// error rather than advancing the UI to a code screen that would never receive a code.
+    /// Anti-enumeration caveat (pool has `PreventUserExistenceErrors=ENABLED`): for an UNKNOWN email Cognito
+    /// returns a DECOY `EMAIL_OTP` challenge — `ChallengeName=EMAIL_OTP` WITH `CODE_DELIVERY_DESTINATION` — but
+    /// dispatches no code and creates no user. The InitiateAuth response alone CANNOT distinguish a real invited
+    /// user from the decoy (that is the whole point of the setting). So we still return a challenge here, but the
+    /// UI treats a non-arriving code as "invite-only / check your invite" rather than an endless wait, and a
+    /// verify failure is surfaced without confirming whether the account exists (`CognitoAuthError.inviteOnly`).
+    ///
+    /// Returns a challenge only when Cognito reports a dispatched medium. A `SELECT_CHALLENGE` (EMAIL_OTP not
+    /// offered at all) means no code path — surfaced as an error, not an OTP screen.
     func startEmailOTP(email: String) async throws -> OTPChallenge {
         let normalized = AuthHelpers.normalizeEmail(email)
         let body: [String: Any] = [
@@ -67,14 +70,14 @@ actor CognitoAuthClient {
         do { json = try await idpCall(target: "InitiateAuth", body: body) }
         catch let e as CognitoServiceError {
             throw CognitoAuthError.service(e.message.isEmpty
-                ? "Couldn't send a code to that email. Check the address and try again." : e.message)
+                ? "Couldn't start sign-in. Check your connection and try again." : e.message)
         }
         let challengeName = json["ChallengeName"] as? String
         let params = json["ChallengeParameters"] as? [String: Any]
         let medium = params?["CODE_DELIVERY_DELIVERY_MEDIUM"] as? String
         guard challengeName == "EMAIL_OTP", let session = json["Session"] as? String, medium == "EMAIL" else {
-            // SELECT_CHALLENGE or no delivery -> no code was sent. Do not show the OTP screen.
-            throw CognitoAuthError.service("Couldn't send a code to that email. Check the address and try again.")
+            // SELECT_CHALLENGE / no delivery medium -> EMAIL_OTP is not an available path for this request.
+            throw CognitoAuthError.inviteOnly
         }
         let masked = (params?["CODE_DELIVERY_DESTINATION"] as? String) ?? normalized
         return OTPChallenge(session: session, email: normalized, maskedDestination: masked)

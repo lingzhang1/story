@@ -114,4 +114,16 @@ final class AuthGatingTests: XCTestCase {
         XCTAssertEqual(runCount, 0)
         XCTAssertFalse(gate.presentingSignIn)
     }
+
+    // 3. Invite-only (Option D): the inviteOnly error carries a non-enumerating message — it never reveals
+    //    whether the account exists, and points the user at the invite / request-access path.
+    func test_inviteOnly_message_does_not_enumerate() {
+        let msg = CognitoAuthError.inviteOnly.errorDescription ?? ""
+        XCTAssertFalse(msg.isEmpty)
+        XCTAssertTrue(msg.lowercased().contains("invite"), "should state it's invite-only")
+        // Must NOT confirm existence/absence of an account (no enumeration wording).
+        for leak in ["no account", "not found", "doesn't exist", "does not exist", "already exists", "unregistered"] {
+            XCTAssertFalse(msg.lowercased().contains(leak), "invite message must not enumerate (\(leak))")
+        }
+    }
 }

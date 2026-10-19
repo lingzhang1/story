@@ -56,6 +56,8 @@ struct SignInView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(busy || !AuthHelpers.isPlausibleEmail(email))
+            Text("YoTale is invite-only. Use the email your invite was sent to.")
+                .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
         }
     }
 
@@ -74,6 +76,10 @@ struct SignInView: View {
                 Task { await requestCode() }
             }
             .font(.footnote).disabled(busy || cooldownLeft > 0)
+            // Codes can take a minute or two. If none arrives, it's almost always an uninvited email —
+            // say so without confirming whether the account exists (no enumeration).
+            Text("The code can take a minute or two. No code? YoTale is invite-only — make sure you used your invited email.")
+                .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
         }
     }
 
@@ -85,6 +91,9 @@ struct SignInView: View {
             challenge = try await auth.startEmailOTP(email: email)
             step = .code
             startCooldownTimer()
+        } catch CognitoAuthError.inviteOnly {
+            // Stay on the email step — no code screen for a path that can't receive a code.
+            error = CognitoAuthError.inviteOnly.errorDescription
         } catch { self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn't send a code." }
     }
 

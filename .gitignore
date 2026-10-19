@@ -97,3 +97,4 @@ evals/assets/**/*.GIF
 evals/assets/**/*.bmp
 evals/assets/**/*.tiff
 evals/assets/**/*.tif
+scripts/.yotale_beta_allowlist
