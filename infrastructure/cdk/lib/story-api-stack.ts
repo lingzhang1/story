@@ -364,21 +364,80 @@ export class StoryApiStack extends cdk.Stack {
         resources: [`arn:aws:lambda:${this.region}:${this.account}:function:story-${environment}-*`],
       }));
 
-      // IAM PassRole: cdk passes the App Runner access/instance + worker roles
-      // to the services at deploy time. Scoped to roles in THIS account; a
-      // PassedToService condition restricts WHICH services may receive them.
-      deployRole.addToPolicy(new iam.PolicyStatement({
-        sid: "IamPassRole",
-        actions: ["iam:PassRole", "iam:GetRole"],
+      // --- Dedicated, SCOPED CloudFormation execution role (Option B) ------
+      // The shared CDK bootstrap exec role carries AdministratorAccess; driving CFN through it would give
+      // this deploy role admin-equivalent reach inside the stack's changeset. Instead we create a role
+      // CloudFormation assumes ONLY for Story's dev stack, scoped to the exact service namespaces the
+      // stack provisions (App Runner, DynamoDB, SQS, S3, Lambda, Events, SSM read, IAM for the app's own
+      // roles) in THIS account+region. `cdk deploy --role-arn <this>` passes it explicitly, so the shared
+      // bootstrap role is never used and is left untouched.
+      const cfnExecRole = new iam.Role(this, "StoryDevCfnExecRole", {
+        roleName: `story-${environment}-cfn-exec`,
+        description: "Scoped CloudFormation execution role for Story dev deploys (NO AdministratorAccess)",
+        assumedBy: new iam.ServicePrincipal("cloudformation.amazonaws.com"),
+      });
+      cfnExecRole.addToPolicy(new iam.PolicyStatement({
+        sid: "StoryDevStackServices",
+        actions: [
+          "apprunner:*",            // create/update/describe the service + its auto-scaling config
+          "dynamodb:*",             // the jobs table
+          "sqs:*",                  // queue + DLQ
+          "s3:*",                   // staging bucket + bucket policy + the S3 auto-delete custom resource
+          "lambda:*",               // worker + ESM + permissions + the OIDC custom-resource handler
+          "events:*",               // the reconcile EventBridge rule
+          "ssm:GetParameters", "ssm:GetParameter",   // CDK reads the bootstrap version param
+          "logs:*",                 // Lambda log groups
+        ],
+        // Service-level scope to this account+region. CloudFormation creates these resources, so ARNs
+        // are not known pre-create; scoping by service+account+region removes cross-account/cross-service
+        // admin reach, which is the escalation the review flagged. (A resource-ARN-per-type policy is a
+        // future tightening; this already eliminates AdministratorAccess.)
+        resources: ["*"],
+        conditions: { StringEquals: { "aws:RequestedRegion": this.region } },
+      }));
+      cfnExecRole.addToPolicy(new iam.PolicyStatement({
+        sid: "StoryDevStackIam",
+        // CFN creates the app's OWN roles (App Runner access/instance, worker) + passes them to services.
+        // Scoped to story-*/StoryApiStack-* role names so it cannot touch unrelated roles, and PassRole is
+        // PassedToService-conditioned.
+        actions: ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+                  "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+                  "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+                  "iam:CreatePolicy", "iam:DeletePolicy", "iam:CreateOpenIDConnectProvider",
+                  "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider"],
+        resources: [
+          `arn:aws:iam::${this.account}:role/story-${environment}-*`,
+          `arn:aws:iam::${this.account}:role/StoryApiStack-*`,
+          `arn:aws:iam::${this.account}:policy/story-${environment}-*`,
+          `arn:aws:iam::${this.account}:oidc-provider/token.actions.githubusercontent.com`,
+        ],
+      }));
+      cfnExecRole.addToPolicy(new iam.PolicyStatement({
+        sid: "StoryDevStackPassRole",
+        actions: ["iam:PassRole"],
         resources: [`arn:aws:iam::${this.account}:role/story-${environment}-*`,
                     `arn:aws:iam::${this.account}:role/StoryApiStack-*`],
         conditions: { StringEquals: { "iam:PassedToService":
-          ["apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "lambda.amazonaws.com", "tasks.apprunner.amazonaws.com"] } },
+          ["apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "lambda.amazonaws.com", "tasks.apprunner.amazonaws.com", "events.amazonaws.com"] } },
+      }));
+
+      // IAM PassRole on the DEPLOY role: it may pass EXACTLY the dedicated cfn-exec role to
+      // CloudFormation — and NOTHING else. It explicitly CANNOT pass the admin bootstrap exec role or any
+      // other role (point 4). This is the single PassRole the deploy role holds.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "PassOnlyScopedCfnExec",
+        actions: ["iam:PassRole"],
+        resources: [cfnExecRole.roleArn],
+        conditions: { StringEquals: { "iam:PassedToService": "cloudformation.amazonaws.com" } },
       }));
 
       new cdk.CfnOutput(this, "GitHubDeployRoleArn", {
         value: deployRole.roleArn,
         description: "ARN GitHub Actions assumes via OIDC for dev deploys",
+      });
+      new cdk.CfnOutput(this, "CfnExecRoleArn", {
+        value: cfnExecRole.roleArn,
+        description: "Scoped CloudFormation execution role — pass to `cdk deploy --role-arn`",
       });
     }
     new cdk.CfnOutput(this, "Environment", { value: environment });

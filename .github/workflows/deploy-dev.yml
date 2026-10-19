@@ -37,7 +37,7 @@ jobs:
       - name: Configure AWS via OIDC (no static keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.DEV_DEPLOY_ROLE_ARN }}   # set in the development Environment after Inc B provisioning
+          role-to-assume: ${{ vars.DEV_DEPLOY_ROLE_ARN }}   # Environment VARIABLE (not a secret — an ARN is not sensitive); set in the `development` Environment after Inc B provisioning
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -71,12 +71,14 @@ jobs:
       - name: Write release manifest
         run: bash scripts/release-manifest.sh "$ENVIRONMENT" "${{ steps.image.outputs.digest }}" worker.zip
 
-      - name: CDK deploy (dev) by digest
+      - name: CDK deploy (dev) by digest, through the SCOPED cfn-exec role
         working-directory: infrastructure/cdk
         run: |
           npm ci || npm install
-          npx cdk deploy -c environment=development --require-approval never
-        # Note: the stack pins App Runner to the pushed image; the deploy triggers App Runner by digest.
+          # Drive CloudFormation through Story's dedicated scoped exec role, NOT the admin bootstrap role.
+          # CFN_EXEC_ROLE_ARN is set in the development Environment (the CfnExecRoleArn stack output).
+          npx cdk deploy -c environment=development --require-approval never \
+            --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
 
       - name: Upload release manifest artifact
         uses: actions/upload-artifact@v4
