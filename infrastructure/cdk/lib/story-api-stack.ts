@@ -293,16 +293,17 @@ export class StoryApiStack extends cdk.Stack {
         ),
       });
 
-      // CloudFormation: cdk deploy drives CFN on this stack's stacks only.
+      // CloudFormation: cdk deploy drives CFN on this stack + CDKToolkit only. DeleteStack is
+      // deliberately OMITTED — a dev deploy updates, never tears down the stack (req 4). DeleteChangeSet
+      // is kept because cdk routinely cleans up its own change sets during a deploy.
       deployRole.addToPolicy(new iam.PolicyStatement({
         sid: "CloudFormationDeploy",
         actions: [
           "cloudformation:DescribeStacks", "cloudformation:CreateStack", "cloudformation:UpdateStack",
-          "cloudformation:DeleteStack", "cloudformation:DescribeStackEvents",
-          "cloudformation:GetTemplate", "cloudformation:DescribeStackResources",
-          "cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
-          "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
-          "cloudformation:GetTemplateSummary",
+          "cloudformation:DescribeStackEvents", "cloudformation:GetTemplate",
+          "cloudformation:DescribeStackResources", "cloudformation:CreateChangeSet",
+          "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet",
+          "cloudformation:DeleteChangeSet", "cloudformation:GetTemplateSummary",
         ],
         resources: [
           `arn:aws:cloudformation:${this.region}:${this.account}:stack/story-${environment}-api/*`,
@@ -310,27 +311,47 @@ export class StoryApiStack extends cdk.Stack {
         ],
       }));
 
-      // CDK asset upload: the bootstrap S3 asset bucket + ECR assets repo.
+      // CDK asset upload: tightened to THIS account's CDK bootstrap asset bucket + container-assets
+      // ECR repo (hnb659fds qualifier). ecr:GetAuthorizationToken has NO resource-level support (AWS
+      // limitation — it is account-wide by design), so it is a separate `*` statement; everything else
+      // is resource-scoped.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "EcrAuthToken",
+        actions: ["ecr:GetAuthorizationToken"],
+        resources: ["*"],   // API LIMITATION: GetAuthorizationToken does not support resource-level perms
+      }));
       deployRole.addToPolicy(new iam.PolicyStatement({
         sid: "CdkAssetUpload",
         actions: [
           "s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation",
-          "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:PutImage",
-          "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload",
-          "ecr:BatchGetImage", "ecr:DescribeImages",
+          "ecr:BatchCheckLayerAvailability", "ecr:PutImage", "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:BatchGetImage", "ecr:DescribeImages",
         ],
-        resources: ["*"],   // CDK bootstrap bucket/repo names are account-scoped; tighten to cdk-* once confirmed
+        resources: [
+          `arn:aws:s3:::cdk-hnb659fds-assets-${this.account}-${this.region}`,
+          `arn:aws:s3:::cdk-hnb659fds-assets-${this.account}-${this.region}/*`,
+          `arn:aws:ecr:${this.region}:${this.account}:repository/cdk-hnb659fds-container-assets-${this.account}-${this.region}`,
+          // The app image repo itself (the digest-pinned API image is pushed here by the workflow).
+          `arn:aws:ecr:${this.region}:${this.account}:repository/story-${environment}-api`,
+        ],
       }));
 
-      // App Runner: update + deploy the service by image digest.
+      // App Runner: describe/update/start scoped to the dev service ARN; ListServices has no
+      // resource-level support (AWS limitation) so it is a separate `*`-scoped read-only statement.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "AppRunnerList",
+        actions: ["apprunner:ListServices"],
+        resources: ["*"],   // API LIMITATION: ListServices does not support resource-level perms
+      }));
       deployRole.addToPolicy(new iam.PolicyStatement({
         sid: "AppRunnerDeploy",
         actions: [
           "apprunner:DescribeService", "apprunner:UpdateService",
-          "apprunner:StartDeployment", "apprunner:ListServices",
-          "apprunner:DescribeOperation",
+          "apprunner:StartDeployment", "apprunner:DescribeOperation",
         ],
-        resources: ["*"],   // App Runner service ARNs include a random id; scope by tag/name post-create
+        resources: [
+          `arn:aws:apprunner:${this.region}:${this.account}:service/story-${environment}-api/*`,
+        ],
       }));
 
       // Lambda: publish + update the async worker.
