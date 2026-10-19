@@ -22,7 +22,8 @@ RUN pip install --prefix=/install/deps \
     "uvicorn[standard]" \
     "pydantic>=2" \
     "boto3" \
-    "python-multipart"
+    "python-multipart" \
+    "pyjwt[crypto]>=2.8,<3"
 
 # ---- runtime ------------------------------------------------------------
 FROM public.ecr.aws/docker/library/python:3.12-slim AS runtime
