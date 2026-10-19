@@ -11,7 +11,8 @@ struct CreativeDirectionView: View {
     @Environment(\.dismiss) private var dismiss
     // P0 Beta Auth Increment 4: gate the cloud-AI "resolve" behind sign-in; present SignInView and resume.
     @Environment(AuthStore.self) private var auth
-    @State private var gate: AuthGate?
+    @State private var pendingAuthAction: (() -> Void)?
+    @State private var resumedPendingAction = false
     @State private var showSignIn = false
 
     /// Phase 3: when Story creation starts from the Moments Library, the selected Moments are
@@ -97,8 +98,8 @@ struct CreativeDirectionView: View {
         } message: { Text(errorMessage ?? "") }
         .sheet(isPresented: $showSignIn) {
             SignInView(auth: auth,
-                       onSignedIn: { showSignIn = false; gate?.didSignIn() },
-                       onCancel: { showSignIn = false; gate?.cancel() })
+                       onSignedIn: { resumePendingAuthAction() },
+                       onCancel: { cancelPendingAuthAction() })
         }
     }
 
@@ -106,10 +107,34 @@ struct CreativeDirectionView: View {
     /// optional-auth the backend still accepts no token, but the app prompts sign-in so the cutover to
     /// required-auth is a one-line flip and the user sees a real prompt rather than a silent anonymous call.
     private func requireAuthThen(_ action: @escaping () -> Void) {
-        let g = gate ?? AuthGate(auth: auth)
-        gate = g
-        g.run(action)
-        showSignIn = g.presentingSignIn
+        // Direct, desync-proof gating: if already signed in, run now; otherwise store the action and
+        // present the sheet by setting the SAME boolean the .sheet binds to. No mirrored @Observable gate
+        // (the old `showSignIn = g.presentingSignIn` mirror could be read before the gate mutated, so the
+        // sheet never appeared on a signed-out device — the exact symptom seen in device testing).
+        if auth.isSignedIn {
+            action()
+            return
+        }
+        pendingAuthAction = action
+        resumedPendingAction = false
+        showSignIn = true
+        #if DEBUG
+        print("[AuthGate] Start-a-Story gated: signedOut -> presenting sign-in (showSignIn=\(showSignIn))")
+        #endif
+    }
+
+    private func resumePendingAuthAction() {
+        showSignIn = false
+        guard !resumedPendingAction, let action = pendingAuthAction else { return }
+        resumedPendingAction = true
+        pendingAuthAction = nil
+        action()
+    }
+
+    private func cancelPendingAuthAction() {
+        showSignIn = false
+        pendingAuthAction = nil
+        resumedPendingAction = false
     }
 
     private var backRow: some View {

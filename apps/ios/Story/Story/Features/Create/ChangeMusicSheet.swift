@@ -13,7 +13,6 @@ struct ChangeMusicSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthStore.self) private var auth
-    @State private var gate: AuthGate?
     @State private var showSignIn = false
     @Bindable var story: StoryModel
     let source: GeneratedOutputModel
@@ -59,14 +58,17 @@ struct ChangeMusicSheet: View {
         }
         .task {
             // P0 Phase 4: Change Music calls paid music recommendation — require sign-in first, then load.
-            let g = AuthGate(auth: auth); gate = g
-            g.run { Task { await loadRecommendations() } }
-            showSignIn = g.presentingSignIn
+            // Direct gating (no mirrored AuthGate): gate on auth.isSignedIn, store+present if signed out.
+            if auth.isSignedIn {
+                await loadRecommendations()
+            } else {
+                showSignIn = true
+            }
         }
         .sheet(isPresented: $showSignIn) {
             SignInView(auth: auth,
-                       onSignedIn: { showSignIn = false; gate?.didSignIn() },
-                       onCancel: { showSignIn = false; gate?.cancel(); dismiss() })
+                       onSignedIn: { showSignIn = false; Task { await loadRecommendations() } },
+                       onCancel: { showSignIn = false; dismiss() })
         }
         .alert("Couldn't change music", isPresented: Binding(get: { errorText != nil },
                                                              set: { if !$0 { errorText = nil } })) {
