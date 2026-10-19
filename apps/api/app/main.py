@@ -116,6 +116,7 @@ from app.deps import (
     get_duration_planner_engine,
 )
 from app.store import InMemoryStoryStore
+from app.auth import optional_user, Principal  # P0 Beta Auth Increment 2: trusted-identity dependency
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -371,6 +372,7 @@ def create_app() -> FastAPI:
     def resolve_creative_intent(
         body: ResolveCreativeIntentRequest,
         engine: CreativeIntentEngine = Depends(get_creative_intent_engine),
+        principal: Principal = Depends(optional_user),
     ) -> CreativeIntentContract:
         """Resolve free-form creative direction into a canonical CreativeIntent
         via the Model Gateway. On model/provider failure, return a designed
@@ -419,6 +421,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/interpret-revision", status_code=200)
     def interpret_revision_endpoint(
         body: InterpretRevisionRequest,
+        principal: Principal = Depends(optional_user),
     ) -> dict:
         """Phase 2 — hybrid NL revision interpretation. ONE bounded structured model call turning a free-form
         instruction into typed directives (stable ids) + soft_direction + unresolved[]. The client calls this
@@ -482,6 +485,7 @@ def create_app() -> FastAPI:
         context: str = Form(..., description="JSON: {capture_session_id, mode, story_id?}"),
         frames: list[UploadFile] = File(..., description="3-6 representative JPEG scan frames"),
         engine: SceneUnderstandingEngine = Depends(get_scene_understanding_engine),
+        principal: Principal = Depends(optional_user),
     ) -> SceneUnderstandingContract:
         """Analyze representative scan frames into a canonical SceneUnderstanding
         via a real multimodal model. Frames are ephemeral — NOT persisted server
@@ -564,6 +568,7 @@ def create_app() -> FastAPI:
         frames_meta: str = Form(..., description="JSON: [{t_ms}, ...] ordered, one per frame"),
         frames: list[UploadFile] = File(..., description="exactly 24 ordered JPEG timeline frames"),
         engine: AssetUnderstandingEngine = Depends(get_asset_understanding_engine),
+        principal: Principal = Depends(optional_user),
     ) -> MomentUnderstandingContract:
         """Analyze a 24-frame ORDERED timestamped Moment timeline into a canonical
         MomentUnderstanding via Sonnet 4.6 (FROZEN, 06-asset-understanding.md). Frames are
@@ -681,6 +686,7 @@ def create_app() -> FastAPI:
     def story_coverage(
         body: StoryCoverageRequest,
         engine: StoryCoverageEngine = Depends(get_story_coverage_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryCoverageContract:
         """Compute a StoryCoverage snapshot from CreativeIntent + completed MomentUnderstanding[] +
         pending_count via Opus (FROZEN, Milestone E). Full recomputation; text-only (no media). On
@@ -720,6 +726,7 @@ def create_app() -> FastAPI:
     def story_guide(
         body: StoryGuideRequest,
         engine: StoryGuideEngine = Depends(get_story_guide_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryGuideContract:
         """Generate the persistent StoryGuide from CreativeIntent (Milestone E2-a, FROZEN). ONCE per
         Story, text-only, Opus 4.6. Server mints canonical stable dimension/possibility ids. On failure
@@ -775,6 +782,7 @@ def create_app() -> FastAPI:
     def edit_plan(
         body: EditPlanRequest,
         engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+        principal: Principal = Depends(optional_user),
     ) -> EditPlanV2Contract:
         """Produce an executable EditPlan (Milestone M-d, frozen edit_plan/2): CreativeIntent + StoryGuide/1 +
         StoryCoverage/2 + MomentUnderstanding[] + MusicPlan/1 (+ optional MusicAsset + MusicAnalysis) -> ONE
@@ -883,6 +891,7 @@ def create_app() -> FastAPI:
         critique_revision: bool = Form(default=False, description="Phase-6 Arm D: run ONE bounded critique->revision pass after a valid plan (OFF by default; costs 2 extra model calls)"),
         sheets: list[UploadFile] = File(default=[], description="bounded Tier-1 contact-sheet JPEGs, one per Moment"),
         engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+        principal: Principal = Depends(optional_user),
     ) -> EditPlanV2Contract:
         """MVP MULTIMODAL Edit Planner. Same frozen edit_plan/2 contract, same deterministic validator, same
         exception semantics as /v1/edit-plan — it additionally attaches bounded, DERIVED Tier-1 contact-sheet
@@ -995,10 +1004,26 @@ def create_app() -> FastAPI:
         import os as _os
         return _os.environ.get("STORY_JOBS_API_ENABLED", "1") == "1"
 
+    # P0 Beta Auth Increment 2: scope job identity + ownership to the authenticated principal.
+    def _scoped_op_id(principal, operation_id: str) -> str:
+        """Namespace the client operation_id by the trusted story_user_id BEFORE job_id_for/fingerprint, so
+        two users submitting the SAME client op-id get DIFFERENT deterministic job ids and can never collide
+        on idempotency. The worker is unaffected (it only ever sees the derived job_id). Scoping is applied
+        here, at the trusted seam — the frozen jobs module is untouched."""
+        return f"{principal.story_user_id}\x1f{operation_id.strip()}"
+
+    def _require_owned(job: dict, principal) -> None:
+        """Enforce job ownership. A job owned by a DIFFERENT principal is reported as 404 (never 403) so a
+        caller cannot even discover another user's job exists. Legacy owner='dev' jobs are owned by the legacy
+        principal only — a real story_user_id never equals 'dev', so they are invisible to authenticated users
+        and vice-versa."""
+        if job.get("owner") != principal.story_user_id:
+            raise HTTPException(status_code=404, detail="job not found")
+
     @app.post("/v1/edit-plan-jobs", status_code=202)
     async def submit_edit_plan_job(
         operation_id: str = Form(..., description="client idempotency key; a NEW version uses a NEW id"),
-        owner: str = Form(default="dev", description="advisory only — NOT trusted as identity (adjustment 1)"),
+        owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
         sheet_order: str = Form(default="[]", description="JSON array of Moment ids, one per sheet"),
         creative_brief: str | None = Form(default=None),
@@ -1006,6 +1031,7 @@ def create_app() -> FastAPI:
         approach: str = Form(default="storytelling", description="storytelling|visual_first (diagnostics)"),
         test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it); simulates a long job"),
         sheets: list[UploadFile] = File(default=[]),
+        principal: Principal = Depends(optional_user),
     ):
         """Submit an async Edit Planning job. Returns {job_id,status} promptly (no model call). Idempotent on
         operation_id; a same-id DIFFERENT-payload submit is 409. Stages derived sheets to encrypted S3, then
@@ -1045,9 +1071,13 @@ def create_app() -> FastAPI:
             digests.append(_jobs.sheet_digest(data))
 
         store = _job_store()
+        # Increment 2: scope the operation id to the authenticated principal so idempotency + the deterministic
+        # job id are per-user (no cross-user collision); persist the trusted story_user_id as owner (client
+        # `owner` is ignored).
+        scoped_op = _scoped_op_id(principal, operation_id)
         fp = _jobs.payload_fingerprint(body, order, bool(critique_revision), approach,
                                        creative_brief=creative_brief, sheet_digests=digests)
-        jid = _jobs.job_id_for(operation_id)
+        jid = _jobs.job_id_for(scoped_op)
         # Stage BEFORE create so the worker always finds its inputs. Re-staging on a duplicate is harmless
         # (same prefix, same content). Body carries brief + critique + approach so the worker is self-contained.
         import json as _j2
@@ -1057,7 +1087,7 @@ def create_app() -> FastAPI:
         prefix = store.stage_request(jid, body_envelope, staged)
         try:
             job_id, created = store.create_or_get(
-                operation_id=operation_id, owner=owner, approach=approach,
+                operation_id=scoped_op, owner=principal.story_user_id, approach=approach,
                 critique_requested=bool(critique_revision), staging_prefix=prefix,
                 sheet_order=order, payload_fingerprint=fp)
         except _jobs.PayloadConflict as e:
@@ -1070,12 +1100,13 @@ def create_app() -> FastAPI:
         return {"job_id": job_id, "status": "queued"}
 
     @app.get("/v1/edit-plan-jobs/{job_id}")
-    def get_edit_plan_job(job_id: str):
+    def get_edit_plan_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         job = _job_store().get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         out = {k: job.get(k) for k in ("job_id", "status", "approach", "failure_category",
                                        "failure_detail", "diagnostics")}
         if job.get("status") == "completed":
@@ -1083,18 +1114,21 @@ def create_app() -> FastAPI:
         return out
 
     @app.post("/v1/edit-plan-jobs/{job_id}/cancel")
-    def cancel_edit_plan_job(job_id: str):
+    def cancel_edit_plan_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         store = _job_store()
-        if not store.get(job_id):
+        job = store.get(job_id)
+        if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         return {"job_id": job_id, "status": store.request_cancel(job_id)}
 
     @app.post("/v1/edit-plan-jobs/_reconcile")
-    def reconcile_edit_plan_jobs():
+    def reconcile_edit_plan_jobs(principal: Principal = Depends(optional_user)):
         """Lost-enqueue recovery sweep (concern 6). Called by a scheduled EventBridge rule in CDK; also
-        callable manually in dev. Re-enqueues only never-leased stranded queued jobs, capped."""
+        callable manually in dev. Re-enqueues only never-leased stranded queued jobs, capped. Requires a
+        principal (not anonymous); it re-enqueues by job_id only and discloses no job data cross-user."""
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         return {"reenqueued": _job_store().reconcile_lost_enqueue()}
@@ -1111,9 +1145,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/story-coverage/v2/jobs", status_code=202)
     def submit_coverage_job(
         operation_id: str = Form(..., description="canonical coverage op-id (see coverage_operation_id); a changed snapshot uses a new id"),
-        owner: str = Form(default="dev", description="advisory only — not trusted as identity"),
+        owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON StoryCoverageV2Request body (same shape as POST /v1/story-coverage/v2)"),
         test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it)"),
+        principal: Principal = Depends(optional_user),
     ):
         """Submit an async Coverage/2 job. Returns {job_id,status} promptly (no model call). Idempotent on
         operation_id; a same-id DIFFERENT-payload submit is 409 (payload conflict preserved). Recovers an
@@ -1136,16 +1171,17 @@ def create_app() -> FastAPI:
         body_json = _json.dumps(canon, sort_keys=True, default=str)
 
         store = _job_store()
-        fp = _jobs.coverage_payload_fingerprint(body_json, operation_id)
+        scoped_op = _scoped_op_id(principal, operation_id)  # Increment 2: per-user job identity + idempotency
+        fp = _jobs.coverage_payload_fingerprint(body_json, scoped_op)
         # Compact bodies inline into the DynamoDB item; a large body stages to encrypted S3 (worker reads either).
         staging_prefix = ""
         if len(body_json.encode("utf-8")) > _COV_JOB_MAX_INLINE_BYTES:
-            jid = _jobs.job_id_for(operation_id)
+            jid = _jobs.job_id_for(scoped_op)
             staging_prefix = store.stage_request(jid, body_json, [])
             body_json = ""   # not inlined; worker loads from S3
         try:
             job_id, created = store.create_or_get_coverage(
-                operation_id=operation_id, owner=owner, body_json=body_json,
+                operation_id=scoped_op, owner=principal.story_user_id, body_json=body_json,
                 payload_fingerprint=fp, staging_prefix=staging_prefix)
         except _jobs.PayloadConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
@@ -1157,7 +1193,7 @@ def create_app() -> FastAPI:
         return {"job_id": job_id, "status": "queued", "created": created}
 
     @app.get("/v1/story-coverage/v2/jobs/{job_id}")
-    def get_coverage_job(job_id: str):
+    def get_coverage_job(job_id: str, principal: Principal = Depends(optional_user)):
         """Durable status. Polling NEVER triggers inference — it only reads DynamoDB. On completion returns the
         StoryCoverage/2 result AND the operation_id, so the client can reject a result that is stale for the
         CURRENT Story (safeguard 4: input-freshness is enforced client-side against the live fingerprint)."""
@@ -1166,23 +1202,29 @@ def create_app() -> FastAPI:
         job = _job_store().get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
             # Never serve an edit-plan job through the coverage status route (dispatch isolation).
             raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
         out = {k: job.get(k) for k in ("job_id", "status", "operation_id", "failure_category",
                                        "failure_detail", "diagnostics")}
+        # Return the CLIENT operation_id (strip the internal per-principal scope prefix "<user>\x1f") so the
+        # client's staleness check (safeguard 4) sees the id it submitted, not the server-internal scoped key.
+        if isinstance(out.get("operation_id"), str) and "\x1f" in out["operation_id"]:
+            out["operation_id"] = out["operation_id"].split("\x1f", 1)[1]
         if job.get("status") == "completed":
             out["result"] = job.get("result")
         return out
 
     @app.post("/v1/story-coverage/v2/jobs/{job_id}/cancel")
-    def cancel_coverage_job(job_id: str):
+    def cancel_coverage_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         store = _job_store()
         job = store.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
             raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
         return {"job_id": job_id, "status": store.request_cancel(job_id)}
@@ -1191,6 +1233,7 @@ def create_app() -> FastAPI:
     def music_plan(
         body: MusicPlanRequest,
         engine: MusicPlanEngine = Depends(get_music_plan_engine),
+        principal: Principal = Depends(optional_user),
     ) -> MusicPlanContract:
         """Produce the Story-level MusicPlan (Milestone R-d, frozen music_plan/1): CreativeIntent +
         authoritative MusicDirection + StoryGuide + StoryCoverage/2 + target duration -> ONE Opus 4.6 call,
@@ -1231,6 +1274,7 @@ def create_app() -> FastAPI:
     def duration_recommendation(
         body: DurationRecommendationRequest,
         engine: DurationPlannerEngine = Depends(get_duration_planner_engine),
+        principal: Principal = Depends(optional_user),
     ):
         """Recommend a target duration (Milestone R-d.2, frozen duration_recommendation/1). Deterministic
         evidence (useful-segment union, longest continuous span, feasible band) is computed LOCALLY; one Opus
@@ -1274,7 +1318,7 @@ def create_app() -> FastAPI:
                 "note": None if recommendation else "recommendation unavailable; choose a duration manually"}
 
     @app.post("/v1/music/candidates", status_code=200)
-    def music_candidates(body: MusicCandidatesRequest):
+    def music_candidates(body: MusicCandidatesRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY (Milestone M-d): MusicPlan -> Epidemic search -> deterministic ranked candidates +
         normalized music_analysis/1 for the top pick. Gated behind STORY_EPIDEMIC_MODE=prototyping; returns 404
         when the flag is off so it is invisible in normal production. No sublicense/safelist/export path here."""
@@ -1348,7 +1392,7 @@ def create_app() -> FastAPI:
                 "top_music_analysis": top_analysis, "next_cursor": next_cursor}
 
     @app.post("/v1/music/search", status_code=200)
-    def music_search(body: MusicSearchRequest):
+    def music_search(body: MusicSearchRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: user-driven free-text catalog search with cursor pagination. Returns candidate
         rows (same shape as /v1/music/candidates, incl. a preview url) plus a next_cursor for load-more.
         Unlike /candidates this does NOT rank by a MusicPlan or compute a top analysis — it is a browse
@@ -1390,7 +1434,7 @@ def create_app() -> FastAPI:
         return {"candidates": out, "next_cursor": next_cursor}
 
     @app.post("/v1/music/analysis", status_code=200)
-    def music_analysis(body: MusicTrackRequest):
+    def music_analysis(body: MusicTrackRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: MusicAnalysis/1 for a SPECIFIC chosen track (used when the user picks a candidate
         other than the top pick, so the Edit Planner gets analysis for the actual selection). Flag-gated 404."""
         if not _mp.prototyping_enabled():
@@ -1415,7 +1459,7 @@ def create_app() -> FastAPI:
         return analysis.model_dump(mode="json")
 
     @app.post("/v1/music/soundtrack", status_code=200)
-    def music_soundtrack(body: MusicTrackRequest):
+    def music_soundtrack(body: MusicTrackRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: return a short-lived AUTHORIZED download link for the SELECTED track so the device
         can fetch the audio for a PRIVATE, NON-COMMERCIAL test render. Flag-gated 404 when the prototyping flag
         is off. This is NOT a sublicense/export surface: COMMERCIAL export stays behind a SEPARATE flag
@@ -1441,6 +1485,7 @@ def create_app() -> FastAPI:
     def story_coverage_v2(
         body: StoryCoverageV2Request,
         engine: StoryCoverageV2Engine = Depends(get_story_coverage_v2_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryCoverageContractV2:
         """Compute StoryCoverage/2 (Milestone E2-b, FROZEN): StoryGuide + completed
         MomentUnderstanding[] + pending_count -> composed Mapper + Judge. Full recomputation,
@@ -1498,6 +1543,7 @@ def create_app() -> FastAPI:
     def director_initialize(
         body: DirectorInitializeRequest,
         engine: StoryDirectorEngine = Depends(get_story_director_engine),
+        principal: Principal = Depends(optional_user),
     ) -> DirectorOutput:
         """CreativeIntent + SceneUnderstanding + constraints -> concept + plan +
         state + first decision. 503 on failure — never a fabricated plan."""
@@ -1517,6 +1563,7 @@ def create_app() -> FastAPI:
     def director_next(
         body: DirectorNextRequest,
         engine: StoryDirectorEngine = Depends(get_story_director_engine),
+        principal: Principal = Depends(optional_user),
     ) -> DirectorOutput:
         """Prior plan/state + Story progress -> updated state + one decision."""
         cid = str(uuid4())

@@ -33,7 +33,7 @@ class FakeStore:
             if self.jobs[jid]["fp"] != payload_fingerprint:
                 raise _jobs.PayloadConflict("different payload for same operation_id")
             return jid, False
-        self.jobs[jid] = {"job_id": jid, "status": "queued", "operation_id": operation_id,
+        self.jobs[jid] = {"job_id": jid, "status": "queued", "operation_id": operation_id, "owner": owner,
                           "operation_type": _jobs.OP_COVERAGE_V2, "fp": payload_fingerprint,
                           "request_ref": {"inline": not staging_prefix, "body_json": body_json}}
         return jid, True
@@ -41,7 +41,7 @@ class FakeStore:
     def create_or_get(self, *, operation_id, owner, approach, critique_requested,
                       staging_prefix, sheet_order, payload_fingerprint, has_body=True):
         jid = _jobs.job_id_for(operation_id)
-        self.jobs[jid] = {"job_id": jid, "status": "queued", "approach": approach,
+        self.jobs[jid] = {"job_id": jid, "status": "queued", "approach": approach, "owner": owner,
                           "operation_type": _jobs.OP_EDIT_PLAN, "fp": payload_fingerprint,
                           "request_ref": {"staging_prefix": staging_prefix,
                                           "sheet_order": json.dumps(sheet_order)}}

@@ -205,6 +205,23 @@ export class StoryApiStack extends cdk.Stack {
     stagingBucket.grantPut(instanceRole);
     jobsQueue.grantSendMessages(instanceRole);
 
+    // P0 Beta Auth Increment 3: scoped access to the identity tables owned by the SEPARATE story-<env>-auth
+    // stack. Referenced by NAME (cross-stack string, not a hard CDK dependency) so the api stack deploys
+    // independently; IAM is scoped to exactly these two tables (read + write + transactions for atomic claims).
+    const identityClaimsTableName =
+      (this.node.tryGetContext("identityClaimsTable") as string) ?? `story-${environment}-identity-claims`;
+    const storyUsersTableName =
+      (this.node.tryGetContext("storyUsersTable") as string) ?? `story-${environment}-users`;
+    instanceRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query",
+                "dynamodb:TransactWriteItems"],
+      resources: [
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/${identityClaimsTableName}`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/${storyUsersTableName}`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/${storyUsersTableName}/index/*`,
+      ],
+    }));
+
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
       serviceName: `story-${environment}-api`,
@@ -240,6 +257,19 @@ export class StoryApiStack extends cdk.Stack {
               // Frozen edit-planner prompt pin + model fallback (so the sync + async paths both use v5.2).
               { name: "STORY_EDIT_PLAN_VERSION", value: "5.2" },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
+              // P0 Beta Auth Increment 3: wire the (separately-provisioned) dev Cognito pool + identity
+              // tables. These are non-secret resource identifiers (NOT credentials), read from context so prod
+              // supplies its own; dev defaults match the provisioned story-development-auth stack.
+              { name: "STORY_ENVIRONMENT", value: environment },
+              // Dev stays in optional-auth so existing iOS builds keep working; prod is fail-closed in code
+              // regardless of this value.
+              { name: "STORY_REQUIRE_AUTH", value: environment === "production" ? "1" : "0" },
+              { name: "STORY_COGNITO_USER_POOL_ID",
+                value: (this.node.tryGetContext("cognitoUserPoolId") as string) ?? "us-east-1_AzfHOEdA5" },
+              { name: "STORY_COGNITO_APP_CLIENT_ID",
+                value: (this.node.tryGetContext("cognitoAppClientId") as string) ?? "5rnvp7oq6d7crbt01ldpe89tkh" },
+              { name: "STORY_IDENTITY_CLAIMS_TABLE", value: identityClaimsTableName },
+              { name: "STORY_USERS_TABLE", value: storyUsersTableName },
             ],
           },
         },
