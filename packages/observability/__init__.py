@@ -62,3 +62,114 @@ def get_logger(name: str = "story", level: int = logging.INFO) -> logging.Logger
         logger.propagate = False
         _CONFIGURED.add(name)
     return logger
+
+
+# ---------------------------------------------------------------------------
+# CloudWatch EMF metrics (P0 Beta Observability)
+#
+# Embedded Metric Format: a specially-shaped JSON line on stdout that CloudWatch
+# auto-extracts into metrics — NO PutMetricData API call, NO added request
+# latency. App Runner + Lambda both ship stdout to CloudWatch Logs, which parses
+# the `_aws` envelope.
+#
+# Amendment 5 (ENFORCED here, not by convention): dimensions are restricted to a
+# low-cardinality ALLOW-LIST. A caller that passes a disallowed dimension
+# (owner id, job id, correlation id, GPS, prompt, media) has it DROPPED before
+# emission, so a raw identifier can never become a metric dimension or appear in
+# the metric line. High-cardinality context belongs in the structured LOG line
+# (get_logger), never here.
+# ---------------------------------------------------------------------------
+
+METRIC_NAMESPACE = "Story/Beta"
+
+# The ONLY dimensions any metric may carry. Everything else is dropped.
+_ALLOWED_DIMENSIONS = {"env", "service", "op_type", "stage", "error_category", "model_id", "reason"}
+
+
+def _sanitize_dimensions(dims: dict[str, object] | None) -> dict[str, str]:
+    """Keep only allow-listed, low-cardinality dimension keys; stringify values.
+    Silently drops anything else (defense against a raw id leaking into a dim)."""
+    if not dims:
+        return {}
+    out: dict[str, str] = {}
+    for k, v in dims.items():
+        if k in _ALLOWED_DIMENSIONS and v is not None:
+            s = str(v)
+            # A dimension value should be a small enum-like token; guard against an
+            # accidental large/opaque value sneaking in as a "reason"/"op_type".
+            if len(s) <= 64:
+                out[k] = s
+    return out
+
+
+def emit_metrics(
+    metrics: dict[str, float],
+    dimensions: dict[str, object] | None = None,
+    *,
+    namespace: str = METRIC_NAMESPACE,
+    units: dict[str, str] | None = None,
+) -> None:
+    """Emit one or more CloudWatch metrics via EMF (one stdout JSON line).
+
+    `metrics`     name -> value (e.g. {"GenerationCompleted": 1, "ModelLatencyMs": 820}).
+    `dimensions`  low-cardinality context; NON-allow-listed keys are DROPPED (amendment 5).
+    `units`       optional per-metric CloudWatch unit (default: Count; Milliseconds for *Ms).
+
+    Fire-and-forget: never raises into the caller (a metric failure must not break a request).
+    """
+    try:
+        dims = _sanitize_dimensions(dimensions)
+        units = units or {}
+        metric_defs = []
+        for mname in metrics:
+            unit = units.get(mname) or ("Milliseconds" if mname.endswith("Ms") else "Count")
+            metric_defs.append({"Name": mname, "Unit": unit})
+        payload: dict[str, object] = {
+            "_aws": {
+                "Timestamp": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                "CloudWatchMetrics": [{
+                    "Namespace": namespace,
+                    "Dimensions": [list(dims.keys())] if dims else [[]],
+                    "Metrics": metric_defs,
+                }],
+            },
+            "emf": True,
+        }
+        payload.update(dims)
+        payload.update(metrics)
+        # EMF requires the literal `_aws` key. The structured log formatter drops
+        # underscore-prefixed keys, so write the EMF line DIRECTLY to stdout rather
+        # than routing through get_logger's formatter.
+        sys.stdout.write(json.dumps(payload, default=str) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        # Observability must never take down the request path.
+        pass
+
+
+def estimated_cost_usd(
+    input_tokens: float,
+    output_tokens: float,
+    model_id: str,
+    pricing: dict[str, tuple[float, float]] | None = None,
+) -> float:
+    """ESTIMATED Bedrock cost for one billable attempt: input_tok/1e6 * in_price +
+    output_tok/1e6 * out_price. `pricing` maps model_id substring -> (in_usd_per_mtok,
+    out_usd_per_mtok); a config table that can drift from real Bedrock prices (amendment 2
+    documented limitation). Image/multimodal cost is included via Bedrock's REPORTED input
+    tokens (contact-sheet tiles are counted as input tokens, not re-derived). Unknown model
+    -> 0.0 (and the caller should still emit the raw token metrics)."""
+    table = pricing or _DEFAULT_PRICING
+    for key, (in_p, out_p) in table.items():
+        if key in model_id:
+            return (input_tokens / 1_000_000.0) * in_p + (output_tokens / 1_000_000.0) * out_p
+    return 0.0
+
+
+# USD per 1M tokens (in, out). ESTIMATE ONLY — keep in sync with Bedrock pricing; drift is an
+# accepted limitation (amendment 2). Substring match against the full model id.
+_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
+    "opus-4": (15.0, 75.0),
+    "sonnet-4": (3.0, 15.0),
+    "haiku": (0.80, 4.0),
+}

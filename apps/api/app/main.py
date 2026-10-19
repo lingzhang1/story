@@ -430,6 +430,7 @@ def create_app() -> FastAPI:
         base_fields = {"operation": "interpret_revision", "correlation_id": correlation_id,
                        "task": "revision.interpret", "prompt_version": _IV,
                        "input_chars": len(body.instruction), "moment_count": len(body.moments)}
+        from edit_planner.revision_interpreter import ground_directives
         try:
             result = _interp(body.instruction, body.moments, get_model_gateway())
         except StructuredOutputError as e:
@@ -441,14 +442,37 @@ def create_app() -> FastAPI:
             log.warning("interpret_revision_provider_failed",
                         extra={**base_fields, "success": False, "error": str(e)[:300]})
             raise HTTPException(status_code=503, detail="interpret_revision_unavailable: provider error; retry")
+
+        # Phase 3 — hard-directive GROUNDING guard. If the interpreter invented a hard constraint the user did
+        # not ask for (observed: an exclude set produced from an inclusion/ordering-only instruction), do NOT
+        # silently drop it and do NOT submit. Attempt ONE bounded reinterpretation (same v2 prompt, same model)
+        # — a transient over-generation usually clears on retry at temperature 0 given the explicit v2 rules.
+        # If the second pass STILL emits the unsupported constraint, surface it as a blocking reason so the
+        # client asks the user to clarify, rather than shipping a wrong exclusion or quietly deleting it.
+        grounding = ground_directives(result)
+        reinterpreted = False
+        if grounding:
+            reinterpreted = True
+            try:
+                result2 = _interp(body.instruction, body.moments, get_model_gateway())
+                if not ground_directives(result2):
+                    result = result2
+                    grounding = []
+                else:
+                    result = result2
+                    grounding = ground_directives(result2)
+            except (StructuredOutputError, ProviderError):
+                pass  # keep the first result + its grounding reasons; handled as blocking below
+
         log.info("interpret_revision_ok",
                  extra={**base_fields, "latency_ms": round((time.monotonic() - started) * 1000),
                         "success": True, "has_directives": bool(result.directives),
-                        "unresolved_count": len(result.unresolved)})
+                        "unresolved_count": len(result.unresolved),
+                        "reinterpreted": reinterpreted, "grounding_flags": len(grounding)})
         # Phase 4 preflight: refuse to let the client spend an expensive revision job on a known-unsatisfiable
         # or malformed directive set. eligible_ids = the Moment ids the client sent in the snapshot.
         eligible = {str(m["id"]) for m in body.moments if "id" in m}
-        blocking = preflight_directives(result.directives, eligible)
+        blocking = preflight_directives(result.directives, eligible) + grounding
         return {"directives": result.directives, "soft_direction": result.soft_direction,
                 "unresolved": result.unresolved, "blocking": blocking,
                 "can_submit": not blocking and not result.unresolved}

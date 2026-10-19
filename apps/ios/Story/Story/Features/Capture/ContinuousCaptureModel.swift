@@ -1,6 +1,79 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import CoreLocation
+
+/// Pure, device-independent formatting for zoom-preset labels (unit-testable). ".5" for sub-1×,
+/// integer for whole values ("1", "2"), one decimal otherwise ("1.5"). Kept free of AVFoundation so
+/// it can be tested without a camera device (the preset DERIVATION needs real hardware and is a
+/// device-acceptance concern, not a unit test).
+enum CameraZoomFormat {
+    static func label(_ z: Double) -> String {
+        if z < 1 { return String(format: ".%d", Int((z * 10).rounded())) }
+        if z == z.rounded() { return "\(Int(z))" }
+        return String(format: "%.1f", z)
+    }
+
+    /// The live magnification shown on the ACTIVE zoom chip: "2.7×" style (one decimal + ×), "1×"/"2×"
+    /// when sitting on/near an integer, ".5×" sub-1×. Separate from `label` (plain preset text).
+    static func liveLabel(_ z: Double) -> String {
+        if z < 1 { return label(z) + "×" }
+        if abs(z - z.rounded()) < 0.05 { return "\(Int(z.rounded()))×" }
+        return String(format: "%.1f×", z)
+    }
+
+    /// Map an exposure-slider fraction (0 = bottom/min EV, 1 = top/max EV) to an EV value in `range`,
+    /// and back. Pure so the Increment-2 exposure slider's math is unit-testable without a camera.
+    static func exposureEV(fromFraction p: Float, range: ClosedRange<Float>) -> Float {
+        let clampedP = min(max(p, 0), 1)
+        return range.lowerBound + clampedP * (range.upperBound - range.lowerBound)
+    }
+    static func exposureFraction(fromEV ev: Float, range: ClosedRange<Float>) -> Float {
+        let span = range.upperBound - range.lowerBound
+        guard span > 0 else { return 0 }
+        return min(max((ev - range.lowerBound) / span, 0), 1)
+    }
+
+    /// Thumb-dial zoom mapping (log-scaled, like the native camera dial so the low end is finer). A dial
+    /// fraction (0 = min zoom, 1 = max zoom) maps to a user-× value, and back. Pure/unit-testable.
+    static func dialZoom(fromFraction p: Double, range: ClosedRange<Double>) -> Double {
+        let lo = max(0.0001, range.lowerBound), hi = max(lo, range.upperBound)
+        let cp = min(max(p, 0), 1)
+        let v = lo * pow(hi / lo, cp)
+        return min(max(v, lo), hi)
+    }
+    static func dialFraction(fromZoom z: Double, range: ClosedRange<Double>) -> Double {
+        let lo = max(0.0001, range.lowerBound), hi = max(lo, range.upperBound)
+        guard hi > lo else { return 0 }
+        let cz = min(max(z, lo), hi)
+        return log(cz / lo) / log(hi / lo)
+    }
+
+    /// Build a GRADUAL preset ladder from the device's real optical anchors (e.g. [0.5, 1, 5]) by
+    /// filling integer digital steps between 1× and the top anchor, so the user sees a smooth ramp
+    /// (0.5, 1, 2, 3, 5) rather than a jarring 1→5 jump. Sub-1× anchors (0.5) are preserved exactly
+    /// and never interpolated (we never imply an optical lens that isn't there). De-duped, sorted,
+    /// clamped to `maxUserZoom`. Always returns at least [1.0].
+    static func ladder(anchors rawAnchors: [Double], maxUserZoom: Double) -> [Double] {
+        var anchors = rawAnchors
+        if !anchors.contains(where: { abs($0 - 1.0) < 0.01 }) { anchors.append(1.0) }
+        let topAnchor = anchors.max() ?? 1.0
+        // A wide-only device (top optical anchor == 1×) still gets gradual DIGITAL steps up to a sane
+        // cap (so there's a usable tele ramp); a device with optical tele fills up to that lens.
+        let digitalCeiling = 3.0
+        let top = min(max(topAnchor, digitalCeiling), maxUserZoom)
+        var set = Set<Double>()
+        // Keep every real anchor that fits (including sub-1× like 0.5 — never interpolated).
+        for a in anchors where a <= maxUserZoom + 0.001 { set.insert(a) }
+        // Fill integer steps from 2 up to `top` (digital zoom between/above optical lenses).
+        if top >= 2 {
+            var i = 2.0
+            while i <= top + 0.001 { set.insert(i); i += 1 }
+        }
+        let cleaned = set.sorted().filter { $0 <= maxUserZoom + 0.001 }
+        return cleaned.isEmpty ? [1.0] : cleaned
+    }
+}
 
 // ContinuousCaptureModel — the @MainActor brain behind ContinuousCaptureView.
 //
@@ -46,6 +119,72 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     @Published var ideasCollapsed = false              // full card hidden but ideas retained (chip reopens)
     @Published var recordingElapsed: TimeInterval = 0  // live REC timer (Phase 2)
     @Published var scanProgress: Double = 0            // 0→1 across the scan window (determinate bar)
+
+    // Camera controls (Package B Increment 1) — thin passthroughs to the shared controller. The
+    // controller owns all device config (serialized + lock-guarded); the model only mirrors UI state.
+    @Published var torchOn = false                     // reflects the torch button toggle
+    @Published var currentUserZoom: Double = 1.0       // live magnification (pinch/preset); drives the strip
+    /// Device-supported zoom presets, PUBLISHED by the controller via `.presetsReady` as soon as they
+    /// are computed — so the strip renders on OPEN, not lazily on the first tap. [1.0] until ready.
+    @Published var publishedZoomPresets: [Double] = [1.0]
+    /// What the UI reads. Prefers the published copy; falls back to a live controller read.
+    var zoomPresets: [Double] {
+        publishedZoomPresets.count > 1 ? publishedZoomPresets : (controller?.zoomPresets ?? publishedZoomPresets)
+    }
+    /// Whether this device has a torch (UI hides the control when false).
+    var hasTorch: Bool { controller?.hasTorch ?? false }
+
+    /// Tap-to-focus at a view point (from the tap gesture). Also shows a brief focus reticle (UI state).
+    func focusAndExpose(atViewPoint point: CGPoint) {
+        controller?.focusAndExpose(atViewPoint: point)
+    }
+    /// Snap to a zoom preset (preset button).
+    func setZoomPreset(_ userZoom: Double) {
+        currentUserZoom = userZoom
+        controller?.setUserZoom(userZoom)
+    }
+    /// Continuous absolute zoom from the thumb-dial (maps dial position → a user-× value). Reuses the
+    /// same clamped device setter as the presets; the controller reports the real value back via .zoomChanged.
+    func setDialZoom(_ userZoom: Double) {
+        currentUserZoom = userZoom
+        controller?.setUserZoom(userZoom)
+    }
+    /// The device's continuous user-× zoom range (for the dial extents). [1,1] until ready.
+    var userZoomRange: ClosedRange<Double> { controller?.userZoomRange ?? 1...1 }
+    /// Continuous pinch zoom. `base` is captured at gesture start from the controller.
+    func pinchZoom(scale: CGFloat, base: CGFloat) {
+        controller?.applyPinchZoom(scale: scale, base: base)
+    }
+    /// The controller's current raw zoom factor (gesture start reads this).
+    var currentRawZoom: CGFloat { controller?.currentZoomFactor ?? 1.0 }
+    /// Toggle the torch.
+    func toggleTorch() {
+        torchOn.toggle()
+        controller?.setTorch(torchOn)
+    }
+
+    // Increment 2 — front/rear, exposure bias, AE/AF lock.
+    @Published var isFrontCamera = false
+    @Published var isAEAFLocked = false
+    @Published var exposureBias: Float = 0        // live EV bias (slider position)
+    var hasFrontCamera: Bool { controller?.hasFrontCamera ?? false }
+    var exposureBiasRange: ClosedRange<Float> { controller?.exposureBiasRange ?? 0...0 }
+
+    /// Flip front/rear (UI gates this out of recording). Resets zoom to 1× on the new camera.
+    func switchCamera() {
+        guard !isRecording else { return }
+        controller?.switchCamera()
+    }
+    /// Manual exposure bias from the slider.
+    func setExposureBias(_ ev: Float) {
+        exposureBias = ev
+        controller?.setExposureBias(ev)
+    }
+    /// Long-press AE/AF lock toggle.
+    func toggleAEAFLock() {
+        controller?.setAEAFLock(!isAEAFLocked)
+    }
+
     private(set) var ideas: [DirectorDecisionDTO] = []
     private(set) var ideasOutput: DirectorOutputDTO?   // for concept/shot lookups
     private var recordingTimer: Timer?
@@ -66,15 +205,47 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     private var inFlightURLs = Set<String>()      // temp URLs currently being persisted
     private var persistedURLs = Set<String>()     // temp URLs already persisted (double-callback guard)
 
-    func configure(context: ModelContext, captureContext: CaptureContext) {
+    // Guide/Idea seed: the specific opportunity the user tapped Shoot/Reshoot on (Story Guide
+    // possibility or Story Idea Show-me). When present, the camera shows THIS idea IMMEDIATELY on
+    // open — NO network call, NO scan — because the possibility already carries its own label +
+    // purpose text (loaded on the Story screen). The idea card renders straight from this text, so
+    // Reshoot lands on the continuous camera already showing that exact guide idea with zero latency.
+    // nil for plain "Shoot a moment" (no seed; the pill shows "Get an AI shot idea").
+    private var seededIdea: SeededIdea?
+    private var seedConsumed = false
+
+    /// An instant, network-free idea rendered directly from the tapped guide possibility / Story Idea.
+    struct SeededIdea: Equatable {
+        let title: String        // the possibility/idea label — the card headline
+        let body: String         // its semantic purpose — the card instruction line
+        let seconds: Int?        // optional target duration (seeds carry none today)
+    }
+
+    func configure(context: ModelContext, captureContext: CaptureContext,
+                   seedOpportunity: SelectedOpportunityDTO? = nil) {
         self.context = context
         self.captureContext = captureContext
+        if let opp = seedOpportunity, !seedConsumed {
+            // Build the idea card from text we ALREADY have — no Director call, no spinner.
+            let title = opp.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = (opp.purpose ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty { self.seededIdea = SeededIdea(title: title, body: body, seconds: nil) }
+        }
+    }
+
+    /// Show the seeded guide idea as the DEFAULT in-camera idea, instantly, once, on first appear.
+    /// Pure local state change — no network, so the card appears the moment Reshoot opens the camera.
+    func seedGuideIdeaIfNeeded() {
+        guard !seedConsumed, seededIdea != nil else { return }
+        seedConsumed = true
+        aiState = .ideas
     }
 
     func toggleRecording() { controller?.toggleRecording() }
 
-    /// Whether we hold cached ideas that can be reopened without a new scan (drives the chip).
-    var hasCachedIdeas: Bool { !ideas.isEmpty }
+    /// Whether we hold a shot idea that can be reopened without a new scan (drives the chip):
+    /// either live cached Director ideas OR an instant seeded guide idea.
+    var hasCachedIdeas: Bool { !ideas.isEmpty || seededIdea != nil }
 
     /// AI Ideas — user-initiated. If ideas are already cached and merely collapsed, REOPEN them
     /// (no inference). Otherwise start a fresh scene scan on the LIVE session (does not stop any
@@ -129,15 +300,21 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
     private var isFailed: Bool { if case .failed = aiState { return true } else { return false } }
 
     // MARK: - Current idea accessors (for the overlay)
+    //
+    // A SEEDED idea (from a Guide Reshoot / Story Idea) renders instantly from local text and takes
+    // precedence until the user Rescans — then live Director `ideas` replace it (seed cleared).
 
     var currentIdeaTitle: String {
-        ideasOutput?.concept.title ?? "Shot idea"
+        if let s = seededIdea, ideas.isEmpty { return s.title }
+        return ideasOutput?.concept.title ?? "Shot idea"
     }
     var currentIdeaBody: String {
+        if let s = seededIdea, ideas.isEmpty { return s.body }
         guard ideaIndex < ideas.count else { return "" }
         return ideas[ideaIndex].shot?.instruction ?? ideasOutput?.concept.summary ?? ""
     }
     var currentIdeaSeconds: Int? {
+        if seededIdea != nil, ideas.isEmpty { return seededIdea?.seconds }
         guard ideaIndex < ideas.count else { return nil }
         if let d = ideas[ideaIndex].shot?.targetDurationSeconds, d > 0 { return Int(d.rounded()) }
         return nil
@@ -146,6 +323,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     /// A compact one-line reminder of the active idea, for the minimized recording state.
     var currentIdeaReminder: String? {
+        if let s = seededIdea, ideas.isEmpty { return s.title.isEmpty ? nil : s.title }
         guard hasCachedIdeas else { return nil }
         let t = currentIdeaTitle
         return t.isEmpty ? nil : t
@@ -155,6 +333,7 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         aiGeneration &+= 1
         let gen = aiGeneration
         ideas = []; ideasOutput = nil; ideaIndex = 0
+        seededIdea = nil            // Rescan replaces the seeded guide idea with live, scene-specific ideas
         scanProgress = 0
         aiState = .scanning
         guard let controller else { aiState = .failed("Camera unavailable."); return }
@@ -249,10 +428,10 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                 aiState = .off
             }
             startRecordingTimer()
-        case .recordingFinished(let url, let duration):
+        case .recordingFinished(let url, let duration, let capturedAt, let fix):
             isRecording = false
             stopRecordingTimer()
-            persist(tempURL: url, duration: duration)
+            persist(tempURL: url, duration: duration, capturedAt: capturedAt, location: fix)
         case .captureFailed(let message):
             isRecording = false
             stopRecordingTimer()
@@ -261,6 +440,21 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
         case .interrupted:
             isRecording = false
             stopRecordingTimer()
+        case .presetsReady(let presets):
+            // The strip now renders from the model's OWN published copy (not a lazy controller read),
+            // so it appears on OPEN instead of only after the first tap forces a re-render.
+            publishedZoomPresets = presets
+        case .zoomChanged(let userZoom):
+            // Live magnification from pinch or a preset tap — drives the active-chip value + highlight.
+            currentUserZoom = userZoom
+        case .aeafLockChanged(let locked):
+            isAEAFLocked = locked
+        case .cameraPositionChanged(let front):
+            isFrontCamera = front
+            // A swap resets zoom to 1× and clears torch (front has none); reflect it.
+            currentUserZoom = 1.0
+            if front { torchOn = false }
+            exposureBias = 0
         }
     }
 
@@ -293,7 +487,9 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
 
     // MARK: - Persistence (ONE path, serialized, deduped)
 
-    private func persist(tempURL: URL, duration: Double) {
+    private func persist(tempURL: URL, duration: Double,
+                         capturedAt: Date? = nil,
+                         location: CaptureLocationService.LocationFix? = nil) {
         let key = tempURL.path
         // Double-callback / rapid-tap dedup: never persist the same temp URL twice.
         guard !persistedURLs.contains(key), !inFlightURLs.contains(key) else {
@@ -325,6 +521,19 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
             persistedURLs.insert(key)
             inFlightURLs.remove(key)
 
+            // Camera Metadata P0: stamp the TRUE capture time + the trustworthy location fix (or leave nil
+            // = unknown) onto the asset. Additive fields; nothing else about the Moment changes. Saved with
+            // the context on the next save (the use case already inserted the asset).
+            if let asset = moment.asset {
+                asset.capturedAt = capturedAt
+                if let fix = location {
+                    asset.latitude = fix.latitude
+                    asset.longitude = fix.longitude
+                    asset.locationAccuracyMeters = fix.horizontalAccuracyMeters
+                }
+                try? context.save()
+            }
+
             // AU enqueue — AFTER the Moment is committed; never blocks the next
             // recording. Contextless here (no requested shot/beat in continuous mode).
             let auQueue = AssetUnderstandingQueue(context: context)
@@ -332,9 +541,15 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                             sourceCaptureId: captureSessionId, captureContext: nil)
             Task.detached { await auQueue.drain() }
 
-            // Add-only Photos copy — fire-and-forget, degrades silently.
+            // Add-only Photos copy — fire-and-forget, degrades silently. Carries the capture date + a
+            // trustworthy location so the user's own Photos copy is correctly dated and placed.
             let adoptedURL = MediaStore.shared.absoluteURL(for: relativePath)
-            PhotosSaver.saveVideoCopy(at: adoptedURL) { _ in }
+            let clLocation = location.map {
+                CLLocation(coordinate: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude),
+                           altitude: 0, horizontalAccuracy: $0.horizontalAccuracyMeters,
+                           verticalAccuracy: -1, timestamp: $0.timestamp)
+            }
+            PhotosSaver.saveVideoCopy(at: adoptedURL, creationDate: capturedAt, location: clLocation) { _ in }
 
             // Subtle save feedback + recent thumbnail AFTER success only.
             isSaving = !inFlightURLs.isEmpty

@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import SwiftData
 
 // Milestone R-d.2 — Story Duration Planning client. Calls the backend /v1/duration-recommendation
 // (frozen duration_recommendation/1): deterministic evidence computed server-side from the SAME
@@ -104,9 +106,20 @@ final class DurationService {
 
     /// Recommend a target duration. Returns nil on any transport/model failure (caller falls back to manual
     /// selection). NEVER throws into the create flow — a recommendation is advisory.
+    /// LATENCY P0: pass `storyId` + `context` to cache the result per Story keyed by an input fingerprint, so
+    /// reopening Customize with unchanged intent/moments skips the ~4-9s duration_recommendation LLM call.
     func recommend(creativeIntent: JSONValue, moments: [JSONValue],
                    storyGuide: JSONValue = .object([:]), storyCoverage: JSONValue = .object([:]),
-                   requestedScope: String? = nil) async -> DurationRecommendation? {
+                   requestedScope: String? = nil,
+                   storyId: UUID? = nil, context: ModelContext? = nil) async -> DurationRecommendation? {
+        // Cache hit: reuse the stored recommendation (no model call) when the inputs are unchanged.
+        let fingerprint = Self.durationFingerprint(creativeIntent: creativeIntent, moments: moments,
+                                                   requestedScope: requestedScope)
+        if let sid = storyId, let ctx = context,
+           let cached = Self.cachedRecommendation(storyId: sid, fingerprint: fingerprint, context: ctx) {
+            MediaEngineV1.beacon("duration: cache HIT fp=\(fingerprint.prefix(8))")
+            return cached
+        }
         let body = DurationRecommendationRequestDTO(
             creativeIntent: creativeIntent, moments: moments,
             storyGuide: storyGuide, storyCoverage: storyCoverage, requestedScope: requestedScope)
@@ -117,6 +130,58 @@ final class DurationService {
         req.httpBody = data
         guard let (respData, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-        return try? JSONDecoder().decode(DurationRecommendation.self, from: respData)
+        guard let decoded = try? JSONDecoder().decode(DurationRecommendation.self, from: respData) else { return nil }
+        if let sid = storyId, let ctx = context {
+            Self.storeRecommendation(storyId: sid, fingerprint: fingerprint, rawResponse: respData, context: ctx)
+            MediaEngineV1.beacon("duration: cache MISS->stored fp=\(fingerprint.prefix(8))")
+        }
+        return decoded
+    }
+
+    /// Stable fingerprint of the duration-recommendation inputs (creative intent + moments snapshot +
+    /// requested scope + prompt version), stripping volatile provenance keys so a reopen with unchanged
+    /// semantic content hashes identically (same lesson as the MusicPlan cache).
+    static func durationFingerprint(creativeIntent: JSONValue, moments: [JSONValue],
+                                    requestedScope: String?,
+                                    promptVersion: String = "duration_recommendation/1") -> String {
+        let volatileKeys: Set<String> = ["generated_at", "created_at", "updated_at", "timestamp",
+                                         "model_id", "prompt_version", "schema_version", "correlation_id"]
+        func strip(_ v: JSONValue) -> JSONValue {
+            switch v {
+            case .object(let d):
+                var out: [String: JSONValue] = [:]
+                for (k, val) in d where !volatileKeys.contains(k.lowercased()) { out[k] = strip(val) }
+                return .object(out)
+            case .array(let a): return .array(a.map(strip))
+            default: return v
+            }
+        }
+        let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
+        func canon(_ v: JSONValue) -> String {
+            (try? enc.encode(strip(v))).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+        let joined = [promptVersion, requestedScope ?? "", canon(creativeIntent),
+                      canon(.array(moments))].joined(separator: "|")
+        let digest = SHA256.hash(data: Data(joined.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func cachedRecommendation(storyId: UUID, fingerprint: String, context: ModelContext) -> DurationRecommendation? {
+        let desc = FetchDescriptor<DurationRecCacheModel>(predicate: #Predicate { $0.storyId == storyId })
+        guard let row = (try? context.fetch(desc))?.first, row.inputFingerprint == fingerprint,
+              let data = row.recommendationJSON.data(using: .utf8),
+              let v = try? JSONDecoder().decode(DurationRecommendation.self, from: data) else { return nil }
+        return v
+    }
+
+    static func storeRecommendation(storyId: UUID, fingerprint: String, rawResponse: Data, context: ModelContext) {
+        guard let json = String(data: rawResponse, encoding: .utf8) else { return }
+        let desc = FetchDescriptor<DurationRecCacheModel>(predicate: #Predicate { $0.storyId == storyId })
+        if let row = (try? context.fetch(desc))?.first {
+            row.recommendationJSON = json; row.inputFingerprint = fingerprint; row.updatedAt = .now
+        } else {
+            context.insert(DurationRecCacheModel(storyId: storyId, recommendationJSON: json, inputFingerprint: fingerprint))
+        }
+        try? context.save()
     }
 }

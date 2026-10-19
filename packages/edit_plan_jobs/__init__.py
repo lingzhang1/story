@@ -412,8 +412,12 @@ class JobStore:
                     ExpressionAttributeValues={":nc": {"N": str(n + 1)}, ":u": {"N": str(now)}})
                 self.enqueue(jid)
                 reenq.append(jid)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                # Do NOT swallow silently: a failing re-enqueue (e.g. the worker role missing sqs:SendMessage)
+                # strands the job in `queued` forever and is invisible. Surface it so it is diagnosable.
+                import json as _json
+                print(_json.dumps({"msg": "worker_reconcile_enqueue_error", "job_id": jid,
+                                   "error": f"{type(e).__name__}: {e}"[:300]}))
         return reenq
 
 

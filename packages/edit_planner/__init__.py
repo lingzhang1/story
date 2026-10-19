@@ -336,9 +336,184 @@ class EditPlanInputs:
 # Deterministic executability validator — the PRODUCTION hard gate.
 # Ported from evals/edit_planner. Returns [] when executable, else error strings.
 # ---------------------------------------------------------------------------
+import re as _re
+
+
+def _parse_target_clip_seconds(soft: str) -> float | None:
+    """Extract a PER-CLIP target duration from a pacing instruction, or None when the instruction is not a
+    clip-length ask (so 'make it more cinematic' never triggers the timing-only path). Requires BOTH a clip/
+    cut/shot/segment word AND an explicit seconds value, e.g. 'shorten each clip to around 5s', 'make the cuts
+    about 3 seconds', 'keep shots under 4 sec'. Conservative: anything ambiguous returns None and the request
+    takes the normal (model) path."""
+    low = (soft or "").lower()
+    if not low.strip():
+        return None
+    if not any(w in low for w in ("clip", "cut", "shot", "segment")):
+        return None
+    m = _re.search(r"(\d+(?:\.\d+)?)\s*(?:s\b|sec\b|secs\b|second|seconds)", low)
+    if not m:
+        m = _re.search(r"(?:around|about|under|to|~)\s*(\d+(?:\.\d+)?)", low)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val if 1.0 <= val <= 30.0 else None
+
+
+def _errors_are_non_visual(errs: list[str]) -> bool:
+    """Phase 3 targeted repair: True when EVERY validator error is numeric/structural — fixable from the plan
+    text + the exact errors without the model re-seeing contact sheets (duration, speed, source-range bounds,
+    ordering, native-audio, unknown-id, directive placement). KEEP images only when an error implicates what a
+    clip CONTAINS — today the single visual-judgement case is a source range overlapping NO useful_segment
+    (re-picking a usable range can benefit from frames). Conservative: any useful_segment marker keeps images."""
+    visual_markers = ("useful_segment",)
+    for e in errs:
+        low = str(e).lower()
+        if any(m in low for m in visual_markers):
+            return False
+    return True
+
+
+def _is_timing_only_revise(inputs: "EditPlanInputs") -> bool:
+    """A revise whose ONLY requested change is per-clip pacing/duration — no hard directives (which change
+    structure) and a soft_direction that parses as a clip-length target. These are the revises where honoring
+    the pacing legitimately changes the TOTAL duration, so the AI-recommended length must not block them."""
+    rc = inputs.revision_context or {}
+    if rc.get("mode") != "revise":
+        return False
+    if rc.get("directives"):
+        return False
+    return _parse_target_clip_seconds(rc.get("soft_direction") or "") is not None
+
+
+def _duration_target_source(inputs: "EditPlanInputs") -> str:
+    """Provenance of the NUMERIC target duration, independent of the editorial mode (Highlights/Full/Custom are
+    editorial PREFERENCES; their numeric length may still be AI-recommended). 'user_exact' => the user typed an
+    exact length and it is authoritative; 'ai_recommended' => the number came from a recommendation. Absent/
+    unknown provenance is treated as user_exact (the safe, strict default — we never weaken a length we are not
+    certain is only a recommendation)."""
+    rc = inputs.revision_context or {}
+    src = (rc.get("duration_target_source") or "").strip().lower()
+    return src if src in ("user_exact", "ai_recommended") else "user_exact"
+
+
+def _undershoot_tolerance_for(inputs: "EditPlanInputs") -> float | None:
+    """The effective undershoot floor for THIS operation. Returns the strict default for initial creation and
+    for any revise with an explicit user duration; returns None (no lower bound) ONLY for a timing-only revise
+    whose target length is AI-recommended, so honoring the user's pacing can shorten the whole video without
+    being rejected. Never relaxes the overshoot/feasibility checks — this governs the lower bound alone."""
+    if _is_timing_only_revise(inputs) and _duration_target_source(inputs) == "ai_recommended":
+        return None
+    return DURATION_UNDERSHOOT_TOLERANCE
+
+
+def _preservation_violation(base_plan: dict | None, revised: dict, rc: dict) -> str | None:
+    """Return a short human reason when a targeted revise's `revised` plan changed the base plan's CLIP SET
+    beyond what the request authorized, else None. Preservation is defined over the set of source clips used
+    (segment asset_ids, case-insensitive) — identity of WHAT footage appears, not its timing or order.
+
+      * timing-only / soft-only revise (no hard directives): the clip set must be IDENTICAL — no clip added,
+        none removed. (Order/duration/speed are allowed to change; that is what the revise does.)
+      * directive revise: only clips NAMED by the directives may enter or leave; every other base clip must
+        still be present and no unrelated clip may appear.
+
+    This is a backstop against a consulted model silently re-picking footage; it never fabricates success and
+    never substitutes a different video — on violation the caller keeps the user's existing version."""
+    if not isinstance(base_plan, dict):
+        return None
+    def _ids(p):
+        out = []
+        for s in (p.get("segments") or []):
+            a = s.get("asset_id")
+            if a:
+                out.append(str(a).lower())
+        return out
+    base_ids = set(_ids(base_plan))
+    rev_ids = set(_ids(revised))
+    if not base_ids:
+        return None
+    # Clips the directives explicitly authorize changing (their referenced asset ids, any case).
+    authorized = set()
+    for d in (rc.get("directives") or []):
+        for k in ("asset_id", "id", "moment_id", "target_id"):
+            v = d.get(k) if isinstance(d, dict) else None
+            if v:
+                authorized.add(str(v).lower())
+    removed = base_ids - rev_ids - authorized
+    added = rev_ids - base_ids - authorized
+    if removed and added:
+        return f"{len(removed)} clip(s) dropped and {len(added)} new clip(s) introduced"
+    if removed:
+        return f"{len(removed)} clip(s) you did not ask to remove were dropped"
+    if added:
+        return f"{len(added)} clip(s) you did not ask for were introduced"
+    return None
+
+
+def _classify_unsupported_ops(instruction: str) -> dict:
+    """Classify a revise instruction against MediaEngineV1's real capabilities, deterministically (no model).
+
+    Supported editing verbs (the renderer's actual scope): trim/shorten/lengthen, reorder/move, cut,
+    crossfade/fade/dissolve transitions, speed up/slow down (0.5-2.0x), native-audio keep/mute/duck, soundtrack
+    change, include/exclude/opening/ending a Moment. Unsupported (no renderer support): color grading, filters,
+    brightness/contrast/saturation/exposure/tint/warm/cool, glow/vignette/blur/sharpen, zoom/crop/reframe/pan,
+    stabilization, text/caption/sticker/overlay, green-screen.
+
+    Returns {verdict: 'supported'|'mixed'|'all_unsupported', unsupported: [matched terms], phrase: human list}.
+    'phrase' is a short natural list of what cannot be done, for the user-facing limitation message. The match
+    is word-boundary and case-insensitive; an empty/whitespace instruction is 'supported' (nothing to gate)."""
+    import re
+    text = (instruction or "").lower()
+    if not text.strip():
+        return {"verdict": "supported", "unsupported": [], "phrase": ""}
+    # Unsupported-capability vocabulary -> the human noun shown back to the user.
+    UNSUPPORTED = {
+        r"color[- ]?correct|colou?r grade|colou?r grading|white balance": "color correction",
+        r"\bfilter\b|\bfilters\b|\blut\b|instagram filter": "filters",
+        r"\bbright(er|ness)?\b|\bcontrast\b|\bsaturat|\bexposure\b|\bvibran|\btint\b|\bhue\b": "brightness/color adjustments",
+        r"\bwarm(er|th)?\b|\bcool(er)?\b|\bteal\b|cinematic colou?r|film look|color (tone|tint)|"
+        r"more (blue|green|red|orange|yellow|purple|pink|golden|vivid|colou?rful)|"
+        r"(blue|green|red|orange|yellow|purple|golden)r\b|make .*(sky|colou?rs?|grass|water|sunset) ": "color tone changes",
+        r"\bglow\b|\bvignette\b|\bbloom\b|light leak": "glow/vignette effects",
+        r"\bblur\b|\bsharpen\b|\bgrain\b|\bnoise\b": "blur/sharpen effects",
+        r"\bzoom\b|\bcrop\b|\breframe\b|\bpan\b|ken burns|re-?frame|punch in": "zoom/reframe",
+        r"\bstabili[sz]e|\bstabili[sz]ation|anti-?shake|smooth(ing)? shake": "stabilization",
+        r"\btext\b|\bcaption|\bsubtitle|\bsticker|\boverlay|\btitle card|lower third": "text/overlays",
+        r"green ?screen|chroma ?key|remove background|replace background": "background replacement",
+    }
+    # Supported editing vocabulary — presence of ANY of these alongside an unsupported term => MIXED. These are
+    # genuine edit VERBS/targets, not bare nouns like "clip"/"shot" which are commonly the OBJECT of an
+    # unsupported verb ("stabilize the clip", "blur the shot") and must not flip such a request to mixed.
+    SUPPORTED = (r"shorten|length|trim|\bcut\b|duration|pace|pacing|faster|slow(er)?|"
+                 r"\bspeed\b|reorder|rearrange|\bswap\b|opening|ending|move (moment|clip|shot|it)|"
+                 r"\binclude\b|\bexclude\b|\bremove\b|add moment|crossfade|\bfade\b|dissolve|transition|"
+                 r"\bmusic\b|soundtrack|\btrack\b|\bsong\b|native audio|\bmute\b|\bduck\b")
+    matched = []
+    for pat, noun in UNSUPPORTED.items():
+        if re.search(pat, text):
+            matched.append(noun)
+    if not matched:
+        return {"verdict": "supported", "unsupported": [], "phrase": ""}
+    # De-dup nouns, preserve order.
+    seen = set(); nouns = [n for n in matched if not (n in seen or seen.add(n))]
+    phrase = nouns[0] if len(nouns) == 1 else (", ".join(nouns[:-1]) + " or " + nouns[-1])
+    has_supported = bool(re.search(SUPPORTED, text))
+    return {"verdict": "mixed" if has_supported else "all_unsupported",
+            "unsupported": nouns, "phrase": phrase}
+
+
 def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     errs: list[str] = []
-    moments = {m["id"]: m for m in inputs.moments}
+    # Case-INSENSITIVE Moment-id space. Clients disagree on UUID case: the moments[] payload and segment
+    # asset_ids arrive lowercased (StoryCreationCoordinator.momentsPayload), but directive ids historically
+    # arrived UPPERCASE (UUID.uuidString). A case-sensitive lookup here rejected every segment as "not a known
+    # Moment id" on the first pass (forcing a repair call on every job) and let the opening/ending/order
+    # directive silently go unenforced. Normalizing the key space to lowercase makes id identity robust to
+    # any client's casing. (The iOS fix lowercases directives too; this is defense-in-depth so a future drift
+    # can never again break enforcement invisibly.)
+    moments = {str(m["id"]).lower(): m for m in inputs.moments}
     has_analysis = inputs.music_analysis is not None
     segs = plan.get("segments", [])
     # A model that HONESTLY declares the Story infeasible (feasible=false + a reason) is ALLOWED to return no
@@ -355,9 +530,9 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     if len(set(orders)) != len(orders):
         errs.append(f"duplicate order values: {orders}")
     for i, s in enumerate(segs):
-        aid = s.get("asset_id")
+        aid = (str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None)
         if aid not in moments:
-            errs.append(f"seg{i}: asset_id '{aid}' is not a known Moment id")
+            errs.append(f"seg{i}: asset_id '{s.get('asset_id')}' is not a known Moment id")
             continue
         dur = moments[aid]["duration_seconds"]
         tl = _segment_timeline(s)
@@ -410,13 +585,23 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     # video far SHORTER than requested feels broken/empty, so we keep the tight lower bound. A near-zero /
     # degenerate plan (the "model gave up" case) is still rejected by the lower bound. The repair pass still
     # nudges toward the exact target; this only governs when we ACCEPT vs reject.
+    #
+    # OPERATION-SCOPED duration precedence (owner decision 2026-10-18): the undershoot bound exists to reject a
+    # degenerate/empty plan against a length the USER asked for. But when the length was only AI-RECOMMENDED and
+    # the user's revise instruction is a timing-only pacing change ("shorten each clip to ~5s"), the user's
+    # revise intent OUTRANKS the AI's length guess — honoring the pacing may legitimately make the whole video
+    # shorter. In that one case we relax the undershoot floor so a correctly-shortened plan is NOT rejected (and
+    # therefore never silently re-planned). We do NOT touch overshoot, feasibility, speed, or source-range
+    # checks, and we do NOT relax anything for an EXPLICIT user duration or for initial creation. The policy is
+    # derived from the request's revision_context provenance; absent it, behavior is exactly as before.
+    undershoot_tol = _undershoot_tolerance_for(inputs)
     if total_out and not declared_infeasible:
         over = (total_out - target) / target     # >0 => longer than asked, <0 => shorter
         if over > DURATION_OVERSHOOT_TOLERANCE:
             errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
                         f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
-        elif over < -DURATION_UNDERSHOOT_TOLERANCE:
-            errs.append(f"total output {total_out:.1f}s is >{int(DURATION_UNDERSHOOT_TOLERANCE*100)}% "
+        elif undershoot_tol is not None and over < -undershoot_tol:
+            errs.append(f"total output {total_out:.1f}s is >{int(undershoot_tol*100)}% "
                         f"SHORT of target {target}s (lower bound)")
     if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
         errs.append("feasible=false but no infeasible_reason given")
@@ -460,9 +645,21 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     directives = ctx.get("directives") or {}
     if not isinstance(directives, dict) or not any(directives.get(k) for k in _DIRECTIVE_KEYS):
         return []
+
+    # Case-INSENSITIVE id comparison (see validate_plan). Directive ids historically arrived UPPERCASE while
+    # segment asset_ids / moments ids are lowercase; a raw == never matched, so opening/ending/order went
+    # silently unenforced and every "new version" came back as the same default edit. Lowercase both sides.
+    def _norm(v):
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [_norm(x) for x in v]
+        return v
+    directives = {k: _norm(val) for k, val in directives.items()}
+
     errs: list[str] = []
     segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
-    used = [s.get("asset_id") for s in segs]
+    used = [(str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None) for s in segs]
     used_set = set(used)
 
     def _known(mid: str) -> bool:
@@ -614,6 +811,18 @@ def preflight_directives(directives: dict, eligible_ids: set[str]) -> list[str]:
     inc_set, exc_set = set(inc), set(exc)
     for mid in (inc_set & exc_set):
         errs.append(f"Moment '{mid}' is both required and excluded")
+
+    # Over-exclusion feasibility (Phase 4): an exclude set that leaves too few eligible Moments can never be
+    # planned into a watchable edit. The planner would honestly fail 'invalid_after_repair' on it, which is an
+    # expensive way to learn a fact we already know here. Blocking it preflight turns a hard failure into an
+    # upfront clarify. Threshold: at least 2 Moments must remain (one-clip "edits" are not a Story). Counts the
+    # eligible set the client actually sent, so it is exact for this request.
+    if exc_set and eligible_ids:
+        remaining = len(eligible_ids - exc_set)
+        if remaining < 2:
+            errs.append(
+                f"Excluding those Moments leaves only {remaining} to build from — keep at least 2. "
+                "Exclude fewer Moments.")
     ordered_ids = {x for pair in (after_pairs + adj_pairs) for x in pair}
     if opening:
         ordered_ids.add(opening)
@@ -1008,11 +1217,14 @@ class RealEditPlannerEngine:
             "last_stop_reason": None, "last_output_tokens": 0, "max_tokens": self._max_tokens,
         }
 
-        def _call(user_content: str) -> dict:
+        def _call(user_content: str, images: list | None = None) -> dict:
             # Escalate the output cap on truncation: if the model stops at max_tokens (a truncated, usually
             # empty plan), retry ONCE at the ceiling before giving up. Proven root cause of the 24-Moment
             # 'no segments' 503. The retry is bounded (one escalation) so a genuinely runaway plan still fails
             # fast rather than looping.
+            # `images` defaults to the full payload; a repair may pass a SMALLER set (Phase 3) when the
+            # validator errors are purely numeric/structural and re-sending every contact sheet is wasted cost.
+            call_images = list(inputs.images) if images is None else images
             caps = [self._max_tokens]
             if self._max_tokens_ceiling > self._max_tokens:
                 caps.append(self._max_tokens_ceiling)
@@ -1022,7 +1234,7 @@ class RealEditPlannerEngine:
                     task=TASK, schema=SCHEMA, prompt_version=PROMPT_VERSION, system=self._system,
                     user_content=user_content, max_repair_attempts=2,
                     max_tokens=cap, temperature=0.0,
-                    images=list(inputs.images))   # MVP multimodal: contact sheets ride every call (incl. repair)
+                    images=call_images)
                 result = self._gw.generate_structured(req)  # raises StructuredOutputError/ProviderError
                 diag["model_calls"] += 1
                 u = result.usage
@@ -1036,6 +1248,18 @@ class RealEditPlannerEngine:
                     break   # not truncated — accept this result
                 diag["truncation_escalations"] = diag.get("truncation_escalations", 0) + 1
                 # else: truncated — loop retries at the higher cap (if any left)
+            # Per-call diagnostics: which model actually served this call, and (if the primary failed over)
+            # WHY. last_fallback/last_error reflect THIS call; the end-of-generate read only sees the last one,
+            # so accumulate here. served_by is the fallback model when a fallback happened, else the primary.
+            fb = bool(getattr(self._gw, "last_fallback", False))
+            err = getattr(self._gw, "last_error", None)
+            served = getattr(self._gw, "fallback_model_id", None) if fb else getattr(self._gw, "primary_model_id", None)
+            diag.setdefault("calls", []).append({"fallback": fb, "served_by": served,
+                                                 "primary_error": (err if fb else None)})
+            if fb:
+                diag["any_fallback"] = True
+                if err and not diag.get("first_fallback_error"):
+                    diag["first_fallback_error"] = err   # WHY Opus failed on the first fail-over
             return result.data
 
         def _call_text(user_content: str) -> str:
@@ -1062,6 +1286,78 @@ class RealEditPlannerEngine:
         # validator passes AND there is no soft_direction (a creative request still needs the model). Any miss
         # falls through to normal planning (the targeted single-call path, since critique stays off by default).
         rc = inputs.revision_context or {}
+
+        # Phase 5 — UNSUPPORTED-OPERATION PREFLIGHT (owner 2026-10-18). MediaEngineV1 can only trim, order,
+        # set output duration, cut/crossfade/fade, 0.5-2.0x speed, native-audio policy and aspect-fit. It has NO
+        # color grading, filters, brightness/contrast/saturation, glow/vignette/blur, zoom/crop/reframe or
+        # stabilization. Without this guard an unsupported revise ("make it warmer", "add a glow") has no hard
+        # directive and no clip-length target, so it falls to the model, which returns SOME re-cut plan — a
+        # silent substitution of a different edit for the edit the user asked for. So, for a REVISE, we classify
+        # the instruction deterministically BEFORE planning: if the WHOLE actionable instruction is unsupported
+        # we keep the user's version and return a clear limitation (never plan, never claim success); if it is
+        # MIXED (some supported, some not) we record which parts cannot be applied so the supported part can run
+        # with an honest note. Initial creation is never gated here.
+        if rc.get("mode") == "revise":
+            _unsup = _classify_unsupported_ops(rc.get("soft_direction") or "")
+            if _unsup["verdict"] == "all_unsupported":
+                diag["final"] = "unsupported_operation"
+                diag["unsupported_ops"] = _unsup["unsupported"]
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "That edit isn't something this app can do yet — it only re-cuts, re-times, reorders and "
+                    f"sets transitions/soundtrack, not {_unsup['phrase']}. Your current version was kept "
+                    "unchanged.")
+            if _unsup["verdict"] == "mixed":
+                diag["unsupported_ops"] = _unsup["unsupported"]
+                diag["partial_support_note"] = (
+                    f"Applied the supported part; this app can't yet do {_unsup['phrase']}.")
+
+        # 0a: TIMING-ONLY deterministic fast path (preservation contract). A pure pacing/duration revise
+        # ("shorten each clip to ~5s", "make the clips about 3 seconds") must PRESERVE which clips are used,
+        # their order, source ranges, soundtrack, native-audio and transitions — only re-timing each segment.
+        # When a revise carries the exact base_plan and a parseable target clip length, we re-time
+        # deterministically (ZERO model calls) and adopt it only if the frozen validator passes. This is what
+        # keeps "shorten the clips" from silently re-picking the whole edit. Requires NO hard directives that
+        # would change structure (those take the structural path below); a bare pacing soft_direction is fine.
+        if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
+                and not rc.get("directives")):
+            target = _parse_target_clip_seconds(rc.get("soft_direction") or "")
+            if target is not None:
+                from .deterministic_revision import apply_deterministic_retime
+                # Duration precedence: honor the pacing. Only when the target length is a USER-EXACT requirement
+                # do we lift shot durations to keep the total near it; for an AI-RECOMMENDED target we let the
+                # video shorten (the relaxed undershoot floor accepts it) rather than uniformly lengthening
+                # shots just to satisfy a number the user never fixed.
+                _tgt = inputs.creative_intent.get("target_duration_seconds")
+                _exact = _duration_target_source(inputs) == "user_exact"
+                _min_total = (float(_tgt) * (1.0 - DURATION_UNDERSHOOT_TOLERANCE)
+                              if _exact and isinstance(_tgt, (int, float)) and _tgt > 0 else None)
+                retimed = apply_deterministic_retime(rc["base_plan"], target, min_total_seconds=_min_total)
+                if retimed is not None:
+                    retimed, rnotes = normalize_plan(retimed, inputs)
+                    rt_errs = validate_plan(retimed, inputs)
+                    if not rt_errs and retimed.get("feasible") is not False:
+                        diag["final"] = "executable"
+                        diag["revision_path"] = "deterministic_retime"
+                        diag["model_calls"] = 0
+                        diag["first_pass_executable"] = True
+                        diag["normalize_notes"] = rnotes
+                        self.last_diagnostics = diag
+                        return _to_contract(retimed, inputs)
+                    diag["retime_reject_errors"] = [str(e)[:120] for e in rt_errs[:5]]
+                # Point 7 (owner 2026-10-18): a pure pacing/timing revise must NEVER fall through to
+                # unrestricted model replanning on a validation failure — re-timing is a deterministic clip-level
+                # transform that the model cannot improve, and a model replan is exactly the silent re-pick we
+                # are preventing. So a retime that cannot be made valid is surfaced as a clear limitation and the
+                # user's existing version is kept, rather than silently replanned. (In practice the trim-at-
+                # normal-speed transform only ever shortens within an already-valid window, so this is a
+                # belt-and-braces guard, visible via retime_reject_errors.)
+                diag["revision_path"] = "deterministic_retime_infeasible"
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "This pacing change could not be applied to your video without re-cutting it. "
+                    "Your current version was kept unchanged.")
+
         if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
                 and rc.get("directives") and not (rc.get("soft_direction") or "").strip()):
             from .deterministic_revision import apply_deterministic_revision
@@ -1078,10 +1374,27 @@ class RealEditPlannerEngine:
                     return _to_contract(fast, inputs)
             diag["revision_path"] = "deterministic_fallthrough"
 
+        # SAFE-FALLBACK BOUNDARY (owner decision 2026-10-18): a TARGETED revise that reached here (both
+        # deterministic fast paths missed) must NOT silently become an unrestricted from-scratch replan that is
+        # free to re-pick every clip. The only from-scratch replans allowed are: initial creation (no revise
+        # context), Explore (mode=explore, which intends a fresh alternative), and a revise that EXPLICITLY
+        # authorizes broad redesign (revision_context.allow_broad_replan == True). Every other targeted revise
+        # takes the base-plan-carrying call (_build_user already injects the revision block with the base plan +
+        # preservation framing) and is then PRESERVATION-CHECKED against the base before we accept it. If the
+        # model's revise changed clips it was not asked to change, we reject with a clear limitation rather than
+        # ship a silent re-pick. (This increment enforces the boundary + the check; richer bounded repairs are
+        # a later increment.)
+        _is_targeted_revise = (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
+                               and not rc.get("allow_broad_replan"))
+
         # 1-3: initial generation, safe normalization, executability validation.
         plan = _call(_build_user(inputs))
         raw_errs = validate_plan(plan, inputs)
         diag["first_pass_executable"] = not raw_errs
+        if raw_errs:
+            # WHAT the model's first plan violated (truncated) — so a repair/fallback is explainable instead
+            # of guessed. The first 5 error strings are plenty to classify duration vs speed vs directive.
+            diag["first_pass_errors"] = [str(e)[:160] for e in raw_errs[:5]]
         plan, notes = normalize_plan(plan, inputs)
         if notes:
             diag["normalized"] = True
@@ -1094,7 +1407,15 @@ class RealEditPlannerEngine:
                 break
             diag["executability_repairs_used"] += 1
             diag["repaired"] = True
-            plan = _call(_build_repair(inputs, plan, errs))
+            # Phase 3 — targeted repair payload. A repair whose errors are purely NUMERIC/STRUCTURAL (duration,
+            # speed, source range, ordering, native-audio, directive placement, unknown-id) does not need the
+            # model to re-see pixels — the fix is arithmetic/positional over the plan text + the exact errors.
+            # So we drop the full contact-sheet payload for those repairs (big cost saving). We KEEP images only
+            # when an error implicates what a clip CONTAINS (useful-segment coverage) — i.e. a judgement that
+            # genuinely benefits from frames — never assuming reduced visual input is free (owner safeguard).
+            repair_images = [] if _errors_are_non_visual(errs) else list(inputs.images)
+            diag["repair_images_sent"] = len(repair_images)
+            plan = _call(_build_repair(inputs, plan, errs), images=repair_images)
             plan, notes = normalize_plan(plan, inputs)
             if notes:
                 diag["normalized"] = True
@@ -1115,6 +1436,22 @@ class RealEditPlannerEngine:
             diag["final"] = "infeasible"
             self.last_diagnostics = diag
             raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
+
+        # 6a: PRESERVATION GATE (owner decision 2026-10-18). For a targeted revise (not broad-replan), the model
+        # plan must not have changed the base plan's CLIP SET beyond what the request authorized. A timing-only
+        # or soft-pacing revise is NOT allowed to drop or introduce clips at all; a structural directive revise
+        # may only touch the clips its directives name. If the accepted plan silently re-picked footage, we
+        # reject with a clear limitation rather than ship a different video. This is the backstop that makes the
+        # no-silent-replan boundary observable even when the model is consulted. Feasibility already passed.
+        if _is_targeted_revise:
+            pres_err = _preservation_violation(rc.get("base_plan"), plan, rc)
+            if pres_err:
+                diag["final"] = "preservation_violation"
+                diag["preservation_error"] = pres_err
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(
+                    "This revision could not be applied without changing parts of your video you did not ask "
+                    f"to change ({pres_err}). Your current version was kept unchanged.")
 
         # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
         # after we already hold a VALID executable plan and only when a creative brief exists to critique

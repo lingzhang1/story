@@ -83,13 +83,17 @@ struct ResolvedDirectives: Equatable {
     /// Encode to the backend wire shape (lowercased uuid strings). Omits empty slots so an absent directive is
     /// simply not present (behavior-unchanged on the backend).
     func wireDictionary() -> [String: Any] {
+        // Directive ids MUST be lowercased to match the moments[] ids and segment asset_ids, which the
+        // moments payload builder (StoryCreationCoordinator.momentsPayload) lowercases. The backend compares
+        // directive ids against those ids; an UPPERCASE uuidString here never matches -> the opening/ending/
+        // order directive is silently unenforced (every "new version" comes back as the same default edit).
         var d: [String: Any] = [:]
-        if !mustInclude.isEmpty { d["must_include"] = mustInclude.map { $0.uuidString } }
-        if !exclude.isEmpty { d["exclude"] = exclude.map { $0.uuidString } }
-        if let o = opening { d["opening"] = o.uuidString }
-        if let e = ending { d["ending"] = e.uuidString }
-        if !orderAfter.isEmpty { d["order_after"] = orderAfter.map { $0.map { $0.uuidString } } }
-        if !orderAdjacent.isEmpty { d["order_adjacent"] = orderAdjacent.map { $0.map { $0.uuidString } } }
+        if !mustInclude.isEmpty { d["must_include"] = mustInclude.map { $0.uuidString.lowercased() } }
+        if !exclude.isEmpty { d["exclude"] = exclude.map { $0.uuidString.lowercased() } }
+        if let o = opening { d["opening"] = o.uuidString.lowercased() }
+        if let e = ending { d["ending"] = e.uuidString.lowercased() }
+        if !orderAfter.isEmpty { d["order_after"] = orderAfter.map { $0.map { $0.uuidString.lowercased() } } }
+        if !orderAdjacent.isEmpty { d["order_adjacent"] = orderAdjacent.map { $0.map { $0.uuidString.lowercased() } } }
         return d
     }
 
@@ -97,16 +101,18 @@ struct ResolvedDirectives: Equatable {
     /// absent directive set leaves the request byte-identical to today.
     func jsonValue() -> JSONValue? {
         if isEmpty { return nil }
+        // Lowercase every id (see wireDictionary): moments[] ids + segment asset_ids are lowercased, so the
+        // backend's directive enforcement only matches when directive ids are lowercase too.
         var o: [String: JSONValue] = [:]
-        if !mustInclude.isEmpty { o["must_include"] = .array(mustInclude.map { .string($0.uuidString) }) }
-        if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString) }) }
-        if let op = opening { o["opening"] = .string(op.uuidString) }
-        if let en = ending { o["ending"] = .string(en.uuidString) }
+        if !mustInclude.isEmpty { o["must_include"] = .array(mustInclude.map { .string($0.uuidString.lowercased()) }) }
+        if !exclude.isEmpty { o["exclude"] = .array(exclude.map { .string($0.uuidString.lowercased()) }) }
+        if let op = opening { o["opening"] = .string(op.uuidString.lowercased()) }
+        if let en = ending { o["ending"] = .string(en.uuidString.lowercased()) }
         if !orderAfter.isEmpty {
-            o["order_after"] = .array(orderAfter.map { .array($0.map { .string($0.uuidString) }) })
+            o["order_after"] = .array(orderAfter.map { .array($0.map { .string($0.uuidString.lowercased()) }) })
         }
         if !orderAdjacent.isEmpty {
-            o["order_adjacent"] = .array(orderAdjacent.map { .array($0.map { .string($0.uuidString) }) })
+            o["order_adjacent"] = .array(orderAdjacent.map { .array($0.map { .string($0.uuidString.lowercased()) }) })
         }
         return .object(o)
     }
@@ -154,7 +160,75 @@ struct ResolutionResult: Equatable {
     var needsClarification: Bool { !unresolved.isEmpty }
 }
 
+/// Narrowly-scoped MUSIC intent extracted from a Stage 2 Creative Direction string (owner Music-Routing §1/§3).
+/// This is the SMALLEST additive extension to the existing deterministic interpreter — NOT a second parser
+/// system and NOT an AI pass. It separates three disjoint concerns so each routes to the right consumer:
+///   • `preference` — an EXPLICIT soundtrack preference (genre/mood words like "gentle acoustic",
+///     "energetic electronic"). Routes to MusicPlan (MusicDirection). nil when no explicit music words appear.
+///   • `beatSync` — "match the cuts to the music" / "sync to the beat". Routes to the EDIT planner's
+///     soft_direction only; it must NOT change soundtrack selection (§1, test 2).
+/// Generic VISUAL language ("make the cuts faster", "most striking footage") produces NEITHER — never a music
+/// preference (§3: no fabrication from visual language).
+struct ParsedMusicIntent: Equatable {
+    /// An explicit soundtrack preference phrase + the mood tags it maps to (lowercased). nil => no music words.
+    var preference: (phrase: String, moodTags: [String])?
+    /// True when the user asked to align the edit to the music/beat (edit-side only; no track change).
+    var beatSync: Bool
+
+    static func == (l: ParsedMusicIntent, r: ParsedMusicIntent) -> Bool {
+        l.beatSync == r.beatSync && l.preference?.phrase == r.preference?.phrase
+            && l.preference?.moodTags == r.preference?.moodTags
+    }
+    var isEmpty: Bool { preference == nil && !beatSync }
+}
+
 enum MomentReferenceResolver {
+    // Narrow, EXPLICIT music vocabulary (owner §3: no fabrication from generic visual language). Each entry is
+    // a soundtrack genre/mood the user can name; mapped to lowercased mood tags that MusicDirection understands.
+    // Deliberately small and musical — "cinematic", "acoustic", "electronic", etc. — so a visual word like
+    // "faster"/"striking" never produces a music preference.
+    private static let musicVocabulary: [(word: String, moods: [String])] = [
+        ("acoustic", ["acoustic", "intimate"]), ("gentle", ["calm", "gentle"]), ("soft", ["calm"]),
+        ("calm", ["calm"]), ("mellow", ["calm"]), ("ambient", ["atmospheric"]), ("atmospheric", ["atmospheric"]),
+        ("cinematic", ["cinematic"]), ("epic", ["epic"]), ("dramatic", ["cinematic", "epic"]),
+        ("emotional", ["emotional"]), ("uplifting", ["uplifting"]), ("dreamy", ["dreamy"]),
+        ("energetic", ["energetic"]), ("upbeat", ["energetic"]), ("high energy", ["energetic"]),
+        ("electronic", ["electronic", "energetic"]), ("edm", ["electronic", "energetic"]),
+        ("hip hop", ["hip hop"]), ("hip-hop", ["hip hop"]), ("rock", ["rock"]), ("pop", ["pop"]),
+        ("jazz", ["jazz"]), ("classical", ["classical"]), ("orchestral", ["orchestral", "cinematic"]),
+        ("folk", ["folk", "acoustic"]), ("piano", ["piano"]), ("guitar", ["acoustic"]),
+    ]
+
+    /// Classify the Stage 2 free text into disjoint music concerns WITHOUT a second AI pass (owner §3). An
+    /// EXPLICIT music preference requires a music CONTEXT word ("music"/"soundtrack"/"song"/"track"/"beat"/
+    /// "tune") in the sentence AND a vocabulary word — so "energetic MUSIC" is a preference but a bare
+    /// "energetic opening" (visual) is not (§3: no fabrication from visual language). Beat-sync is detected
+    /// separately and never implies a track change (§1, test 2).
+    static func parseMusicIntent(_ text: String) -> ParsedMusicIntent {
+        let lower = text.lowercased()
+        guard !lower.isEmpty else { return ParsedMusicIntent(preference: nil, beatSync: false) }
+        // Beat-sync / "match the music": edit-side alignment only. Covers "match ... (to the) music/beat",
+        // "sync to the beat", "on the beat", "to the music", "match the cuts".
+        let beatSync = ["match the music", "match to the music", "to the music", "match the cuts",
+                        "match cuts", "to the beat", "on the beat", "sync to", "beat sync", "beat-sync",
+                        "match the beat", "hit the beat"].contains { lower.contains($0) }
+        // Music preference requires an explicit music-context word so visual language can never be mistaken.
+        let hasMusicContext = ["music", "soundtrack", "song", "track", "tune", "score"].contains { lower.contains($0) }
+        var preference: (phrase: String, moodTags: [String])? = nil
+        if hasMusicContext {
+            var moods: [String] = []
+            var matched: [String] = []
+            for entry in musicVocabulary where lower.contains(entry.word) {
+                matched.append(entry.word)
+                for m in entry.moods where !moods.contains(m) { moods.append(m) }
+            }
+            if !moods.isEmpty {
+                preference = (phrase: matched.joined(separator: " "), moodTags: moods)
+            }
+        }
+        return ParsedMusicIntent(preference: preference, beatSync: beatSync)
+    }
+
     /// Parse typed "Moment N" references from free text. Deterministic, order-preserving. Recognizes the four
     /// supported forms (owner #3): include / exclude / start-with (opening) / end-with (ending). Anything not
     /// matching a supported pattern is left for the planner as free text (soft direction) — NOT invented.
@@ -167,7 +241,7 @@ enum MomentReferenceResolver {
         // ending; include/exclude verbs. Anything unmatched stays free-text soft direction (never invented).
         let patterns: [(DirectiveSlot, String)] = [
             // OPENING — verb-before-number ("start with / open on / begin with moment 5")
-            (.opening, #"(?:start|open|begin|lead)(?:ing)?\s+(?:with|on|off\s+with)?\s*moment\s+#?(\d+)"#),
+            (.opening, #"(?:start|open|begin|lead)(?:ing)?\s+(?:with|from|on|off\s+with)?\s*moment\s+#?(\d+)"#),
             // OPENING — number-before-cue ("use moment 5 to start", "moment 5 first", "moment 5 to open")
             (.opening, #"moment\s+#?(\d+)\s+(?:to\s+)?(?:start|open|begin|first|lead|up\s+front|at\s+the\s+(?:start|beginning)|as\s+the\s+(?:opening|first))"#),
             // ENDING — verb-before-number ("end with / finish on / close with moment 8")

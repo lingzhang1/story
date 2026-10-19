@@ -15,6 +15,10 @@ struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
+    /// When set, this host launches a CREATE ANOTHER VERSION from that parent (Explore + Customize), not a
+    /// fresh original create. Nil = fresh original create. Either way this screen NEVER reopens an existing
+    /// result — StoryHomeView decides reopen vs create at the Create tap; the preview is always a create.
+    var forceNewVersionFrom: GeneratedOutputModel? = nil
 
     // R-c Batch B: coordinator-driven create/result navigation. The visible Create
     // button is still an intentional disabled state (Batch C flips availability on
@@ -23,6 +27,11 @@ struct CreateStoryPreviewView: View {
     // to open the Result screen for an existing good output or start a new render.
     @State private var showCreating = false
     @State private var reopenOutput: GeneratedOutputModel?
+    // P0 recovery: when a reopened Story has a recoverable unfinished operation, route into the Creating
+    // screen in resume mode (reuse the job, no re-inference) instead of showing the redundant create preview.
+    @State private var resumePreresolvedMusic: StoryCreationCoordinator.MusicSelection?
+    @State private var showResuming = false
+    @State private var recoveryChecked = false
     /// Creative Revision Foundation: the parent output a "Create a new version" (Explore) is derived FROM.
     /// Set by handleRecreate; threaded into StoryCreatingView so the coordinator re-plans version-aware. nil
     /// for a first/original create.
@@ -40,6 +49,9 @@ struct CreateStoryPreviewView: View {
     @State private var recommendingDuration = false
     @State private var durationRec: DurationRecommendation?
     @State private var durationNoMaterial = false
+    // Stage 2 music-routing: set when an explicit Stage 2 music preference conflicts with a user-authored
+    // MusicDirection — surfaced as an advisory (owner §2), never a silent overwrite.
+    @State private var musicConflictMessage: String?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -92,7 +104,8 @@ struct CreateStoryPreviewView: View {
             let payload = EditPlanRequestBuilder.momentsPayload(for: story, context: context)
             let rec: DurationRecommendation? = await {
                 guard let p = payload else { return nil }
-                return await durationService.recommend(creativeIntent: p.creativeIntent, moments: p.moments)
+                return await durationService.recommend(creativeIntent: p.creativeIntent, moments: p.moments,
+                                                       storyId: story.id, context: context)
             }()
             await MainActor.run {
                 recommendingDuration = false
@@ -115,14 +128,51 @@ struct CreateStoryPreviewView: View {
     }
 
     /// Customize Your Story accept: persist BOTH the chosen duration AND the user's EXPLICIT sound preference
-    /// (authoritative — survives relaunch/regeneration), then continue the unchanged music flow.
-    private func acceptCustomize(seconds: Double, sound: SoundPreference, mode: String, approach: EditingApproach) {
+    /// (authoritative — survives relaunch/regeneration), PLUS the optional Stage 2 Creative Direction (resolved
+    /// hard directives + soft free text), then continue the unchanged music flow. The directives/soft are the
+    /// ONE-TIME creation-time instructions — composeRevisionContext folds them for the ORIGINAL create only, so
+    /// a later "Create Another Version" never inherits them. Draft text + chips persist so a failed generation
+    /// or navigation keeps what the user typed.
+    private func acceptCustomize(seconds: Double, sound: SoundPreference, mode: String, approach: EditingApproach,
+                                 directives: ResolvedDirectives?, soft: String, chipIds: [UUID],
+                                 music: ParsedMusicIntent) {
         durationRec = nil
         story.intentTargetDurationSeconds = (seconds * 10).rounded() / 10
         story.soundPreferenceExplicit = sound.rawValue   // explicit choice; never overwritten by inference
         story.editorialMode = mode                        // highlights|full|custom -> edit-plan request breadth
         story.editingApproachExplicit = approach.rawValue // storytelling|visual_first -> planning path
+        // Stage 2 Creative Direction — persist resolved HARD directives (stable UUIDs) + the SOFT text draft.
+        // nil directives => clear any stale persisted set (empty input preserves prior behavior). Never touches
+        // the factual Story description (intentText). Beat-sync lives INSIDE `soft` (edit-planner only) — it is
+        // intentionally not routed to music, so matching cuts to the music never changes the soundtrack (§1).
+        story.creativeDirectivesJSON = directives?.toWireJSON()
+        let trimmedSoft = soft.trimmingCharacters(in: .whitespacesAndNewlines)
+        story.creativeDirectionText = trimmedSoft.isEmpty ? nil : trimmedSoft
         try? context.save()
+        // Route an EXPLICIT music PREFERENCE to MusicPlan via MusicDirection (owner §1/§2). A user-authored
+        // direction is authoritative — do NOT silently overwrite; surface the conflict and keep theirs. When
+        // none is user-authored, the deliberate Stage 2 instruction becomes the authored direction so the
+        // downstream music recommender uses it. Music-only: this regenerates nothing else (§4) — AU/Guide/
+        // Coverage are independent; it just bumps the MusicDirection fingerprint the MusicPlan cache compares.
+        if let pref = music.preference {
+            let coord = MusicDirectionCoordinator(context: context)
+            if coord.isUserAuthored(for: story.id) {
+                let existing = coord.direction(for: story.id)?.moodTags ?? []
+                // Surface only a MATERIAL conflict (the requested moods are not already covered).
+                if !Set(pref.moodTags).isSubset(of: Set(existing)) {
+                    musicConflictMessage = "You asked for “\(pref.phrase)” music, but this Story already has a "
+                        + "music feel you set earlier. I kept your earlier choice. Change it from the music "
+                        + "controls if you want “\(pref.phrase)” instead."
+                }
+                // else: compatible — nothing to do, the authored direction already covers it.
+            } else {
+                let moods = pref.moodTags
+                let summary = "A \(moods.joined(separator: " · ")) soundtrack"
+                let dto = MusicDirectionContractDTO(summary: summary, moodTags: moods, energy: nil,
+                                                    progression: nil, rawUserDescription: pref.phrase)
+                coord.save(userEdit: dto, for: story.id)   // deliberate Stage 2 instruction -> authored
+            }
+        }
         beginMusicFlow()
     }
 
@@ -236,91 +286,57 @@ struct CreateStoryPreviewView: View {
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Custom back header (consistent with the rest of the product).
-                HStack(spacing: 12) {
-                    Button { dismiss() } label: {
-                        Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                            .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("Back")
-                    Spacer()
-                }
-                StoryEyebrow(text: story.title.displayTitle)
-                Text("Here's what I'm working with.")
-                    .font(StoryTheme.display(24)).foregroundStyle(StoryTheme.cream)
-
-                if story.moments.isEmpty {
-                    StoryEmptyState(text: "No moments yet. Shoot one first.")
-                } else {
-                    LazyVGrid(columns: cols, spacing: 8) {
-                        ForEach(story.moments.sorted(by: { $0.createdAt < $1.createdAt })) { m in
-                            thumb(m)
-                        }
-                    }
-                    Text("\(story.moments.count) moment\(story.moments.count == 1 ? "" : "s")")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
-                    Text("Story will choose the moments that work best.")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
-                }
-
-                // Music — now AVAILABLE (R-d): Story recommends a soundtrack and you choose it in the next
-                // step. Honest copy, no track named here (that happens in the picker after you tap Create).
-                VStack(alignment: .leading, spacing: 6) {
-                    StoryEyebrow(text: "Music")
-                    Text("Story will suggest a soundtrack — you'll choose it next, or create without music.")
-                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
-                }
-
-                // Create — REAL consumer action (R-c Batch C). Enabled only when the Story is plannable
-                // (>=1 Moment with a resolvable file AND a completed MomentUnderstanding — same rule as
-                // EditPlanRequestBuilder). Tap -> ReopenDecision (existing good output -> Result; else Creating).
-                // Duplicate guard: the button also disables while a flow is already active for this Story.
-                let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
-                let canCreate = readiness.isPlannable && !isCreateFlowActive
-                VStack(alignment: .leading, spacing: 8) {
-                    if canCreate {
-                        StoryPrimaryButton(title: "Create my Story") { startCreate() }
-                    } else {
-                        StoryUnavailableButton(title: "Create my Story", note: readiness.copy)
-                    }
-                    if readiness.isPlannable, case .pendingAnalysis = readiness {
-                        // Honest: a plan uses only the ready moments; the rest are still analyzing.
-                        Text(readiness.copy)
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                    }
-                }
-                .padding(.top, 4)
-
-                #if DEBUG
-                if AppMode.current.showsDiagnostics {
-                    StoryEyebrow(text: "DEBUG · dev mock output")
-                    Button("Generate mock output (dev only)") {
-                        try? useCases.createStoryOutput(for: story)
-                    }
-                    .font(StoryTheme.body(13)).tint(StoryTheme.gold)
-                    if !story.generatedOutputs.isEmpty {
-                        Text("mock outputs: \(story.generatedOutputs.count)")
-                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                    }
-                }
-                #endif
-
-                Spacer(minLength: 20)
+        // Pure flow host — NEVER the old "Here's what I'm working with" grid. This screen is reached only when
+        // a create is actually needed (StoryHomeView routes an existing result straight to the Result screen),
+        // and onAppear immediately starts the flow (duration -> Customize -> music -> Creating). We show only a
+        // minimal preparing state behind those sheets so there is no redundant resting page.
+        VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                Button { dismiss() } label: {
+                    Text("←").font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                        .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Back")
+                Spacer()
             }
             .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
+            Spacer()
+            ProgressView().tint(StoryTheme.gold)
+            Text("Preparing your Story…")
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
+        .onAppear {
+            guard !recoveryChecked else { return }
+            recoveryChecked = true
+            // This host ONLY starts a create (StoryHomeView routes reopen -> Result and in-flight resume
+            // elsewhere). It deliberately does NOT do recovery routing — doing so here raced the app-level
+            // PendingOperationRecovery on the SAME op and stuck the UI in a "Preparing" loop. A Create Another
+            // Version from a parent (Explore + Customize), else a fresh original create.
+            if let parent = forceNewVersionFrom {
+                MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
+                handleRecreate(from: parent)
+            } else {
+                MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8))")
+                beginCreateFlow()
+            }
+        }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
         // renders exactly that track and self-manages its Result. Reopen -> Result directly.
-        .navigationDestination(isPresented: $showCreating) {
+        // These are presented as fullScreenCover (NOT navigationDestination): this host is itself a pushed
+        // view, and a nested navigationDestination set from onAppear / after a sheet dismissal fires
+        // unreliably on a pushed view (it silently dropped the Creating push, so the edit-plan job was never
+        // submitted). A cover is reliable regardless of nav-stack timing.
+        .fullScreenCover(isPresented: $showCreating) {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
-                              onRequestRecreate: { src in handleRecreate(from: src) })
+                              onRequestRecreate: { src in handleRecreate(from: src) },
+                              onCompleted: { out in showCreating = false; reopenOutput = out })
         }
-        .navigationDestination(item: $reopenOutput) { output in
+        .fullScreenCover(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
                             onRecreate: { src in handleRecreate(from: src) })
         }
@@ -338,16 +354,38 @@ struct CreateStoryPreviewView: View {
                 initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
                 initialEditingApproach: story.effectiveEditingApproach,
                 visualFirstAvailable: StoryMultimodalPlanning.enabled,
-                onCreate: { seconds, sound, mode, approach in
-                    acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach) },
+                numbering: StoryMomentNumbering(story: story.moments),
+                momentForId: { id in story.moments.first { $0.id == id } },
+                initialCreativeDirection: story.creativeDirectionText ?? "",
+                // Seed ONLY must_include as visual chips. Chips are an INCLUDE-only control
+                // (CustomizeYourStoryView maps every chip to slot .include), so folding opening/ending/exclude
+                // ids in here silently DOWNGRADES them to must_include on every round-trip through this sheet —
+                // the opening directive was being destroyed, which is why "Start with Moment N" never moved the
+                // clip to the front. opening/ending survive via the typed creativeDirectionText above, not chips.
+                initialReferenceChipIds: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)
+                    .map { $0.mustInclude } ?? [],
+                onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
+                    acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
+                                    directives: directives, soft: soft, chipIds: chipIds, music: music) },
                 onCancel: { durationRec = nil })
                 .presentationDetents([.large])
+                // Force a FRESH view identity each time the sheet opens. CustomizeYourStoryView seeds its
+                // `creativeDirection` @State once from initialCreativeDirection; .sheet(item:) alone can reuse
+                // the view identity across presentations, so without this the editor keeps a STALE seed and the
+                // user's latest typed instruction is silently replaced by a prior operation's persisted text at
+                // submit (observed: "Start from Moment 15" submitted instead of the freshly typed input).
+                // rec.id is a fresh UUID per presentation, so this re-runs init and re-seeds the editor.
+                .id(rec.id)
         }
         .alert("Keep shooting", isPresented: $durationNoMaterial) {
             Button("OK", role: .cancel) { durationNoMaterial = false }
         } message: {
             Text("There isn't enough usable footage yet to build a Story. Capture a few more Moments and try again.")
         }
+        .alert("Kept your music choice", isPresented: Binding(
+            get: { musicConflictMessage != nil }, set: { if !$0 { musicConflictMessage = nil } })) {
+            Button("OK", role: .cancel) { musicConflictMessage = nil }
+        } message: { Text(musicConflictMessage ?? "") }
         .overlay {
             if resolvingMusic || preparingSelection || recommendingDuration {
                 ZStack {

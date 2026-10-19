@@ -56,11 +56,21 @@ enum StoryImportCopy {
     }
 }
 
+/// One imported video + the ORIGINAL metadata recovered from its embedded container (Camera Metadata P0).
+/// `capturedAt`/`latitude`/`longitude` are nil when the file carried none ("unknown", never fabricated).
+struct ImportedMedia: Equatable {
+    let path: String
+    let duration: Double
+    var capturedAt: Date? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+}
+
 extension View {
     func photosPickerSheet(
         isPresented: Binding<Bool>,
         onProgress: @escaping (ImportProgress) -> Void = { _ in },
-        onPicked: @escaping ([(path: String, duration: Double)]) -> Void
+        onPicked: @escaping ([ImportedMedia]) -> Void
     ) -> some View {
         modifier(PhotosPickerModifier(isPresented: isPresented, onProgress: onProgress, onPicked: onPicked))
     }
@@ -69,7 +79,7 @@ extension View {
 private struct PhotosPickerModifier: ViewModifier {
     @Binding var isPresented: Bool
     let onProgress: (ImportProgress) -> Void
-    let onPicked: ([(path: String, duration: Double)]) -> Void
+    let onPicked: ([ImportedMedia]) -> Void
     @State private var selection: [PhotosPickerItem] = []
 
     func body(content: Content) -> some View {
@@ -89,7 +99,7 @@ private struct PhotosPickerModifier: ViewModifier {
         // Phase 5: a brief "Preparing selected media…" before the first copy begins.
         await report(ImportProgress(total: total, done: 0, failed: 0, finished: false, phase: .preparing))
 
-        var results: [(path: String, duration: Double)] = []
+        var results: [ImportedMedia] = []
         var failed = 0
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else {
@@ -102,9 +112,13 @@ private struct PhotosPickerModifier: ViewModifier {
                 .appendingPathComponent(UUID().uuidString + ".mov")
             do {
                 try data.write(to: tmp)
-                let dur = CMTimeGetSeconds(AVURLAsset(url: tmp).duration)
+                let avAsset = AVURLAsset(url: tmp)
+                let dur = CMTimeGetSeconds(avAsset.duration)
+                // Safeguard 5: recover the ORIGINAL capture date + location from the file's OWN embedded
+                // metadata (no Photos read-auth / asset-id dependency). nil when absent ("unknown").
+                let meta = await ImportedMediaMetadata.recover(from: avAsset)
                 let rel = try MediaStore.shared.adoptCapturedFile(tempURL: tmp)
-                results.append((rel, dur.isFinite ? dur : 0))
+                results.append(ImportedMedia(path: rel, duration: dur.isFinite ? dur : 0, capturedAt: meta.capturedAt, latitude: meta.latitude, longitude: meta.longitude))
             } catch {
                 failed += 1
             }

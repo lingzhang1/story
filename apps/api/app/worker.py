@@ -266,15 +266,59 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
             return "cancelled_midrun"
 
         diag_out = {k: diag.get(k) for k in ("model_calls", "used_fallback", "critique_attempted",
-                                             "critique_applied", "first_pass_executable")}
+                                             "critique_applied", "first_pass_executable",
+                                             "first_pass_errors", "any_fallback", "first_fallback_error",
+                                             "calls", "executability_repairs_used", "revision_path",
+                                             "retime_reject_errors")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
+        # DIRECTIVE visibility: what revision_context the worker ACTUALLY received, the resolved opening id,
+        # and whether the produced plan's first segment honored it. This is the only way to tell apart "the app
+        # sent no/stale directive" from "the directive was sent but not enforced" from "Moment N resolved to an
+        # unexpected id" — all three present as a byte-identical plan from the outside.
+        _rc = (b.get("revision_context") or {}) if isinstance(b.get("revision_context"), dict) else {}
+        _dir = _rc.get("directives") or {}
+        _moment_ids = {str(m.get("id")).lower() for m in b.get("moments", []) if isinstance(m, dict)}
+        _plan_segs = sorted(_plan_to_dict(plan).get("segments", []), key=lambda s: s.get("order", 0))
+        _seg0 = (str(_plan_segs[0].get("asset_id")).lower() if _plan_segs else None)
+        _open = _dir.get("opening")
+        _open_l = (str(_open).lower() if isinstance(_open, str) else None)
+        rev_diag = {
+            "mode": _rc.get("mode"),
+            "directive_keys": sorted(k for k in _dir.keys() if _dir.get(k)) if isinstance(_dir, dict) else None,
+            "opening": _open_l,
+            "opening_in_moments": (_open_l in _moment_ids) if _open_l else None,
+            "seg0": _seg0,
+            "opening_honored": (_open_l == _seg0) if _open_l else None,
+            "soft": (str(_rc.get("soft_direction"))[:80] if _rc.get("soft_direction") else None),
+            "dur_src": _rc.get("duration_target_source"),
+        }
+        diag_out["rev_diag"] = rev_diag
+        # Greppable diagnostics line (CloudWatch): which model served each call, first-pass validator errors,
+        # and WHY the primary failed over — so Opus-vs-Sonnet reject behavior is analyzable without DynamoDB.
+        print(json.dumps({"msg": "worker_plan_diag", "job_id": job_id,
+                          "model_calls": diag_out.get("model_calls"),
+                          "first_pass_executable": diag_out.get("first_pass_executable"),
+                          "first_pass_errors": diag_out.get("first_pass_errors"),
+                          "any_fallback": diag_out.get("any_fallback"),
+                          "first_fallback_error": diag_out.get("first_fallback_error"),
+                          "calls": diag_out.get("calls"),
+                          "rev_diag": rev_diag,
+                          "revision_path": diag_out.get("revision_path"),
+                          "retime_reject_errors": diag_out.get("retime_reject_errors"),
+                          "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)
         store.delete_staging(prefix)
         return "completed" if ok else "publish_lost_lease"
     except Exception as exc:  # noqa: BLE001 — classify everything into a terminal failure
         cat, detail = _classify(exc, locals().get("inputs"))
+        # Phase 5: an unsupported-operation refusal is an EditPlanInfeasibleError, but it is a CAPABILITY limit,
+        # not a material-insufficiency one — surface it under its own category so the app can explain the real
+        # reason (and keep the selected version) instead of the generic "not enough footage" copy.
+        _eng = locals().get("engine")
+        if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "unsupported_operation":
+            cat = "unsupported_operation"
         store.fail(job_id, cat, detail, token)
         store.delete_staging(prefix)
         return f"failed:{cat}"

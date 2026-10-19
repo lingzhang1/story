@@ -44,6 +44,16 @@ final class MomentReferenceResolverTests: XCTestCase {
         XCTAssertEqual(slots[.ending], 15)
     }
 
+    // 3a. "Start from Moment N" (and "start with") parse to OPENING. Regression: the connector alternation
+    // originally listed only with/on/off-with, so "start FROM moment N" fell through to no opening at all —
+    // the clip never moved to the front despite the user asking for it.
+    func test_parse_opening_start_from_and_with() {
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start from Moment 5").first?.slot, .opening)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start from Moment 5").first?.number, 5)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("Start with Moment 5").first?.slot, .opening)
+        XCTAssertEqual(MomentReferenceResolver.parseTyped("start from moment 5 and make the cuts fast").first?.slot, .opening)
+    }
+
     // 3b. "do not use" / "don't use" parse as exclude; "put Moment N at the end" as ending.
     func test_parse_exclude_and_put_at_end_variants() {
         XCTAssertEqual(MomentReferenceResolver.parseTyped("do not use moment 4").first?.slot, .exclude)
@@ -250,5 +260,81 @@ final class MomentReferenceResolverTests: XCTestCase {
         let r = MomentReferenceResolver.resolve(
             typed: MomentReferenceResolver.parseTyped("Make it dreamier and exclude Moment 4."), in: n)
         XCTAssertEqual(r.directives.exclude, [ids[3]])
+    }
+}
+
+// Stage 2 music-intent routing — deterministic classifier that separates MUSIC preference from EDIT/beat-sync
+// intent (owner Music-Routing milestone). These lock the boundary that CreateStoryPreviewView routes on; the
+// SwiftData authority/cache behavior (tests 6/9) is enforced in MusicDirectionCoordinator (no overwrite of a
+// user-authored row; music-only change regenerates nothing) and asserted structurally here via the classifier.
+final class MusicIntentRoutingTests: XCTestCase {
+
+    // Test 1: pure visual pacing — NO music preference, NO beat-sync (never fabricate music from visual words).
+    func test_make_cuts_faster_is_not_music() {
+        let m = MomentReferenceResolver.parseMusicIntent("Make the cuts faster")
+        XCTAssertNil(m.preference)
+        XCTAssertFalse(m.beatSync)
+        XCTAssertTrue(m.isEmpty)
+    }
+
+    // Test 2: "match cuts to the music" is beat-sync (edit-side) only — NO soundtrack preference.
+    func test_match_cuts_to_music_is_beatsync_not_preference() {
+        let m = MomentReferenceResolver.parseMusicIntent("Make the cuts faster to match the music")
+        XCTAssertNil(m.preference, "beat-sync must not become a soundtrack preference")
+        XCTAssertTrue(m.beatSync)
+    }
+
+    // Test 3: explicit "gentle acoustic music" IS a music preference reaching MusicPlan.
+    func test_gentle_acoustic_music_is_preference() {
+        let m = MomentReferenceResolver.parseMusicIntent("Use gentle acoustic music")
+        XCTAssertNotNil(m.preference)
+        XCTAssertTrue(m.preference!.moodTags.contains("acoustic"))
+        XCTAssertFalse(m.beatSync)
+    }
+
+    // Test 4: "energetic electronic music" reaches MusicPlan with energetic/electronic moods.
+    func test_energetic_electronic_music_is_preference() {
+        let m = MomentReferenceResolver.parseMusicIntent("Use energetic electronic music")
+        XCTAssertNotNil(m.preference)
+        XCTAssertTrue(m.preference!.moodTags.contains("electronic"))
+        XCTAssertTrue(m.preference!.moodTags.contains("energetic"))
+    }
+
+    // Test 5: mixed edit + music — the Moment directive resolves AND the music preference is extracted, each
+    // from the same string, independently (routing separation).
+    func test_mixed_moment_and_music_separate() {
+        let ids = (0..<6).map { _ in UUID() }
+        let items = ids.enumerated().map {
+            NumberedMoment(number: $0.offset + 1, id: $0.element, durationSeconds: 5, relativePath: nil)
+        }
+        let num = StoryMomentNumbering(ordered: items)
+        let text = "Start with Moment 5 and use energetic music"
+        let typed = MomentReferenceResolver.parseTyped(text)
+        let res = MomentReferenceResolver.resolve(typed: typed, in: num)
+        XCTAssertEqual(res.directives.opening, ids[4], "opening directive -> edit planner")
+        let m = MomentReferenceResolver.parseMusicIntent(text)
+        XCTAssertTrue(m.preference?.moodTags.contains("energetic") ?? false, "music pref -> MusicPlan")
+    }
+
+    // Test 8 (classifier side): empty / non-music text yields an empty intent (preserves existing behavior).
+    func test_empty_and_visual_only_preserve_behavior() {
+        XCTAssertTrue(MomentReferenceResolver.parseMusicIntent("").isEmpty)
+        XCTAssertTrue(MomentReferenceResolver.parseMusicIntent("Use the most visually striking footage first").isEmpty,
+                      "generic visual language must not fabricate a music preference")
+    }
+
+    // Test 10: beat-alignment phrasings all classify as beat-sync (reach edit planning, not track change).
+    func test_beat_alignment_variants_are_beatsync() {
+        for s in ["Sync the cuts to the beat", "Cut on the beat", "Match the beat", "beat-sync the edit"] {
+            XCTAssertTrue(MomentReferenceResolver.parseMusicIntent(s).beatSync, "\(s) should be beat-sync")
+            XCTAssertNil(MomentReferenceResolver.parseMusicIntent(s).preference, "\(s) must not change the track")
+        }
+    }
+
+    // A music CONTEXT word is required — "energetic opening" (visual) is not a music preference, but
+    // "energetic music" is. This is the guard that makes tests 1/5/8 hold.
+    func test_music_context_word_required() {
+        XCTAssertNil(MomentReferenceResolver.parseMusicIntent("Give it an energetic opening").preference)
+        XCTAssertNotNil(MomentReferenceResolver.parseMusicIntent("Give it an energetic soundtrack").preference)
     }
 }

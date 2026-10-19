@@ -977,6 +977,25 @@ def test_directive_ending_satisfied_and_violated():
     assert any("ending" in e and "last segment must be" in e for e in bad)
 
 
+def test_directive_id_case_insensitive():
+    """Regression: a client that sends directive ids in a DIFFERENT case than the moments[]/segment ids
+    (iOS historically sent UPPERCASE UUID.uuidString directives while moments/asset_ids were lowercased) must
+    STILL be enforced — not silently ignored. A case-sensitive comparison here let "Start with Moment N" go
+    unenforced, so every "new version" came back as the same default edit."""
+    plan = _good_plan()  # order 0 is M1 (lowercase), order 1/last is M2 (lowercase)
+    # opening named in UPPERCASE must resolve to the same Moment -> satisfied (no opening error).
+    ok = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M1.upper()})))
+    assert [e for e in ok if "opening" in e] == []
+    # opening=M2 (uppercase) is NOT the first segment -> must be flagged, and must NOT be treated as an
+    # "unknown Moment" (the old case-sensitive bug flagged it "not in the eligible source set").
+    bad = validate_plan(plan, _inputs(revision_context=_ctx({"opening": M2.upper()})))
+    assert any("opening" in e and "first segment must be" in e for e in bad)
+    assert not any("not in the eligible source set" in e for e in bad)
+    # exclude in uppercase still catches a used Moment.
+    exc = validate_plan(plan, _inputs(revision_context=_ctx({"exclude": [M2.upper()]})))
+    assert any("exclude" in e and "must NOT be used" in e for e in exc)
+
+
 def test_directive_unknown_moment_is_error_not_silent():
     # A reference to a Moment not in the eligible source set must be flagged (deleted/unavailable case),
     # never silently ignored or substituted.
@@ -1131,6 +1150,114 @@ def test_interpret_revision_maps_numbers_to_ids_and_flags_unresolved():
 
 
 # ---------------------------------------------------------------------------
+# Interpreter OVERREACH — grounding guard (revision_interpret/2). The guard checks that an EXCLUDE directive is
+# supported by the user's words; it never silently drops, and it preserves legitimate "use only" restrictions.
+# These are INTERPRETATION-level (scripted gateway), not EditPlanner tests.
+# ---------------------------------------------------------------------------
+class _ScriptGW:
+    def __init__(self, d): self._d = d
+    def generate_structured(self, req):
+        from model_gateway import StructuredResult, Usage
+        return StructuredResult(data=self._d, usage=Usage())
+
+
+def _numbered(n):
+    return [{"number": i + 1, "id": f"id-{i+1}", "summary": f"m{i+1}"} for i in range(n)]
+
+
+def test_ground_flags_invented_exclude_from_ordering_only():
+    # The exact failed instruction: ordering-only, no omission words -> an exclude set is UNSUPPORTED.
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [4, 5, 7, 8, 9, 10], "opening": 13, "ending": 6,
+                    "order_after": [], "order_adjacent": [[2, 13]], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 13 first and Moment 2 immediately after. And use Moment 6 as end.",
+                           _numbered(15), gw)
+    flags = ground_directives(r)
+    assert any("unsupported_exclude" in f for f in flags)
+
+
+def test_ground_allows_exclude_with_omission_word():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [4], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Remove Moment 4.", _numbered(8), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_exclude_with_only_restriction():
+    # "use only A, B, C" is a legitimate restriction — an exclude of the others is SUPPORTED.
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [13, 2, 6], "exclude": [1, 3, 4, 5], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use only Moments 13, 2, and 6.", _numbered(15), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_nothing_except_restriction():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [13, 2, 6], "exclude": [1, 3], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Don't show anything except Moments 13, 2, and 6.", _numbered(15), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_allows_exclude_but_include_mix():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [5], "exclude": [8], "opening": None, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 5 but exclude Moment 8.", _numbered(10), gw)
+    assert ground_directives(r) == []
+
+
+def test_ground_noop_when_no_exclude():
+    # Opening-only, no exclude -> nothing to flag (the correct v2 output for the failed instruction).
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 13, "ending": 6,
+                    "order_after": [], "order_adjacent": [[2, 13]], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("Use Moment 13 first and Moment 2 immediately after. And use Moment 6 as end.",
+                           _numbered(15), gw)
+    assert ground_directives(r) == []
+    assert r.directives.get("opening") == "id-13"
+    assert r.directives.get("ending") == "id-6"
+    assert r.directives.get("order_adjacent") == [["id-2", "id-13"]]
+    assert "exclude" not in r.directives
+
+
+def test_ground_soft_only_instruction_passes():
+    from edit_planner.revision_interpreter import interpret_revision, ground_directives
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 5, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "make the cuts faster",
+                    "unsupported": []})
+    r = interpret_revision("Start with Moment 5 and make the cuts faster.", _numbered(8), gw)
+    assert ground_directives(r) == []
+    assert r.soft_direction == "make the cuts faster"
+
+
+def test_v2_is_active_prompt_version():
+    from edit_planner.revision_interpreter import PROMPT_VERSION, PROMPT_VERSION_V1
+    assert PROMPT_VERSION == "revision_interpret/2"
+    assert PROMPT_VERSION_V1 == "revision_interpret/1"
+
+
+def test_v1_prompt_still_selectable_for_comparison():
+    # The frozen v1 prompt must remain usable for A/B (never edited in place).
+    from edit_planner.revision_interpreter import interpret_revision, PROMPT_VERSION_V1
+    gw = _ScriptGW({"must_include": [], "exclude": [], "opening": 1, "ending": None,
+                    "order_after": [], "order_adjacent": [], "soft_direction": "", "unsupported": []})
+    r = interpret_revision("start with moment 1", _numbered(3), gw, prompt_version=PROMPT_VERSION_V1)
+    assert r.directives.get("opening") == "id-1"
+
+
+def test_exclude_is_supported_helper():
+    from edit_planner.revision_interpreter import exclude_is_supported
+    assert exclude_is_supported("remove moment 4")
+    assert exclude_is_supported("use only moments 1, 2, 3")
+    assert exclude_is_supported("don't use moment 8")
+    assert not exclude_is_supported("start with moment 5 then moment 2")
+    assert not exclude_is_supported("use moment 13 first and moment 6 as end")
+
+
+# ---------------------------------------------------------------------------
 # Phase 5 — deterministic revision fast path (zero model calls).
 # ---------------------------------------------------------------------------
 def test_deterministic_transform_reorders_and_prunes():
@@ -1148,6 +1275,303 @@ def test_deterministic_transform_reorders_and_prunes():
     assert A(base, {"must_include": ["zz"]}) is None
     # order renumbered 0..n-1
     assert [s["order"] for s in sorted(A(base, {"opening": "c"})["segments"], key=lambda s: s["order"])] == [0, 1, 2, 3]
+    # Case-INSENSITIVE: an UPPERCASE directive id must move the matching lowercase segment (regression: the
+    # pure-reorder path used a case-sensitive `in`/`==`, so an UPPERCASE "opening" silently no-op'd and the
+    # "revised" plan came back identical to the base).
+    assert ids(A(base, {"opening": "C"})) == ["c", "a", "b", "d"]
+    assert ids(A(base, {"exclude": ["B"]})) == ["a", "c", "d"]
+
+
+def test_deterministic_retime_trims_source_at_normal_speed():
+    # "shorten each clip to ~5s" means SHOW ~5s of footage at NORMAL speed (trim the source window), NOT cram
+    # the whole clip into 5s (which forces ~2x speed + pitched audio — the on-device bug). The clip SET, order
+    # and music are preserved; the source END is trimmed toward start+5s; speed stays 1.0.
+    from edit_planner.deterministic_revision import apply_deterministic_retime
+    def seg(o, a, s0, s1, outd): return {"order": o, "asset_id": a, "source_start_seconds": s0,
+                                         "source_end_seconds": s1, "output_duration_seconds": outd,
+                                         "native_audio": "keep", "speed": 1.0}
+    base = {"schema_version": "edit_plan/2", "feasible": True, "music_asset_id": "trk",
+            "segments": [seg(0, "a", 0.0, 10.0, 10.0), seg(1, "b", 2.0, 6.0, 4.0), seg(2, "c", 0.0, 3.0, 3.0)]}
+    out = apply_deterministic_retime(base, 5.0)
+    assert out is not None
+    segs = sorted(out["segments"], key=lambda s: s["order"])
+    assert [s["asset_id"] for s in segs] == ["a", "b", "c"]   # clips + order preserved
+    assert out["music_asset_id"] == "trk"                     # soundtrack preserved
+    # EVERY segment plays at normal speed (no pitch-up of native audio).
+    for s in segs:
+        assert abs(s["speed"] - 1.0) < 1e-6, f"speed {s['speed']} should be normal (1.0)"
+        assert abs(s["output_duration_seconds"] - (s["source_end_seconds"] - s["source_start_seconds"])) < 1e-6
+    # clip 'a' (10s available) is TRIMMED to a 5s window at its original in-point, normal speed.
+    assert segs[0]["source_start_seconds"] == 0.0 and abs(segs[0]["source_end_seconds"] - 5.0) < 0.01
+    assert abs(segs[0]["output_duration_seconds"] - 5.0) < 0.01
+    # clip 'b' (4s available, < 5s target) keeps its whole window — we never stretch footage that isn't there.
+    assert (segs[1]["source_start_seconds"], segs[1]["source_end_seconds"]) == (2.0, 6.0)
+    assert abs(segs[1]["output_duration_seconds"] - 4.0) < 0.01
+    # clip 'c' (3s available) keeps its whole 3s window at normal speed.
+    assert abs(segs[2]["output_duration_seconds"] - 3.0) < 0.01
+
+
+def test_deterministic_retime_respects_target_lower_bound():
+    # A user-exact target the naive ~5s trim would undershoot: the trim window is widened uniformly (bounded by
+    # each clip's AVAILABLE footage) until the total clears the lower bound — all at NORMAL speed, clips kept.
+    from edit_planner.deterministic_revision import apply_deterministic_retime
+    def seg(o, a, s0, s1): return {"order": o, "asset_id": a, "source_start_seconds": s0,
+                                   "source_end_seconds": s1, "output_duration_seconds": 10.0,
+                                   "native_audio": "keep", "speed": 1.0}
+    # 3 clips, 10s available each. Naive 5s each -> total 15s. Reachable lower bound 24s (8s/clip <= 10 avail).
+    base = {"schema_version": "edit_plan/2", "feasible": True,
+            "segments": [seg(0,"a",0,10), seg(1,"b",0,10), seg(2,"c",0,10)]}
+    out = apply_deterministic_retime(base, 5.0, min_total_seconds=24.0)
+    segs = sorted(out["segments"], key=lambda s: s["order"])
+    total = sum(s["output_duration_seconds"] for s in segs)
+    assert total >= 24.0, f"total {total} should clear the lower bound"
+    assert [s["asset_id"] for s in segs] == ["a","b","c"]   # clips preserved
+    for s in segs:
+        assert abs(s["speed"] - 1.0) < 1e-6   # normal speed throughout (trim, not speed-up)
+        assert abs(s["output_duration_seconds"] - (s["source_end_seconds"]-s["source_start_seconds"])) < 1e-6
+
+
+def test_parse_target_clip_seconds():
+    from edit_planner import _parse_target_clip_seconds
+    assert _parse_target_clip_seconds("shorten each clip to around 5s") == 5.0
+    assert _parse_target_clip_seconds("make the cuts about 3 seconds") == 3.0
+    assert _parse_target_clip_seconds("keep shots under 4 sec") == 4.0
+    # Not a clip-length ask -> None (takes the model path, never the retime path).
+    assert _parse_target_clip_seconds("make it more cinematic") is None
+    assert _parse_target_clip_seconds("start with moment 5") is None
+    assert _parse_target_clip_seconds("") is None
+    # A seconds value with no clip/cut/shot word is NOT a per-clip ask.
+    assert _parse_target_clip_seconds("make it 30 seconds total") is None
+
+
+# ---------------------------------------------------------------------------
+# P0 Revision Constraint Priority (owner 2026-10-18): duration provenance, operation-scoped validation,
+# the no-silent-replan boundary, and the preservation gate.
+# ---------------------------------------------------------------------------
+def _retimable_base_plan(target, span=6.0):
+    """A base plan whose clips, re-timed toward ~5s, would UNDERSHOOT `target` — the exact situation that used
+    to be rejected and re-planned. Uses only the known moments M1/M2 so the retimed plan validates."""
+    def seg(o, aid, s0, s1): return {"order": o, "asset_id": aid, "source_start_seconds": s0,
+                                     "source_end_seconds": s1, "output_duration_seconds": 12.0,
+                                     "native_audio": "keep", "speed": 1.0}
+    return {"schema_version": "edit_plan/2", "target_duration_seconds": target, "feasible": True,
+            "segments": [seg(0, M1, 0.0, span), seg(1, M2, 0.0, span)]}
+
+
+def test_undershoot_relaxed_for_ai_recommended_timing_revise():
+    # Timing-only revise + AI-recommended target: the undershoot floor is lifted, so a shortened plan validates
+    # without any model call and WITHOUT lengthening shots. Clips preserved, total allowed to shrink.
+    base_plan = _retimable_base_plan(target=30.0, span=6.0)
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s and keep the highlights",
+          "duration_target_source": "ai_recommended"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("ai_recommended timing revise must stay deterministic (0 model calls)")
+    eng = RealEditPlannerEngine(_Boom())
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
+    assert eng.last_diagnostics["revision_path"] == "deterministic_retime"
+    assert eng.last_diagnostics["model_calls"] == 0
+    # same clips, in the same order, each shortened toward ~5s (total < old 30s target, and that is allowed).
+    ids = [str(s.asset_id) for s in plan.segments]
+    assert ids == [s["asset_id"] for s in base_plan["segments"]]
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert total < 30.0
+
+
+def test_user_exact_timing_revise_keeps_strict_lower_bound():
+    # Same instruction but the user fixed the length exactly -> the lower bound stays strict and the retime
+    # lifts shot durations to keep the total near the target (clips still preserved).
+    base_plan = _retimable_base_plan(target=18.0, span=12.0)   # span 12 => room to lift up to 24s/clip
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s",
+          "duration_target_source": "user_exact"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("must stay deterministic")
+    eng = RealEditPlannerEngine(_Boom())
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 18.0, "desired_feeling": ["calm"]},
+                                moments=[
+        {"id": M1, "duration_seconds": 13.0, "useful_segments": [[0.0, 12.0]]},
+        {"id": M2, "duration_seconds": 13.0, "useful_segments": [[0.0, 12.0]]}]))
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert total >= 18.0 * 0.8   # strict lower bound honored for the explicit length
+    assert [str(s.asset_id) for s in plan.segments] == [s["asset_id"] for s in base_plan["segments"]]
+
+
+def test_initial_creation_undershoot_unchanged():
+    # No revision_context => _undershoot_tolerance_for returns the strict default (creation behavior intact).
+    from edit_planner import _undershoot_tolerance_for, DURATION_UNDERSHOOT_TOLERANCE
+    assert _undershoot_tolerance_for(_inputs()) == DURATION_UNDERSHOOT_TOLERANCE
+
+
+def test_timing_revise_validation_failure_never_replans(monkeypatch):
+    # Point 7: if a pacing/timing retime cannot be made valid, the engine raises a clear infeasible and NEVER
+    # falls through to an unrestricted model replan (which would be a silent re-pick). Force the retime to
+    # produce an invalid plan and assert the model is never called.
+    import edit_planner.deterministic_revision as dr
+    base_plan = _retimable_base_plan(target=30.0, span=6.0)
+    rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s", "duration_target_source": "ai_recommended"}
+    # Make the retime return a plan the validator rejects (source range outside the moment's useful window).
+    def _bad(bp, target, min_total_seconds=None):
+        import copy
+        p = copy.deepcopy(bp)
+        for s in p["segments"]:
+            s["source_start_seconds"] = 999.0; s["source_end_seconds"] = 1004.0
+            s["output_duration_seconds"] = 5.0; s["speed"] = 1.0
+        return p
+    monkeypatch.setattr(dr, "apply_deterministic_retime", _bad)
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("a failed timing retime must NOT replan via the model")
+    eng = RealEditPlannerEngine(_Boom())
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc,
+                             creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
+    assert "kept unchanged" in str(ei.value).lower()
+    assert eng.last_diagnostics.get("revision_path") == "deterministic_retime_infeasible"
+    assert eng.last_diagnostics.get("model_calls", 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — unsupported-operation handling (owner 2026-10-18): explain + preserve, never substitute.
+# ---------------------------------------------------------------------------
+def test_classify_unsupported_ops():
+    from edit_planner import _classify_unsupported_ops as c
+    # Unsupported capability asks.
+    for t in ["make it warmer", "add a glow", "color correct the whole thing", "reframe to square",
+              "increase the brightness", "add a vignette", "stabilize the shaky clip", "add captions"]:
+        assert c(t)["verdict"] == "all_unsupported", t
+    # Supported editing asks (no false positives).
+    for t in ["shorten each clip to 5s", "reorder the clips", "change the music", "faster cuts",
+              "make it more cinematic", "remove moment 3", "use moment 5 to open"]:
+        assert c(t)["verdict"] == "supported", t
+    # Mixed: a supported edit + an unsupported effect.
+    m = c("shorten the clips and make it warmer")
+    assert m["verdict"] == "mixed" and "color tone changes" in m["phrase"]
+    assert c("")["verdict"] == "supported"
+    # Color-NOUN phrasings (regression: "make the sky more blue" slipped through the first vocabulary).
+    assert c("make the sky more blue")["verdict"] == "all_unsupported"
+    assert c("make it bluer")["verdict"] == "all_unsupported"
+    assert c("Shorten to 5s for each clip and make sky color more blue")["verdict"] == "mixed"
+
+
+def test_unsupported_revise_preserves_version_never_plans():
+    # An all-unsupported revise must keep the version and explain — never call the model (which would return
+    # SOME re-cut plan = a silent substitution of a different edit for the one the user asked for).
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make the colors warmer and add a glow"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("an unsupported revise must NOT plan a substitute edit")
+    eng = RealEditPlannerEngine(_Boom())
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc, moments=[
+            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    msg = str(ei.value).lower()
+    assert "kept" in msg and "unchanged" in msg          # preserved
+    assert "color" in msg                                 # explains the specific limitation
+    assert eng.last_diagnostics["final"] == "unsupported_operation"
+    assert eng.last_diagnostics.get("model_calls", 0) == 0
+
+
+def test_mixed_revise_records_partial_note_and_still_plans():
+    # A mixed instruction (supported edit + unsupported effect) runs the supported part but records a note
+    # saying what could not be applied — not silently dropped, not a fabricated success.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "shorten each clip to ~5s and make it warmer",
+          "duration_target_source": "ai_recommended"}
+    class _Boom:
+        last_fallback = False
+        def generate_structured(self, req):
+            raise AssertionError("timing part should take the deterministic retime, no model call")
+    eng = RealEditPlannerEngine(_Boom())
+    eng.generate(_inputs(revision_context=rc,
+                         creative_intent={"target_duration_seconds": 18.0, "desired_feeling": ["calm"]}))
+    assert eng.last_diagnostics.get("partial_support_note")
+    assert "color tone changes" in eng.last_diagnostics["partial_support_note"]
+    assert eng.last_diagnostics["revision_path"] == "deterministic_retime"   # supported part ran
+
+
+
+    # A soft-only revise the model handles (not a parseable clip target) that comes back having re-picked a
+    # DIFFERENT clip set must be rejected with a clear limitation — never shipped as a silent re-pick.
+    M3 = str(uuid4())
+    base_plan = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}   # no clip-length target => model path
+    # Model drops M2 and introduces M3 — a silent re-pick the gate must reject.
+    repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M3, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=repicked))
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc, moments=[
+            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+            {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert "did not ask" in str(ei.value).lower()
+    assert eng.last_diagnostics["final"] == "preservation_violation"
+
+
+def test_preservation_gate_allows_model_preserving_revise():
+    # Same soft revise, but the model preserves the clip set (only re-times/reorders) -> accepted.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}
+    # output_duration == source span (speed 1.0) to satisfy the consistency check; total 13.5s vs a 14s target.
+    preserved = {"target_duration_seconds": 14.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 6.0,
+         "output_duration_seconds": 5.5, "speed": 1.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=preserved))
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 14.0, "desired_feeling": ["calm"]},
+                                moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert {str(s.asset_id) for s in plan.segments} == {M1, M2}
+
+
+def test_broad_replan_flag_bypasses_preservation_gate():
+    # When the user explicitly authorizes a broad redesign, a changed clip set is allowed.
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "completely redesign this", "allow_broad_replan": True}
+    repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=repicked))
+    plan = eng.generate(_inputs(revision_context=rc, moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert eng.last_diagnostics.get("final") != "preservation_violation"
+
+
+def test_duration_target_source_defaults_to_user_exact():
+    from edit_planner import _duration_target_source
+    assert _duration_target_source(_inputs()) == "user_exact"
+    assert _duration_target_source(_inputs(revision_context={"duration_target_source": "ai_recommended"})) == "ai_recommended"
+    assert _duration_target_source(_inputs(revision_context={"duration_target_source": "garbage"})) == "user_exact"
 
 
 def test_engine_deterministic_fast_path_zero_model_calls():
@@ -1196,6 +1620,21 @@ def test_preflight_flags_include_exclude_conflict():
     assert any("both required and excluded" in e for e in errs)
 
 
+def test_preflight_flags_over_exclusion_leaves_too_few():
+    # Regression (device scenario #2): the interpreter produced excludes that stripped the Story down to <2
+    # eligible Moments; the planner then honestly failed 'invalid_after_repair'. Preflight must catch this
+    # BEFORE the expensive job and turn it into an upfront clarify.
+    from edit_planner import preflight_directives
+    a, b, c, d = str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+    eligible = {a, b, c, d}
+    # Excluding 3 of 4 leaves only 1 -> block.
+    errs = preflight_directives({"exclude": [a, b, c]}, eligible)
+    assert any("keep at least 2" in e for e in errs)
+    # Excluding 2 of 4 leaves 2 -> allowed (no over-exclusion error).
+    ok = preflight_directives({"exclude": [a, b]}, eligible)
+    assert not any("keep at least 2" in e for e in ok)
+
+
 def test_preflight_flags_contradictory_and_impossible_adjacency():
     from edit_planner import preflight_directives
     a, b, c = str(uuid4()), str(uuid4()), str(uuid4())
@@ -1208,3 +1647,17 @@ def test_preflight_flags_contradictory_and_impossible_adjacency():
 def test_preflight_empty_is_noop():
     from edit_planner import preflight_directives
     assert preflight_directives({}, set()) == []
+
+
+def test_repair_errors_non_visual_classification():
+    # Phase 3 targeted repair: numeric/structural errors send NO images; a useful_segment error keeps them.
+    from edit_planner import _errors_are_non_visual
+    assert _errors_are_non_visual(["seg0: speed 4.0 out of range [0.5, 2.0]"])
+    assert _errors_are_non_visual(["seg2: source_end 12.0 exceeds Moment duration 9.8",
+                                   "segment order not monotonic: [0, 2, 1]"])
+    assert _errors_are_non_visual(["directive opening: first segment must be Moment 'x' but is 'y'"])
+    # A useful-segment coverage error benefits from frames -> keep images (not non-visual).
+    assert not _errors_are_non_visual(["seg1: source range [1.0,3.0] overlaps NO useful_segment [[4.0,6.0]]"])
+    # Mixed: any visual marker keeps images.
+    assert not _errors_are_non_visual(["seg0: speed 4.0 out of range",
+                                       "seg1: source range overlaps NO useful_segment"])

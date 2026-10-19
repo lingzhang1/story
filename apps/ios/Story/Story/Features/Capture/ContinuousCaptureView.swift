@@ -21,12 +21,23 @@ import UIKit
 // without AI (spec: AI is user-initiated and never required to record).
 struct ContinuousCaptureView: View {
     let captureContext: CaptureContext
+    /// Optional Story Guide possibility / Story Idea the user tapped Shoot/Reshoot on. When set, the
+    /// camera opens already showing THIS idea as the default in-camera AI idea (scan-free). nil for
+    /// the plain "Shoot a moment" entry (no seed).
+    var seedOpportunity: SelectedOpportunityDTO? = nil
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var model = ContinuousCaptureModel()
 
     @State private var showLibrary = false
+    @State private var focusReticle: CGPoint?
+    @State private var reticleToken = 0
+    @State private var zoomDialActive = false
+    @State private var dialStartFraction: Double = 0
+    @State private var showLocationExplainer = false
+    // Once-ever (persisted): the benefit explainer is shown a single time, not on every camera open.
+    @AppStorage("story.location.explainerShown") private var locationExplainerShown = false
 
     private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
     private let ink = Color(red: 0.96, green: 0.94, blue: 0.91)
@@ -37,6 +48,43 @@ struct ContinuousCaptureView: View {
 
             // Live camera preview (full-bleed), hosting the shared engine.
             ContinuousCameraHost(model: model).ignoresSafeArea()
+
+            // Camera-control gesture layer (Increment 1): pinch-to-zoom (works during recording) and
+            // tap-to-focus/expose. Transparent + full-bleed, UNDER the chrome VStack so buttons still win
+            // their taps. A brief focus reticle confirms the tap point.
+            CameraGestureLayer(
+                onTapFocus: { pt in
+                    model.focusAndExpose(atViewPoint: pt)
+                    showFocusReticle(at: pt)
+                },
+                onPinchChanged: { scale, base in model.pinchZoom(scale: scale, base: base) },
+                pinchBase: { model.currentRawZoom }
+            )
+            .ignoresSafeArea()
+
+            if let reticle = focusReticle {
+                // The reticle MUST share the gesture layer's coordinate space. The gesture UIView is
+                // full-bleed (ignores the safe area), so `pt` is in FULL-SCREEN coords. Pin this overlay
+                // to the same full-screen space (own ZStack + ignoresSafeArea) — otherwise `.position`
+                // measures from the safe-area top and the box lands ~top-inset too low.
+                ZStack {
+                    FocusReticle().position(reticle).allowsHitTesting(false)
+                    // Exposure sun-slider beside the reticle (Increment 2) — drag up = brighter, down =
+                    // darker, biasing the running auto-exposure. Shown only while the reticle is up, so it
+                    // stays out of the way otherwise. Hidden when the device reports no bias range.
+                    if model.exposureBiasRange.lowerBound < model.exposureBiasRange.upperBound {
+                        ExposureSlider(
+                            value: Binding(get: { model.exposureBias },
+                                           set: { model.setExposureBias($0) }),
+                            range: model.exposureBiasRange,
+                            onInteract: { showFocusReticle(at: reticle) }   // keep the reticle alive while adjusting
+                        )
+                        .position(x: min(reticle.x + 70, UIScreen.main.bounds.width - 30), y: reticle.y)
+                    }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
 
             // Chrome overlay (Figma V0.2.2).
             VStack {
@@ -60,7 +108,26 @@ struct ContinuousCaptureView: View {
             }
         }
         .statusBarHidden(true)
-        .onAppear { model.configure(context: context, captureContext: captureContext) }
+        .onAppear {
+            model.configure(context: context, captureContext: captureContext, seedOpportunity: seedOpportunity)
+            model.seedGuideIdeaIfNeeded()
+            // Location tagging (OPTIONAL): if the user has already allowed it, resume passive updates.
+            // If undetermined, show the benefit-first explainer ONCE — never auto-request, never block.
+            CaptureLocationService.shared.startIfAuthorized()
+            if CaptureLocationService.shared.authorizationStatus == .notDetermined && !locationExplainerShown {
+                locationExplainerShown = true
+                showLocationExplainer = true
+            }
+        }
+        .onDisappear { CaptureLocationService.shared.stop() }   // battery: stop updates when camera closes
+        // Benefit-FIRST explainer (safeguard 1): explain WHY before the system When-In-Use prompt. Camera
+        // startup + recording never wait on this — it's a non-blocking optional affordance.
+        .alert("Tag your Moments with location?", isPresented: $showLocationExplainer) {
+            Button("Enable location") { CaptureLocationService.shared.requestWhenInUseIfNeeded() }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Story can tag the Moments you record with where you captured them, so your travel memories remember the place. Location is optional, stays on your device, and is never added to the videos you share.")
+        }
         // Phase 1: the recent-Moment thumbnail opens the GLOBAL library in a browse-only
         // (.recentBrowse) cover PRESENTED OVER the camera — the camera session beneath is
         // preserved (not torn down), so closing returns straight to a ready camera. No new
@@ -90,6 +157,50 @@ struct ContinuousCaptureView: View {
                 .disabled(model.isRecording)   // don't allow leaving mid-recording via the ✕
                 .opacity(model.isRecording ? 0.35 : 1)
                 Spacer()
+                HStack(spacing: 10) {
+                    // AE/AF lock — locks focus+exposure at current values; a tap-to-focus clears it.
+                    Button {
+                        model.toggleAEAFLock()
+                    } label: {
+                        Image(systemName: model.isAEAFLocked ? "lock.fill" : "lock.open")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(model.isAEAFLocked ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.black.opacity(0.4), in: Circle())
+                    }
+                    .accessibilityLabel(model.isAEAFLocked ? "Unlock focus and exposure" : "Lock focus and exposure")
+
+                    // Torch toggle — shown only where the device has a torch. Safe mid-record.
+                    if model.hasTorch {
+                        Button {
+                            model.toggleTorch()
+                        } label: {
+                            Image(systemName: model.torchOn ? "bolt.fill" : "bolt.slash")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(model.torchOn ? Color(red: 0.98, green: 0.84, blue: 0.4) : .white)
+                                .frame(width: 40, height: 40)
+                                .background(Color.black.opacity(0.4), in: Circle())
+                        }
+                        .accessibilityLabel(model.torchOn ? "Turn torch off" : "Turn torch on")
+                    }
+
+                    // Flip front/rear — gated OUT of recording (a mid-clip input swap would corrupt the
+                    // file). Hidden if no front camera exists.
+                    if model.hasFrontCamera {
+                        Button {
+                            model.switchCamera()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Color.black.opacity(0.4), in: Circle())
+                        }
+                        .disabled(model.isRecording)
+                        .opacity(model.isRecording ? 0.35 : 1)
+                        .accessibilityLabel("Switch camera")
+                    }
+                }
             }
             if model.isRecording {
                 recordingIndicator
@@ -126,6 +237,11 @@ struct ContinuousCaptureView: View {
     // MARK: - Bottom: AI overlays · recent thumbnail · record button
     private var bottomControls: some View {
         VStack(spacing: 20) {
+            // Zoom presets (Increment 1) — derived from the REAL device (0.5× only where ultra-wide
+            // exists, etc.), so no fake optical lens is ever implied. Hidden if the device offers only 1×.
+            if model.zoomPresets.count > 1 {
+                zoomPresetStrip
+            }
             // AI Ideas region. The record button below stays live in EVERY state — scanning and
             // inference never block recording. While RECORDING, the full card is hidden; only an
             // optional compact one-line reminder of the active idea shows (Phase 2).
@@ -395,6 +511,97 @@ struct ContinuousCaptureView: View {
 
     private var panelBG: Color { Color(red: 0.09, green: 0.12, blue: 0.12).opacity(0.9) }
 
+    // Device-aware zoom presets. The chip NEAREST the live magnification is "active": it enlarges and
+    // shows the exact current value (e.g. "2.7×", gold) like the native camera; the others show their
+    // plain preset label (".5", "1", "5"). Tapping snaps to that preset. Updates live during pinch.
+    private var zoomPresetStrip: some View {
+        let presets = model.zoomPresets
+        let activeIdx = nearestPresetIndex(presets, to: model.currentUserZoom)
+        return ZStack {
+            // Full-width transparent hit area so the drag starts anywhere on the strip (incl. gaps).
+            Color.black.opacity(0.001)
+            // Compact chip row (default). Hidden while the thumb-dial is active.
+            if !zoomDialActive {
+                HStack(spacing: 8) {
+                    ForEach(Array(presets.enumerated()), id: \.element) { idx, z in
+                        let active = idx == activeIdx
+                        Button { model.setZoomPreset(z) } label: {
+                            Text(active ? liveZoomLabel(model.currentUserZoom) : zoomLabel(z))
+                                .font(.system(size: active ? 15 : 13, weight: .semibold))
+                                .foregroundStyle(active ? gold : .white)
+                                .frame(minWidth: active ? 48 : 40, minHeight: active ? 48 : 40)
+                                .background(active ? Color.black.opacity(0.55) : Color.black.opacity(0.4), in: Circle())
+                                .overlay(Circle().stroke(active ? gold.opacity(0.9) : .clear, lineWidth: 1.5))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(active ? "Zoom \(liveZoomLabel(model.currentUserZoom))" : "Zoom \(zoomLabel(z)) times")
+                    }
+                }
+                .padding(.horizontal, 6).padding(.vertical, 6)
+                .background(Color.black.opacity(0.25), in: Capsule())
+            } else {
+                // Thumb-dial (native pattern): a tick ruler + gold live readout while dragging.
+                ZoomDial(zoom: model.currentUserZoom, range: model.userZoomRange, presets: presets)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: zoomDialActive ? 96 : 52)
+        .contentShape(Rectangle())
+        // Drag anywhere on the strip to fine-tune zoom with the thumb; release collapses to chips.
+        // highPriorityGesture so a DRAG wins over the chip buttons — a plain tap (no movement past the
+        // threshold) still falls through to the button, so tap-to-snap and drag-to-dial coexist.
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { g in
+                    if !zoomDialActive {
+                        zoomDialActive = true
+                        dialStartFraction = CameraZoomFormat.dialFraction(fromZoom: model.currentUserZoom, range: model.userZoomRange)
+                    }
+                    // Either axis drives the dial (horizontal OR vertical thumb movement). ~220pt of
+                    // travel spans the full range; right/up = zoom in, left/down = zoom out.
+                    let move = Double(g.translation.width - g.translation.height)
+                    let delta = move / 220.0
+                    let frac = dialStartFraction + delta
+                    let z = CameraZoomFormat.dialZoom(fromFraction: frac, range: model.userZoomRange)
+                    model.setDialZoom(z)
+                }
+                .onEnded { _ in
+                    withAnimation(.easeOut(duration: 0.18)) { zoomDialActive = false }
+                }
+        )
+        .animation(.easeOut(duration: 0.12), value: activeIdx)
+    }
+
+    /// Index of the preset closest to the live magnification (so pinch highlights the right chip).
+    private func nearestPresetIndex(_ presets: [Double], to value: Double) -> Int {
+        guard !presets.isEmpty else { return 0 }
+        var best = 0; var bestDelta = Double.greatestFiniteMagnitude
+        for (i, p) in presets.enumerated() {
+            let d = abs(p - value)
+            if d < bestDelta { bestDelta = d; best = i }
+        }
+        return best
+    }
+
+    /// The live value shown on the active chip (delegates to the pure, tested helper).
+    private func liveZoomLabel(_ z: Double) -> String { CameraZoomFormat.liveLabel(z) }
+
+    private func zoomLabel(_ z: Double) -> String { CameraZoomFormat.label(z) }
+
+    /// Show the focus reticle at the tapped point, then fade it after ~0.9s (token-guarded so a newer
+    /// tap cancels an older fade).
+    private func showFocusReticle(at point: CGPoint) {
+        reticleToken += 1
+        let token = reticleToken
+        withAnimation(.easeOut(duration: 0.15)) { focusReticle = point }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            guard token == reticleToken else { return }
+            withAnimation(.easeIn(duration: 0.3)) { focusReticle = nil }
+        }
+    }
+
+
     @ViewBuilder
     private var recentThumbnail: some View {
         if let img = model.recentThumbnail {
@@ -438,3 +645,154 @@ private struct RecordingPulse: ViewModifier {
             }
     }
 }
+
+// MARK: - Camera gesture layer (Increment 1)
+
+// A transparent UIKit layer carrying a pinch recognizer (continuous zoom, captures its base zoom
+// at gesture start) and a single-tap recognizer (tap-to-focus/expose at the tapped point). UIKit is
+// used because precise simultaneous pinch + tap and a reliable tap LOCATION are cleaner than the
+// SwiftUI gesture equivalents, and pinch must keep working while recording.
+private struct CameraGestureLayer: UIViewRepresentable {
+    let onTapFocus: (CGPoint) -> Void
+    let onPinchChanged: (CGFloat, CGFloat) -> Void
+    let pinchBase: () -> CGFloat
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        pinch.delegate = context.coordinator
+        v.addGestureRecognizer(pinch)
+        v.addGestureRecognizer(tap)
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onTapFocus = onTapFocus
+        context.coordinator.onPinchChanged = onPinchChanged
+        context.coordinator.pinchBase = pinchBase
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(onTapFocus: onTapFocus, onPinchChanged: onPinchChanged, pinchBase: pinchBase) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTapFocus: (CGPoint) -> Void
+        var onPinchChanged: (CGFloat, CGFloat) -> Void
+        var pinchBase: () -> CGFloat
+        private var base: CGFloat = 1.0
+
+        init(onTapFocus: @escaping (CGPoint) -> Void, onPinchChanged: @escaping (CGFloat, CGFloat) -> Void, pinchBase: @escaping () -> CGFloat) {
+            self.onTapFocus = onTapFocus; self.onPinchChanged = onPinchChanged; self.pinchBase = pinchBase
+        }
+        @objc func handlePinch(_ g: UIPinchGestureRecognizer) {
+            if g.state == .began { base = pinchBase() }
+            onPinchChanged(g.scale, base)
+        }
+        @objc func handleTap(_ g: UITapGestureRecognizer) {
+            guard let v = g.view else { return }
+            onTapFocus(g.location(in: v))
+        }
+        // Allow pinch to run alongside the tap recognizer without conflict.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+// A brief focus/exposure reticle shown at the tapped point.
+private struct FocusReticle: View {
+    @State private var scale: CGFloat = 1.25
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(red: 0.98, green: 0.84, blue: 0.4), lineWidth: 1.5)
+            .frame(width: 72, height: 72)
+            .scaleEffect(scale)
+            .onAppear { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { scale = 1.0 } }
+    }
+}
+
+// Thumb-dial zoom ruler (native pattern): a horizontal tick ruler with preset labels and a centered
+// gold live "N.N×" readout, shown while the user drags across the zoom strip. Purely a display of the
+// current zoom + range; the drag gesture that drives it lives on the strip (so one gesture owns zoom).
+private struct ZoomDial: View {
+    let zoom: Double
+    let range: ClosedRange<Double>
+    let presets: [Double]
+    private let gold = Color(red: 0.83, green: 0.66, blue: 0.33)
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(CameraZoomFormat.liveLabel(zoom))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(gold)
+                .accessibilityLabel("Zoom \(CameraZoomFormat.liveLabel(zoom))")
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .top) {
+                    // Tick marks across the log range (minor ticks + labeled preset ticks).
+                    ForEach(tickFractions(count: 25), id: \.self) { f in
+                        Rectangle().fill(.white.opacity(0.35))
+                            .frame(width: 1, height: 8)
+                            .position(x: f * w, y: 6)
+                    }
+                    ForEach(presets, id: \.self) { p in
+                        let f = CameraZoomFormat.dialFraction(fromZoom: p, range: range)
+                        VStack(spacing: 2) {
+                            Rectangle().fill(.white.opacity(0.9)).frame(width: 1.5, height: 12)
+                            Text(CameraZoomFormat.label(p))
+                                .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                        }
+                        .position(x: f * w, y: 14)
+                    }
+                    // Center gold indicator = the current zoom position.
+                    let cf = CameraZoomFormat.dialFraction(fromZoom: zoom, range: range)
+                    Rectangle().fill(gold).frame(width: 2.5, height: 16)
+                        .position(x: cf * w, y: 6)
+                }
+            }
+            .frame(height: 34)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func tickFractions(count: Int) -> [CGFloat] {
+        guard count > 1 else { return [0] }
+        return (0..<count).map { CGFloat($0) / CGFloat(count - 1) }
+    }
+}
+
+// Vertical exposure "sun" slider (Increment 2) beside the focus reticle: drag up → brighter (+EV),
+// down → darker (−EV); maps a vertical drag to the device's real bias range. A sun icon rides the knob.
+private struct ExposureSlider: View {
+    @Binding var value: Float
+    let range: ClosedRange<Float>
+    var onInteract: () -> Void
+    private let trackHeight: CGFloat = 140
+
+    var body: some View {
+        let frac = CGFloat(CameraZoomFormat.exposureFraction(fromEV: value, range: range))
+        ZStack(alignment: .center) {
+            Capsule()
+                .fill(Color.black.opacity(0.35))
+                .frame(width: 28, height: trackHeight)
+            Image(systemName: "sun.max.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(Color(red: 0.98, green: 0.84, blue: 0.4))
+                // frac 0 (min EV) sits at the bottom; frac 1 (max EV) at the top.
+                .offset(y: (0.5 - frac) * (trackHeight - 24))
+        }
+        .frame(width: 36, height: trackHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    onInteract()
+                    // Up (negative y) increases EV. Map the knob's y within the track to the range.
+                    let p = 1 - min(max(g.location.y / trackHeight, 0), 1)   // 0 bottom → 1 top
+                    value = CameraZoomFormat.exposureEV(fromFraction: Float(p), range: range)
+                }
+        )
+        .accessibilityLabel("Exposure")
+        .accessibilityValue(String(format: "%.1f EV", value))
+    }
+}
+

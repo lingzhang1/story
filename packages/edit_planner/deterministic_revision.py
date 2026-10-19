@@ -36,20 +36,31 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     def _as_list(v):
         return v if isinstance(v, list) else ([v] if v else [])
 
-    exclude = set(_as_list(directives.get("exclude")))
-    must_inc = _as_list(directives.get("must_include"))
-    opening = directives.get("opening")
-    ending = directives.get("ending")
-    after_pairs = [(p[0], p[1]) for p in (directives.get("order_after") or [])
+    # Case-INSENSITIVE id matching. Base-plan segment asset_ids are lowercase (moments[] payload is
+    # lowercased); directive ids historically arrived UPPERCASE, so a raw `in`/`==` silently failed to find
+    # them -> the reorder/exclude no-op'd and the "revised" plan came back byte-identical to the base. Fold
+    # every directive id to lowercase and match against lowercased segment asset_ids throughout.
+    def _lc(v):
+        return v.lower() if isinstance(v, str) else v
+
+    def _aid(s):
+        a = s.get("asset_id")
+        return a.lower() if isinstance(a, str) else a
+
+    exclude = set(_lc(x) for x in _as_list(directives.get("exclude")))
+    must_inc = [_lc(x) for x in _as_list(directives.get("must_include"))]
+    opening = _lc(directives.get("opening"))
+    ending = _lc(directives.get("ending"))
+    after_pairs = [(_lc(p[0]), _lc(p[1])) for p in (directives.get("order_after") or [])
                    if isinstance(p, (list, tuple)) and len(p) == 2]
-    adj_pairs = [(p[0], p[1]) for p in (directives.get("order_adjacent") or [])
+    adj_pairs = [(_lc(p[0]), _lc(p[1])) for p in (directives.get("order_adjacent") or [])
                  if isinstance(p, (list, tuple)) and len(p) == 2]
 
     # 1. Drop excluded segments (by asset_id).
-    kept = [copy.deepcopy(s) for s in segs if s.get("asset_id") not in exclude]
+    kept = [copy.deepcopy(s) for s in segs if _aid(s) not in exclude]
     if not kept:
         return None
-    present = {s.get("asset_id") for s in kept}
+    present = {_aid(s) for s in kept}
 
     # 2. must_include that is NOT already present cannot be satisfied by reordering alone -> fall back to AI
     #    (the AI path can pull a NEW segment from that Moment; this deterministic path never invents segments).
@@ -65,7 +76,7 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     #    position; a Moment used in multiple segments keeps its segments grouped in original relative order).
     order: list[str] = []
     for s in kept:
-        aid = s.get("asset_id")
+        aid = _aid(s)
         if aid not in order:
             order.append(aid)
 
@@ -100,7 +111,7 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     from collections import defaultdict, deque
     buckets: dict[str, deque] = defaultdict(deque)
     for s in kept:
-        buckets[s.get("asset_id")].append(s)
+        buckets[_aid(s)].append(s)   # key by lowercased asset_id to match the normalized `order` space
     new_segs: list[dict] = []
     for aid in order:
         q = buckets.get(aid)
@@ -116,4 +127,69 @@ def apply_deterministic_revision(base_plan: dict, directives: dict) -> dict | No
     return out
 
 
-__all__ = ["apply_deterministic_revision"]
+# Renderer speed envelope — mirror of the validator's RENDERER_SPEED_MIN/MAX. A re-time must never produce a
+# segment outside it (the deterministic validator would reject the plan).
+_SPEED_MIN, _SPEED_MAX = 0.5, 2.0
+
+
+def apply_deterministic_retime(base_plan: dict, target_clip_seconds: float,
+                               min_total_seconds: float | None = None) -> dict | None:
+    """Phase 3 timing-only fast path. Shorten EVERY segment toward `target_clip_seconds` WITHOUT a model call
+    and WITHOUT changing which clips are used, their order, the soundtrack, native-audio policy or transitions —
+    the owner's preservation contract for a pure pacing revise ("shorten each clip to ~5s").
+
+    "Shorten a clip to ~5s" means SHOW ~5 SECONDS OF THE FOOTAGE AT NORMAL SPEED — i.e. TRIM the source window
+    to ~5s and keep speed 1.0 — NOT cram the clip's whole span into a 5s output, which would force a ~2x
+    speed-up and pitch the native audio up. So for each segment we set the source window to the first
+    `target_clip_seconds` of its existing window (preserving the planner's chosen in-point), set
+    output_duration = that trimmed span, and KEEP speed at 1.0. A clip whose source window is ALREADY shorter
+    than the target keeps its full window (we never stretch footage that isn't there); only if a clip is so
+    short that it must be slowed to reach a floor do we touch speed, clamped to [0.5, 2.0].
+
+    `min_total_seconds` (target duration's lower bound, passed only for a user-EXACT duration) lifts the
+    per-clip trim length uniformly so the whole video still clears the bound while staying within each clip's
+    available source. Returns a new plan dict, or None when the base plan is unusable. Caller MUST validate."""
+    import copy
+    if not isinstance(base_plan, dict) or not base_plan.get("segments"):
+        return None
+    if not (isinstance(target_clip_seconds, (int, float)) and target_clip_seconds > 0):
+        return None
+    out = copy.deepcopy(base_plan)
+    # Per-segment available source window. We trim the END toward start+target, never past the clip's own
+    # available footage (available = current window; we do not invent source beyond what the base chose).
+    windows = []  # (seg, start, avail_span) ; avail_span None => leave segment untouched
+    for s in out.get("segments", []):
+        a = s.get("source_start_seconds"); b = s.get("source_end_seconds")
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or b <= a:
+            windows.append((s, None, None)); continue
+        windows.append((s, float(a), float(b) - float(a)))
+
+    def _assign(trim_to: float):
+        for s, start, avail in windows:
+            if avail is None:
+                continue
+            # Show at most `trim_to` seconds, but never more than the clip actually has.
+            keep = min(float(trim_to), avail)
+            s["source_start_seconds"] = round(start, 3)
+            s["source_end_seconds"] = round(start + keep, 3)
+            s["output_duration_seconds"] = round(keep, 3)   # normal speed: output == trimmed source span
+            s["speed"] = 1.0
+
+    _assign(target_clip_seconds)
+    # For a user-EXACT target that the trimmed total undershoots, lengthen the per-clip trim uniformly (still
+    # bounded by each clip's available footage) until the total clears the lower bound — preserving clips,
+    # order and NORMAL speed throughout. Clips with little footage simply contribute what they have.
+    if min_total_seconds and min_total_seconds > 0:
+        def _total():
+            return sum((s.get("output_duration_seconds") or 0.0) for s in out["segments"])
+        if _total() < min_total_seconds:
+            trim = target_clip_seconds
+            for _ in range(32):  # bounded: widen the per-clip trim toward each clip's available span
+                trim *= 1.25
+                _assign(trim)
+                if _total() >= min_total_seconds:
+                    break
+    return out
+
+
+__all__ = ["apply_deterministic_revision", "apply_deterministic_retime"]

@@ -224,6 +224,16 @@ class FallbackModelGateway:
         self.last_fallback: bool = False
         self.last_error: str | None = None
 
+    # Model ids for diagnostics (which model actually produced a given call). Best-effort: a gateway without a
+    # model_id (e.g. a test fake) yields None.
+    @property
+    def primary_model_id(self) -> str | None:
+        return getattr(self._primary, "model_id", None)
+
+    @property
+    def fallback_model_id(self) -> str | None:
+        return getattr(self._fallback, "model_id", None)
+
     def generate_structured(self, req: StructuredRequest) -> StructuredResult:
         self.last_fallback = False
         self.last_error = None

@@ -1,4 +1,6 @@
 import Foundation
+import Foundation
+import CryptoKit
 import SwiftData
 
 // MusicSelectionResolver (R-d Batch C) — the UI-side orchestration that turns a Story into a resolved
@@ -93,16 +95,44 @@ final class MusicSelectionResolver {
         let covPresent = Self.isNonEmptyObject(coverageJSON)
 
         // 2. MusicPlan (frozen music_plan/1). 404/503 => no music.
+        // LATENCY P0: the MusicPlan LLM call is ~10s and was re-run on EVERY music open. Cache it per Story
+        // keyed by a canonical fingerprint of ALL inputs that feed /v1/music-plan. A hit reuses the persisted
+        // plan verbatim (no model call); any input change misses and recomputes. The frozen prompt/contract
+        // are untouched — this only avoids RE-asking for an answer we already have.
+        let planFingerprint = Self.musicPlanFingerprint(
+            intent: intentJSON, direction: directionJSON, guide: guideJSON,
+            coverage: coverageJSON, soundPreference: effectivePref, target: target)
         let planJSON: JSONValue
-        do {
-            planJSON = try await planService.plan(MusicPlanRequestDTO(
-                storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
-                targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON,
-                soundPreference: effectivePref))
-        } catch {
-            StoryCreativeRefinement.lastMusicPlanInput =
-                "build=\(StoryCreativeRefinement.buildIdentifier) ensureGuide=\(ensuredGuide != nil ? "ok" : "nil") guide=\(guidePresent ? "yes(\(guideDims)dims)" : "EMPTY") coverage=\(covPresent ? "yes" : "EMPTY") -> MusicPlan ERROR"
-            return nil
+        if let cached = Self.cachedMusicPlan(storyId: story.id, fingerprint: planFingerprint, context: context) {
+            planJSON = cached
+            MediaEngineV1.beacon("musicplan: cache HIT fp=\(planFingerprint.prefix(8))")
+        } else {
+            // De-dupe concurrent identical requests (two rapid "find music" opens) so only ONE inference runs.
+            if let inflight = Self.inFlightMusicPlans[planFingerprint] {
+                planJSON = (try? await inflight.value) ?? .object([:])
+                if case .object(let o) = planJSON, o.isEmpty { return nil }
+            } else {
+                let task = Task<JSONValue, Error> {
+                    try await planService.plan(MusicPlanRequestDTO(
+                        storyId: story.id, creativeIntent: intentJSON, musicDirection: directionJSON,
+                        targetDurationSeconds: target, storyGuide: guideJSON, storyCoverage: coverageJSON,
+                        soundPreference: effectivePref))
+                }
+                Self.inFlightMusicPlans[planFingerprint] = task
+                defer { Self.inFlightMusicPlans[planFingerprint] = nil }
+                do {
+                    planJSON = try await task.value
+                } catch {
+                    StoryCreativeRefinement.lastMusicPlanInput =
+                        "build=\(StoryCreativeRefinement.buildIdentifier) ensureGuide=\(ensuredGuide != nil ? "ok" : "nil") guide=\(guidePresent ? "yes(\(guideDims)dims)" : "EMPTY") coverage=\(covPresent ? "yes" : "EMPTY") -> MusicPlan ERROR"
+                    return nil
+                }
+                // Persist ONLY a valid, non-empty plan (never cache a partial/empty result).
+                if case .object(let o) = planJSON, !o.isEmpty {
+                    Self.storeMusicPlan(storyId: story.id, fingerprint: planFingerprint, plan: planJSON, context: context)
+                    MediaEngineV1.beacon("musicplan: cache MISS->stored fp=\(planFingerprint.prefix(8))")
+                }
+            }
         }
 
         // 3. candidates (+ preview + top analysis). Provider off/unavailable => no music.
@@ -188,6 +218,43 @@ final class MusicSelectionResolver {
             trackTitle: title)
     }
 
+    /// Resolve a KNOWN provider track directly by its id, WITHOUT running a fresh recommendation. Used when a
+    /// Revise must carry the base version's existing soundtrack forward: re-recommending (resolveSelection's
+    /// path) can return a DIFFERENT top pick or fail entirely on a transient provider hiccup, silently dropping
+    /// music from the revised video. This path only needs the base's persisted role/priority/title/plan, so it
+    /// downloads + analyses the exact same track and never depends on the recommender. nil => download/analysis
+    /// failed (caller then runs the honest no-music path, same as before).
+    func resolveKnownTrack(trackId: String, musicPlanJSON: JSONValue,
+                           soundtrackRole: String, nativeAudioPriority: String,
+                           title: String) async -> StoryCreationCoordinator.MusicSelection? {
+        let analysis: MusicAnalysisV1
+        let analysisJSON: JSONValue
+        do {
+            let both = try await candidatesService.analysisBoth(trackId: trackId)
+            analysis = both.analysis; analysisJSON = both.raw
+        } catch {
+            MediaEngineV1.beacon("resolveKnown: analysis FAILED \(error)")
+            return nil
+        }
+        let url: URL
+        do { url = try await candidatesService.downloadSoundtrack(trackId: trackId) }
+        catch {
+            MediaEngineV1.beacon("resolveKnown: download FAILED \(error)")
+            return nil
+        }
+        MediaEngineV1.beacon("resolveKnown: OK track=\(trackId.prefix(8)) url=\(url.lastPathComponent)")
+        return StoryCreationCoordinator.MusicSelection(
+            musicPlanJSON: musicPlanJSON,
+            trackId: trackId,
+            analysisJSON: analysisJSON,
+            analysis: analysis,
+            soundtrackURL: url,
+            soundtrackRole: soundtrackRole,
+            nativeAudioPriority: nativeAudioPriority,
+            trackTitle: title)
+    }
+
+
     // MARK: - helpers
 
     /// True when the JSONValue is an object with at least one key (i.e. a real Guide/Coverage was passed).
@@ -200,6 +267,70 @@ final class MusicSelectionResolver {
     private static func dimensionCount(_ v: JSONValue) -> Int {
         if case let .object(d) = v, case let .array(a)? = d["dimensions"] { return a.count }
         return 0
+    }
+
+    // MARK: - MusicPlan cache (latency P0)
+
+    /// In-flight MusicPlan inferences keyed by fingerprint, so two near-simultaneous "find music" opens share
+    /// ONE model call instead of each spending ~10s. MainActor-isolated (the resolver is @MainActor).
+    private static var inFlightMusicPlans: [String: Task<JSONValue, Error>] = [:]
+
+    /// Canonical fingerprint of EVERY input that feeds /v1/music-plan. Any change (intent, direction, guide,
+    /// coverage, sound preference, target, prompt version) produces a different hash -> cache miss -> recompute.
+    /// Deterministic (sorted-keys JSON + SHA256), so it is stable across app launches.
+    static func musicPlanFingerprint(intent: JSONValue, direction: JSONValue, guide: JSONValue,
+                                     coverage: JSONValue, soundPreference: String, target: Double,
+                                     promptVersion: String = "music_plan/1") -> String {
+        // Provenance / volatile keys that change run-to-run (or when a Guide/Coverage/Direction is re-stamped)
+        // but do NOT affect the MusicPlan's content. Stripping them recursively is what makes a reopen with
+        // unchanged inputs hash IDENTICALLY — otherwise `generated_at` alone forces a cache miss every time
+        // (observed: two reopens produced two different fingerprints and both missed).
+        let volatileKeys: Set<String> = ["generated_at", "generatedat", "created_at", "createdat",
+                                         "updated_at", "updatedat", "timestamp", "id", "model_id", "modelid",
+                                         "prompt_version", "promptversion", "schema_version", "schemaversion",
+                                         "correlation_id", "correlationid"]
+        func strip(_ v: JSONValue) -> JSONValue {
+            switch v {
+            case .object(let d):
+                var out: [String: JSONValue] = [:]
+                for (k, val) in d where !volatileKeys.contains(k.lowercased()) { out[k] = strip(val) }
+                return .object(out)
+            case .array(let a):
+                return .array(a.map(strip))
+            default:
+                return v
+            }
+        }
+        func canon(_ v: JSONValue) -> String {
+            let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
+            return (try? enc.encode(strip(v))).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+        let joined = [promptVersion, String(format: "%.1f", target), soundPreference,
+                      canon(intent), canon(direction), canon(guide), canon(coverage)].joined(separator: "|")
+        let digest = SHA256.hash(data: Data(joined.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Return the cached MusicPlan JSON for this Story IF the stored fingerprint matches; else nil (miss).
+    static func cachedMusicPlan(storyId: UUID, fingerprint: String, context: ModelContext) -> JSONValue? {
+        let desc = FetchDescriptor<MusicPlanCacheModel>(predicate: #Predicate { $0.storyId == storyId })
+        guard let row = (try? context.fetch(desc))?.first, row.inputFingerprint == fingerprint,
+              let data = row.planJSON.data(using: .utf8),
+              let v = try? JSONDecoder().decode(JSONValue.self, from: data) else { return nil }
+        return v
+    }
+
+    /// Upsert the cached MusicPlan (one row per Story). Only called with a validated, non-empty plan.
+    static func storeMusicPlan(storyId: UUID, fingerprint: String, plan: JSONValue, context: ModelContext) {
+        let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
+        guard let data = try? enc.encode(plan), let json = String(data: data, encoding: .utf8) else { return }
+        let desc = FetchDescriptor<MusicPlanCacheModel>(predicate: #Predicate { $0.storyId == storyId })
+        if let row = (try? context.fetch(desc))?.first {
+            row.planJSON = json; row.inputFingerprint = fingerprint; row.updatedAt = .now
+        } else {
+            context.insert(MusicPlanCacheModel(storyId: storyId, planJSON: json, inputFingerprint: fingerprint))
+        }
+        try? context.save()
     }
 
     /// Load the Story's persisted StoryGuide wire JSON (story_guide/1) as a JSONValue, or an empty object when

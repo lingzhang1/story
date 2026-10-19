@@ -52,6 +52,15 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     case invalidPlan(String)           // our deterministic validator rejected the plan (pre-AVFoundation)
     case renderFailed(String)          // the renderer threw
     case alreadyCreating               // duplicate-job guard
+    /// The plan could not satisfy the hard directives even after repair (backend `invalid_after_repair`) —
+    /// typically too many exclusions / an over-constrained instruction. NOT transient: retrying the same
+    /// instruction fails identically, so the UI must ask the user to loosen/adjust the instruction, never
+    /// offer a plain Retry.
+    case directivesUnsatisfiable(String)
+    /// The requested edit is not something the renderer can do (color/filters/effects/reframe/stabilize/
+    /// overlays — backend `unsupported_operation`). NOT transient: retrying fails identically, so the UI
+    /// explains the limitation and never offers a plain Retry. The selected version is kept unchanged.
+    case unsupportedOperation(String)
     /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
     /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
     /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
@@ -67,6 +76,14 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .invalidPlan(let r): return "The plan can't be rendered: \(r)"
         case .renderFailed(let r): return "Rendering failed: \(r)"
         case .alreadyCreating: return "A video is already being created for this Story."
+        case .directivesUnsatisfiable:
+            return "Your instruction couldn't be applied to this footage — it may exclude too much or conflict. Try adjusting it (for example, exclude fewer Moments)."
+        case .unsupportedOperation(let detail):
+            // Prefer the backend's specific capability message; fall back to a clear generic one.
+            let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return d.isEmpty
+                ? "That kind of edit isn't supported yet — this app can re-cut, re-time, reorder, set transitions and change the soundtrack, but not color, filters or visual effects. Your current version was kept."
+                : d
         case .insufficientMaterial(let achievable, let requested, let suggested):
             let a = Int(achievable.rounded()), req = Int(requested.rounded())
             if let s = suggested {
@@ -170,25 +187,67 @@ final class StoryCreationCoordinator {
     private var pendingRevisionContext: JSONValue?
     private var pendingParentVersionId: UUID?
     private var pendingOperationType: String = "original"
+    /// True when a Create-Another-Version run was launched from the Customize sheet with directives the user
+    /// typed FOR THIS operation — those directives are then folded (mode=revise) instead of a blind explore.
+    /// Reset by every entry point so a one-tap Explore never inherits them.
+    private var pendingDirectedByCustomize: Bool = false
     /// Diversity diagnostics from the most recent Explore run (nil otherwise) — read for device verification.
     private(set) var lastDiversity: RevisionContextBuilder.Diversity?
 
     /// Compose the effective revision_context sent to the planner: the per-run base context (Explore/Revise,
-    /// or nil for an original create) with the Story's PERSISTED explicit Moment-reference directives folded
-    /// into its `directives` key. The directives are resolved stable UUIDs captured in Creative Direction, so
-    /// they apply to BOTH an original creation and a version re-create. Returns nil only when there is neither
-    /// a base context nor any directives (behavior unchanged — the request is byte-identical to today).
-    static func composeRevisionContext(base: JSONValue?, story: StoryModel) -> JSONValue? {
-        let directives = ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)?.jsonValue()
-        guard directives != nil || base != nil else { return nil }
+    /// or nil for an original create) with the Story's PERSISTED explicit Moment-reference directives + soft
+    /// creative direction folded into its `directives` / `soft_direction` keys. These are the ONE-TIME Stage 2
+    /// (Customize) instructions, so they are folded ONLY for the ORIGINAL create (`operationType == "original"`):
+    /// a deliberate "Create Another Version" uses an explore context and a Revise supplies its own directives, so
+    /// neither inherits the one-time creation-time instruction (owner test 12). A retry of the original create is
+    /// still "original" and correctly re-applies them. Returns nil only when there is neither a base context nor
+    /// any foldable instruction (behavior unchanged — the request is byte-identical to today).
+    static func composeRevisionContext(base: JSONValue?, story: StoryModel,
+                                       operationType: String = "original",
+                                       directedByCustomize: Bool = false) -> JSONValue? {
+        // Fold the Story's persisted Creative-Direction instructions when they belong to THIS operation:
+        //  - an ORIGINAL create (the one-time Stage 2 instruction the user just entered), or
+        //  - a Create-Another-Version launched FROM the Customize sheet with directives typed for this run
+        //    (directedByCustomize) — "start from Moment 15, then Moment 2" must be honored, not discarded.
+        // NOT folded for a one-tap "Create another version" from the Result (directedByCustomize=false) or a
+        // Revise (which supplies its own directives), so a stale creation-time instruction never silently leaks
+        // into an unrelated later Explore (owner test 12).
+        let usesPersisted = (operationType == "original") || (operationType == "another_version" && directedByCustomize)
+        let directives = usesPersisted ? ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)?.jsonValue() : nil
+        let soft: String? = {
+            guard usesPersisted else { return nil }
+            let t = (story.creativeDirectionText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }()
+        guard directives != nil || soft != nil || base != nil else { return nil }
         // Start from the base object (or an empty revise-less object). An original create with directives only
         // uses mode "revise" so the planner reads the hard requirements as REQUIREMENTS, not an explore nudge.
         var obj: [String: JSONValue]
         if case .object(let o)? = base { obj = o } else { obj = [:] }
-        if obj["mode"] == nil { obj["mode"] = .string(directives != nil ? "revise" : "explore") }
+        if obj["mode"] == nil { obj["mode"] = .string((directives != nil || soft != nil) ? "revise" : "explore") }
+        // HARD directives must be read as REQUIREMENTS, so when we fold them onto an explore base (a
+        // Customize-directed Create Another Version: "start from Moment 15, then Moment 2"), upgrade the mode
+        // from explore to revise. Without this the planner would treat an explicit opening/order as a soft
+        // nudge and could ignore it — exactly the "doesn't align to my instruction" bug.
+        if directives != nil, case .string("explore")? = obj["mode"] { obj["mode"] = .string("revise") }
         // Fold the Story's persisted creation-time directives ONLY when the base context does not already carry
         // its own (a Revise run supplies its own directives from the user's revise instruction — never clobber).
         if obj["directives"] == nil, let directives { obj["directives"] = directives }
+        // Fold the soft creative direction when present and the base has not supplied one.
+        if obj["soft_direction"] == nil, let soft { obj["soft_direction"] = .string(soft) }
+        // Duration-target PROVENANCE (owner decision 2026-10-18): the NUMERIC target length's source, tracked
+        // separately from the editorial mode. A `.custom` editorial mode means the user typed an EXACT length
+        // (authoritative -> user_exact); Highlights/Full are explicit EDITORIAL preferences whose numeric
+        // duration is AI-recommended (-> ai_recommended), so a timing-only revise may legitimately shorten the
+        // whole video below it. Absent an editorial mode we say nothing and the planner defaults to the strict
+        // user_exact behavior. Never clobber a source the base context already carries.
+        if obj["duration_target_source"] == nil {
+            switch (story.editorialMode ?? "").lowercased() {
+            case "custom":            obj["duration_target_source"] = .string("user_exact")
+            case "highlights", "full": obj["duration_target_source"] = .string("ai_recommended")
+            default: break
+            }
+        }
         return .object(obj)
     }
 
@@ -202,6 +261,34 @@ final class StoryCreationCoordinator {
         if o["directives"] != nil { tag += "+dir" }
         if o["base_plan"] != nil { tag += "+base" }
         return tag
+    }
+
+    // Phase 2 scope-classifier readers over the revision_context JSONValue.
+    /// True when the context carries at least one populated hard directive (opening/ending/include/exclude/order).
+    static func revisionHasHardDirectives(_ ctx: JSONValue?) -> Bool {
+        guard case .object(let o)? = ctx, case .object(let d)? = o["directives"] else { return false }
+        let keys = ["opening", "ending", "must_include", "exclude", "order_after", "order_adjacent"]
+        for k in keys {
+            switch d[k] {
+            case .some(.string(let s)) where !s.isEmpty: return true
+            case .some(.array(let a)) where !a.isEmpty: return true
+            default: continue
+            }
+        }
+        return false
+    }
+
+    /// The free-text soft creative/pacing direction, or "" when absent.
+    static func revisionSoftDirection(_ ctx: JSONValue?) -> String {
+        guard case .object(let o)? = ctx, case .string(let s)? = o["soft_direction"] else { return "" }
+        return s
+    }
+
+    /// True when the context carries the exact base EditPlan (required to edit in place and preserve edits).
+    static func revisionHasBasePlan(_ ctx: JSONValue?) -> Bool {
+        guard case .object(let o)? = ctx else { return false }
+        if case .object(let bp)? = o["base_plan"] { return !bp.isEmpty }
+        return false
     }
 
     init(
@@ -244,6 +331,7 @@ final class StoryCreationCoordinator {
         pendingRevisionContext = nil
         pendingParentVersionId = nil
         pendingOperationType = "original"
+        pendingDirectedByCustomize = false
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
 
@@ -252,6 +340,10 @@ final class StoryCreationCoordinator {
     private func beginRun(for story: StoryModel, outputFormat: String,
                           targetSeconds: Double?, music: MusicSelection?) {
         guard !isCreating else { return }
+        // Process-global single-flight: refuse if ANOTHER coordinator (a different view, or the app-level
+        // recovery driver) is already running/resuming this Story — two concurrent runs would each persist a
+        // GeneratedOutput and duplicate the version. Phase 5.
+        guard Self.claimActive(story.id) else { return }
         lastStory = story
         lastOutputFormat = outputFormat
         lastTargetSeconds = targetSeconds
@@ -262,8 +354,19 @@ final class StoryCreationCoordinator {
         partialRelativePath = nil
         lastFailure = nil
         Self.setKeepAwake(true)   // don't let the screen sleep mid-plan/render (sleep tears down the connection)
-        task = Task { [weak self] in await self?.run(story: story, outputFormat: outputFormat, targetSeconds: targetSeconds) }
+        task = Task { [weak self] in
+            await self?.run(story: story, outputFormat: outputFormat, targetSeconds: targetSeconds)
+        }
     }
+
+    // Process-global set of Story ids with an ACTIVE run/resume. Guards against duplicate concurrent
+    // create/resume for the same Story across different coordinator instances (per-view + app recovery driver).
+    private static var activeStories: Set<UUID> = []
+    private static func claimActive(_ id: UUID) -> Bool {
+        if activeStories.contains(id) { return false }
+        activeStories.insert(id); return true
+    }
+    private static func releaseActive(_ id: UUID) { activeStories.remove(id) }
 
     /// Keep the device awake during an active Create/Revise so a screen sleep cannot suspend the app and tear
     /// down the in-flight planning/render connection (observed as NSURLError -1005). Cleared when the run ends.
@@ -309,14 +412,22 @@ final class StoryCreationCoordinator {
     /// fingerprint bypass). Reuses the SAME planner/validation/render path; music + user settings preserved.
     func createAnotherVersion(for story: StoryModel, from parent: GeneratedOutputModel,
                               outputFormat: String = "vertical", targetSeconds: Double? = nil,
-                              music: MusicSelection? = nil) {
+                              music: MusicSelection? = nil, directedByCustomize: Bool = false) {
         guard !isCreating else { return }
-        // Deliberate new version => NEW operation_id (clear any carried-over handle so a fresh job is minted).
+        // Phase 5: a DELIBERATE new version is a NEW operation. Abandon any stale recoverable pending op for
+        // this Story first (the user chose to start over rather than resume), so there is never more than one
+        // non-terminal operation -> no duplicate expensive jobs. Then mint a NEW operation_id.
+        abandonPendingOperations(storyId: story.id)
         story.planOperationId = nil; story.planJobId = nil
         let recents = story.generatedOutputs.sorted { $0.createdAt > $1.createdAt }
         pendingRevisionContext = RevisionContextBuilder.explore(parent: parent, recents: recents)
         pendingParentVersionId = parent.versionId ?? parent.id
         pendingOperationType = "another_version"
+        // When the user reached this via the Customize sheet and typed Creative Direction for THIS operation,
+        // honor those directives (mode=revise semantics over the explore base) — they are not a stale
+        // creation-time leak, they are this operation's intent. A one-tap "Create another version" from the
+        // Result (no Customize sheet) leaves this false, so it stays a blind explore and inherits nothing.
+        pendingDirectedByCustomize = directedByCustomize
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
@@ -331,11 +442,13 @@ final class StoryCreationCoordinator {
                        outputFormat: String = "vertical", targetSeconds: Double? = nil,
                        music: MusicSelection? = nil) {
         guard !isCreating else { return }
+        abandonPendingOperations(storyId: story.id)
         story.planOperationId = nil; story.planJobId = nil
         pendingRevisionContext = RevisionContextBuilder.revise(base: base, directives: directives,
                                                                softDirection: softDirection)
         pendingParentVersionId = base.versionId ?? base.id
         pendingOperationType = "revision"
+        pendingDirectedByCustomize = false
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
@@ -343,7 +456,7 @@ final class StoryCreationCoordinator {
     // MARK: - Pipeline
 
     private func run(story: StoryModel, outputFormat: String, targetSeconds: Double?) async {
-        defer { isCreating = false; task = nil; Self.setKeepAwake(false) }
+        defer { isCreating = false; task = nil; Self.setKeepAwake(false); Self.releaseActive(story.id) }
 
         // ---- preparing: gather REAL persisted inputs; missing prerequisite -> honest failure ----
         state = .preparing
@@ -363,7 +476,9 @@ final class StoryCreationCoordinator {
                 musicPlan: planForBuilder,
                 musicAssetId: assetIdForBuilder,
                 musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON,
-                revisionContext: Self.composeRevisionContext(base: pendingRevisionContext, story: story))
+                revisionContext: Self.composeRevisionContext(base: pendingRevisionContext, story: story,
+                                                             operationType: pendingOperationType,
+                                                             directedByCustomize: pendingDirectedByCustomize))
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
@@ -390,7 +505,23 @@ final class StoryCreationCoordinator {
         state = .planning
         var plan: EditPlanV2
         let requested = story.effectiveEditingApproach
-        let wantMultimodal = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
+        // Phase 2 — revision scope routing. For a REVISE, the amount of planning is decided by the actual
+        // change scope, not by requested.requiresMultimodal alone: a targeted change (pacing tweak, single-shot
+        // swap, localized edit) runs text-light (no contact sheets) over the exact base plan, preserving
+        // unaffected edits; only a BROAD "rebuild" reinterpretation sends the full multimodal payload. A visual
+        // ask ("most beautiful shot") stays targeted but DOES carry images. Non-revise ops are unchanged.
+        let isRevise = (pendingOperationType == "revision")
+        let reviseScope: RevisionScope? = isRevise
+            ? RevisionScopeClassifier.classify(
+                hasHardDirectives: Self.revisionHasHardDirectives(pendingRevisionContext),
+                softDirection: Self.revisionSoftDirection(pendingRevisionContext),
+                hasBasePlan: Self.revisionHasBasePlan(pendingRevisionContext))
+            : nil
+        let wantMultimodal: Bool = {
+            let base = requested.requiresMultimodal && StoryMultimodalPlanning.enabled
+            guard base, let scope = reviseScope else { return base }
+            return scope.sendsSheets   // targeted text-light revise -> no sheets; full/visual -> sheets
+        }()
         do {
             // ---- ASYNC Edit Planning (Phase 2): submit a job, poll to completion. Removes the ~120s App
             // Runner ceiling; the worker runs the SAME core. BOTH approaches use this one path. ----
@@ -411,7 +542,22 @@ final class StoryCreationCoordinator {
             }
             let opId = story.planOperationId!
             let brief = wantMultimodal ? StoryMultimodalPlanning.creativeBrief : nil
-            let critique = wantMultimodal && StoryMultimodalPlanning.critiqueRevisionEnabled
+            // Phase 4 latency: critique roughly DOUBLES model calls (plan -> critique -> revise). For a
+            // deliberate "Create Another Version" (Explore) the default is now ONE multimodal planning call —
+            // critique is CONDITIONAL, not automatic — while the ORIGINAL create keeps its existing gated
+            // behavior. Images, prior-version context/diversity, mandatory deterministic validation and the
+            // worker's bounded repair are all preserved; only the automatic critique pass is dropped for
+            // Explore. An explicit opt-in (critiqueExploreEnabled, default false) can still force it.
+            let critique: Bool = {
+                guard wantMultimodal && StoryMultimodalPlanning.critiqueRevisionEnabled else { return false }
+                if pendingOperationType == "another_version" {
+                    return StoryMultimodalPlanning.critiqueExploreEnabled   // conditional; default OFF
+                }
+                // Phase 2: a TARGETED revise (Path B) runs critique OFF by default — it is a bounded change,
+                // not a creative re-edit. Only a full re-edit (Path C) keeps the original revise behavior.
+                if let scope = reviseScope, scope != .fullReedit { return false }
+                return true   // original create / full-reedit revision: unchanged
+            }()
 
             // Submit (or recover an in-flight job_id). Submit is IDEMPOTENT on operation_id, so a transport
             // error (e.g. the screen slept and iOS tore down the connection: NSURLError -1005) is safe to retry
@@ -449,6 +595,12 @@ final class StoryCreationCoordinator {
                 jobId = jid
                 story.planJobId = jobId; story.planJobStatus = "queued"; try? context.save()
             }
+            // Phase 1: durably record this unfinished operation NOW (job handle known) so a background/suspend/
+            // force-quit between here and completion is recoverable WITHOUT re-inference. Reuses opId as the
+            // idempotency key; a resume reuses this row's jobId, never a new submit.
+            upsertPending(story: story, operationId: opId, jobId: jobId, phase: "planning",
+                          jobStatus: story.planJobStatus, fingerprint: Self.fingerprint(
+                            for: build.includedMedia.map(\.momentId), story: story))
             MediaEngineV1.beacon("editplan-job: submit req=\(requested.rawValue) sheets=\(sheets.count) "
                 + "critique=\(critique) job=\(jobId.prefix(8)) "
                 + "rev=\(Self.revisionModeTag(build.request.revisionContext)) "
@@ -460,6 +612,7 @@ final class StoryCreationCoordinator {
                 shouldCancel: { [weak self] in self?.cancelRequested ?? false },
                 onState: { [weak self] st in
                     story.planJobStatus = st.status.rawValue
+                    self?.updatePendingStatus(story: story, jobStatus: st.status.rawValue)
                     // Reflect the REAL backend stage in the planning sub-line (honest; backend only distinguishes
                     // queued vs running — critique happens inside one 'running' invocation and is NOT separately
                     // observable, so we do not fabricate a 'Refining' stage the server can't report).
@@ -487,10 +640,18 @@ final class StoryCreationCoordinator {
                     fallbackReason: nil, creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion,
                     requestedApproach: requested, actualApproach: actualRaw)
                 story.planJobStatus = "completed"; try? context.save()
+                // Phase 3: durably persist the completed, validated-on-fetch plan at plan_ready BEFORE
+                // rendering, so a force-quit during render resumes from the saved plan (no re-poll/re-inference).
+                let planJSON = (try? StoryContractCoding.encoder().encode(p)).flatMap { String(data: $0, encoding: .utf8) }
+                upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: jobId,
+                              phase: "plan_ready", jobStatus: "completed", planJSON: planJSON)
             case .failed:
                 // Distinguish the failure classes for honest UX (Phase 3).
+                markPendingFailed(story: story, category: final.failure?.rawValue)
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
+                case .invalidAfterRepair: return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                case .unsupportedOperation: return finishFailed(.unsupportedOperation(final.failureDetail ?? ""))
                 case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
                 default:                   return finishFailed(.planUnavailable)
                 }
@@ -562,6 +723,8 @@ final class StoryCreationCoordinator {
 
         // ---- rendering: real renderer with progress + cancel flag (music seam threaded) ----
         state = .rendering(progress: 0)
+        // Phase 3: mark rendering durably so a force-quit mid-render resumes from the saved plan (not a re-plan).
+        markPendingRendering(story: story)
         let effectiveSoundtrack = pendingMusic?.soundtrackURL ?? soundtrackURL
         // Music diagnostic breadcrumb: why does the final video have (or lack) music? Records whether a
         // soundtrack URL reached the renderer and whether that local file actually has bytes — so a silent
@@ -615,6 +778,9 @@ final class StoryCreationCoordinator {
         // The attempt is done — clear the in-flight job handles so a reopened completed Story never re-polls.
         // (A deliberate new version mints a fresh operation_id on its next create.)
         story.planOperationId = nil; story.planJobId = nil; story.planJobStatus = "completed"
+        // Phase 3 exactly-once: the output is persisted -> finalize (delete) the pending op so no
+        // foreground/reopen can ever re-render this plan into a duplicate version.
+        finalizePending(story: story)
         try? context.save()
         state = .completed(output)
     }
@@ -842,5 +1008,232 @@ final class StoryCreationCoordinator {
             hash = hash &* prime
         }
         return String(hash, radix: 16)
+    }
+}
+
+// MARK: - Durable pending-operation persistence + recovery (P0 Phases 1-3)
+//
+// These methods keep ONE PendingOperationModel row per Story in sync with the pipeline, and drive recovery of
+// an operation whose app was backgrounded, suspended, or force-quit. Recovery NEVER submits a second model
+// request: it reuses the persisted jobId/operationId and only polls/fetches/renders. Single-flight is enforced
+// by `isCreating` and a per-Story non-terminal-row guard, so repeated foreground/reopen events cannot create
+// duplicate polling or rendering tasks.
+extension StoryCreationCoordinator {
+
+    /// Fetch the (at most one) non-terminal pending operation for a Story.
+    private func fetchPending(storyId: UUID) -> PendingOperationModel? {
+        let desc = FetchDescriptor<PendingOperationModel>(
+            predicate: #Predicate { $0.storyId == storyId })
+        let rows = (try? context.fetch(desc)) ?? []
+        return rows.first { $0.isRecoverable } ?? rows.first
+    }
+
+    /// Read-only: does this Story have an operation that can be RESUMED (not yet saved/abandoned)? The UI uses
+    /// this to offer "resume" instead of silently re-creating, and to decide whether reopen should recover.
+    func hasRecoverablePendingOperation(storyId: UUID) -> Bool {
+        guard let row = fetchPending(storyId: storyId) else { return false }
+        return row.isRecoverable && row.jobId != nil
+    }
+
+    /// Mark every recoverable pending op for a Story as abandoned (user deliberately started a new operation).
+    /// Keeps the rows briefly as abandoned tombstones then they are pruned on next fetch upsert; simplest is to
+    /// delete them outright since the new operation supersedes.
+    func abandonPendingOperations(storyId: UUID) {
+        let desc = FetchDescriptor<PendingOperationModel>(predicate: #Predicate { $0.storyId == storyId })
+        for row in ((try? context.fetch(desc)) ?? []) where row.isRecoverable {
+            context.delete(row)
+        }
+        try? context.save()
+    }
+
+    /// Create-or-update the durable row for the CURRENT in-memory operation context. Called at each pipeline
+    /// transition. Captures everything a fresh coordinator needs to resume without re-inference.
+    func upsertPending(story: StoryModel, operationId: String, jobId: String?, phase: String,
+                       jobStatus: String? = nil, planJSON: String? = nil, fingerprint: String? = nil) {
+        let row: PendingOperationModel
+        if let existing = fetchPending(storyId: story.id), existing.operationId == operationId {
+            row = existing
+        } else {
+            row = PendingOperationModel(storyId: story.id, operationId: operationId,
+                                        operationType: pendingOperationType)
+            context.insert(row)
+        }
+        row.jobId = jobId ?? row.jobId
+        row.operationType = pendingOperationType
+        row.baseVersionId = pendingParentVersionId?.uuidString ?? row.baseVersionId
+        row.requestFingerprint = fingerprint ?? row.requestFingerprint
+        row.phase = phase
+        if let jobStatus { row.jobStatus = jobStatus }
+        if let planJSON { row.planJSON = planJSON }
+        row.musicSelectionRef = Self.musicRef(for: pendingMusic) ?? row.musicSelectionRef
+        row.soundtrackRole = pendingMusic?.soundtrackRole ?? row.soundtrackRole
+        row.nativeAudioPriority = pendingMusic?.nativeAudioPriority ?? row.nativeAudioPriority
+        row.outputFormat = lastOutputFormat
+        row.targetSeconds = lastTargetSeconds
+        row.updatedAt = .now
+        try? context.save()
+    }
+
+    private func updatePendingStatus(story: StoryModel, jobStatus: String) {
+        guard let row = fetchPending(storyId: story.id), row.isRecoverable else { return }
+        row.jobStatus = jobStatus
+        if jobStatus == "running" && row.phase == "submitted" { row.phase = "planning" }
+        row.updatedAt = .now
+        try? context.save()
+    }
+
+    private func markPendingRendering(story: StoryModel) {
+        guard let row = fetchPending(storyId: story.id), row.isRecoverable else { return }
+        row.phase = "rendering"; row.updatedAt = .now
+        try? context.save()
+    }
+
+    private func markPendingFailed(story: StoryModel, category: String?) {
+        guard let row = fetchPending(storyId: story.id) else { return }
+        row.failureCategory = category; row.jobStatus = "failed"
+        // Mark the op TERMINAL (abandoned) so the app-level recovery does NOT re-resume this failed job on
+        // every foreground (that caused an infinite resume->failed loop, and once planJobId was cleared it
+        // re-submitted a fresh explore job, losing the directive). The user retries via Create another version,
+        // which mints a NEW operation. A backend enqueue_lost / provider failure is surfaced once, not looped.
+        row.phase = "abandoned"
+        row.updatedAt = .now
+        try? context.save()
+    }
+
+    /// Exactly-once finalize: the output was persisted, so the operation is logically SAVED. Delete every
+    /// pending row for this Story so no later foreground/reopen can re-render this plan into a duplicate version.
+    private func finalizePending(story: StoryModel) {
+        let sid = story.id
+        let desc = FetchDescriptor<PendingOperationModel>(predicate: #Predicate { $0.storyId == sid })
+        for row in ((try? context.fetch(desc)) ?? []) {
+            context.delete(row)
+        }
+        try? context.save()
+    }
+
+    /// Stable string handle for a resolved music selection (so a resumed render can re-resolve the same track).
+    static func musicRef(for music: MusicSelection?) -> String? {
+        guard let tid = music?.trackId else { return nil }
+        return tid.hasPrefix("mymusic:") ? tid : "provider:\(tid)"
+    }
+
+    /// RESUME an unfinished operation for a Story after foreground/reopen/relaunch. Reuses the persisted
+    /// operationId + jobId — NEVER a new submit. `music` is an optionally pre-resolved selection (the view
+    /// re-resolves the persisted track where feasible); when nil the resume renders no-music rather than block.
+    ///
+    /// - queued/running  -> resume polling the existing job, then validate + render + persist.
+    /// - completed/plan_ready -> fetch/use the saved plan, render + persist (no re-poll if planJSON saved).
+    /// - failed          -> surface the failure (no new inference).
+    /// - expired         -> surface + offer a fresh attempt.
+    ///
+    /// Single-flight: refuses if a creation is already in flight for this coordinator (duplicate-task guard).
+    @discardableResult
+    func resumePendingOperation(for story: StoryModel, music: MusicSelection? = nil) -> Bool {
+        guard !isCreating else { return false }                 // a run already owns this coordinator
+        guard let row = fetchPending(storyId: story.id), row.isRecoverable, let jobId = row.jobId else {
+            return false
+        }
+        guard Self.claimActive(story.id) else { return false }  // another coordinator already resuming/creating
+        // Rehydrate the in-memory operation context from the durable row so persist() keeps lineage/music/type.
+        lastStory = story
+        lastOutputFormat = row.outputFormat ?? "vertical"
+        lastTargetSeconds = row.targetSeconds
+        pendingMusic = music
+        lastMusic = music
+        pendingOperationType = row.operationType
+        pendingParentVersionId = row.baseVersionId.flatMap(UUID.init(uuidString:))
+        pendingRevisionContext = Self.rebuildRevisionContext(for: story, row: row)
+        story.planOperationId = row.operationId
+        story.planJobId = jobId
+        isCreating = true
+        cancelRequested = false
+        Self.setKeepAwake(true)
+        MediaEngineV1.beacon("editplan-recover: resume op=\(row.operationType) phase=\(row.phase) "
+            + "job=\(jobId.prefix(8)) music=\(music == nil ? "none" : "set")")
+        task = Task { [weak self] in
+            await self?.resumeRun(story: story, row: row)
+        }
+        return true
+    }
+
+    /// Drive a resumed operation to completion. For plan_ready with a saved plan we SKIP planning entirely and
+    /// render from the saved plan; otherwise we re-enter the normal run (which reuses jobId -> no re-inference).
+    private func resumeRun(story: StoryModel, row: PendingOperationModel) async {
+        defer { isCreating = false; task = nil; Self.setKeepAwake(false); Self.releaseActive(story.id) }
+        // Fast render-resume: a saved, completed plan -> render directly (Phase 3), no poll, no re-inference.
+        if row.phase == "plan_ready" || row.phase == "rendering", let json = row.planJSON,
+           let data = json.data(using: .utf8),
+           let plan = try? StoryContractCoding.decoder().decode(EditPlanV2.self, from: data) {
+            await renderResumedPlan(plan, story: story)
+            return
+        }
+        // Otherwise re-enter the normal pipeline: it rebuilds the request, sees story.planJobId set, and
+        // RESUMES POLLING the existing job (never re-submits). Completion -> validate -> render -> persist.
+        await run(story: story, outputFormat: lastOutputFormat, targetSeconds: lastTargetSeconds)
+    }
+
+    /// Render a recovered plan through the same validate+render+persist tail as a fresh run, so lineage,
+    /// soundtrack, parent version, operationType and exactly-once persistence are identical.
+    private func renderResumedPlan(_ plan0: EditPlanV2, story: StoryModel) async {
+        state = .preparing
+        let build: EditPlanRequestBuilder.Build
+        do {
+            build = try EditPlanRequestBuilder.build(
+                story: story, context: context, targetSeconds: lastTargetSeconds, outputFormat: lastOutputFormat,
+                musicPlan: nil, musicAssetId: nil, musicAnalysis: nil,
+                revisionContext: nil)
+        }
+        catch { return finishFailed(.planUnavailable) }
+
+        let plan = plan0
+        state = .validating
+        let resolver = MomentResolver.urlResolver(for: build.includedMedia)
+        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
+            return finishFailed(.invalidPlan(reason))
+        }
+        state = .rendering(progress: 0)
+        markPendingRendering(story: story)
+        let effectiveSoundtrack = pendingMusic?.soundtrackURL ?? soundtrackURL
+        let inputs = MediaEngineInputs(
+            plan: plan, resolveMomentURL: resolver,
+            soundtrackURL: effectiveSoundtrack,
+            musicAnalysis: pendingMusic?.analysis ?? musicAnalysis,
+            soundtrackRole: pendingMusic?.soundtrackRole ?? "supportive",
+            nativeAudioPriority: pendingMusic?.nativeAudioPriority ?? "selective")
+        let result: RenderResult
+        do {
+            result = try await renderer.render(inputs,
+                progress: { [weak self] p in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if case .rendering = self.state { self.state = .rendering(progress: Double(p)) }
+                    } },
+                shouldCancel: { [weak self] in self?.cancelRequested ?? false })
+        } catch {
+            if cancelRequested { return finishCancelled() }
+            return finishFailed(.renderFailed(String(describing: error)))
+        }
+        if cancelRequested { cleanup(relative: result.relativePath); return finishCancelled() }
+
+        if pendingOperationType == "another_version", let parentId = pendingParentVersionId,
+           let parent = story.generatedOutputs.first(where: { ($0.versionId ?? $0.id) == parentId }) {
+            lastDiversity = RevisionContextBuilder.diversity(parent: parent, newPlan: plan)
+        }
+        let output = persist(result: result, plan: plan, story: story, build: build)
+        story.planOperationId = nil; story.planJobId = nil; story.planJobStatus = "completed"
+        finalizePending(story: story)
+        try? context.save()
+        state = .completed(output)
+    }
+
+    /// Reconstruct the per-run revision context for a resumed Explore/revision operation from the live Story +
+    /// durable row. Explore rebuilds from the recorded parent; original/revision carry no reconstructable soft
+    /// base here (revision's exact base-plan directives are not reconstructable post-relaunch -> resume renders
+    /// the ALREADY-PLANNED result, which is what recovery needs, not a re-plan).
+    private static func rebuildRevisionContext(for story: StoryModel, row: PendingOperationModel) -> JSONValue? {
+        guard row.operationType == "another_version", let pid = row.baseVersionId.flatMap(UUID.init(uuidString:)),
+              let parent = story.generatedOutputs.first(where: { ($0.versionId ?? $0.id) == pid }) else { return nil }
+        let recents = story.generatedOutputs.sorted { $0.createdAt > $1.createdAt }
+        return RevisionContextBuilder.explore(parent: parent, recents: recents)
     }
 }

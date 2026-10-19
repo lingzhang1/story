@@ -21,6 +21,12 @@ struct StoryHomeView: View {
     @State private var showCapture = false
     @State private var showMenu = false
     @State private var showPreview = false
+    /// When Create decides a good output already exists, push the Result directly (the "Here's what I'm
+    /// working with" preview is never shown as a resting page).
+    @State private var reopenOutput: GeneratedOutputModel?
+    /// Set when "Create another version" is tapped on the Result — carried into the create host so it launches
+    /// a new-version (Explore + Customize) flow rather than a fresh original create. Cleared after each use.
+    @State private var recreateParent: GeneratedOutputModel?
     @State private var pickerItems = false
     @State private var showMoments = false
     @State private var showAddMoments = false      // Phase 3: "Add Moments" source chooser
@@ -99,7 +105,7 @@ struct StoryHomeView: View {
                     // local file AND a completed MomentUnderstanding (same rule as EditPlanRequestBuilder).
                     let readiness = StoryCreationReadiness.evaluate(story: story, context: context)
                     VStack(spacing: 4) {
-                        Button { showPreview = true } label: {
+                        Button { startCreateOrOpen() } label: {
                             Text("Create my Story").font(StoryTheme.body(14))
                                 .foregroundStyle(readiness.isPlannable ? StoryTheme.cream.opacity(0.7) : StoryTheme.cream.opacity(0.2))
                                 .frame(maxWidth: .infinity)
@@ -174,11 +180,32 @@ struct StoryHomeView: View {
         .fullScreenCover(item: $pendingOpportunity, onDismiss: {
             Task { await refreshAfterCapture() }
         }) { launch in
-            // Opportunity-driven capture: Story Idea Show-me / Guide possibility Shoot.
-            // The scan flow carries selected_opportunity into Director (survives rescan).
-            SceneScanFlowView(captureContext: .story(story), selectedOpportunity: launch.opportunity)
+            // Opportunity-driven capture (Story Idea Show-me / Guide possibility Shoot/Reshoot).
+            // Uses the SAME continuous camera as "Shoot a moment" (no old scan-first Start/Skip
+            // Scan screen); the chosen opportunity seeds the in-camera AI idea as the default for
+            // this specific guide item (scan-free), so Reshoot lands straight on the camera already
+            // showing that idea.
+            ContinuousCaptureView(captureContext: .story(story), seedOpportunity: launch.opportunity)
         }
-        .navigationDestination(isPresented: $showPreview) { CreateStoryPreviewView(story: story) }
+        .navigationDestination(isPresented: $showPreview) {
+            CreateStoryPreviewView(story: story, forceNewVersionFrom: recreateParent)
+        }
+        .navigationDestination(item: $reopenOutput) { output in
+            StoryResultView(story: story, initialOutput: output,
+                            onHome: {
+                                // Pop the Result first (clear the item binding), THEN run the Story's own back
+                                // so "Home" reaches the app Home instead of leaving the Result stuck on screen.
+                                reopenOutput = nil
+                                DispatchQueue.main.async { if let onBack { onBack() } else { dismiss() } }
+                            },
+                            onRecreate: { parent in
+                                // "Create another version" from the Result -> push the create host as a
+                                // NEW-VERSION flow (Explore + Customize), not a fresh original create.
+                                reopenOutput = nil
+                                recreateParent = parent
+                                DispatchQueue.main.async { showPreview = true }
+                            })
+        }
         .navigationDestination(isPresented: $showMoments) { MomentsManageView(story: story) }
         .photosPickerSheet(isPresented: $pickerItems, onProgress: { p in
             // Non-blocking live signal while videos copy out of Photos. Clear ~1.2s after finish so a
@@ -235,6 +262,25 @@ struct StoryHomeView: View {
     //   - A failed recompute preserves the previous valid coverage (never fabricates).
     //   - Only recompute when there is at least one understood Moment to reason from;
     //     an empty / all-pending Story shows the neutral state (pending = unknown).
+    /// Create decides the route AT TAP TIME (synchronously, so navigation fires reliably — a nested
+    /// navigationDestination set later inside a pushed view's onAppear does NOT, which is why the old preview
+    /// grid kept resting). If a good, non-stale output whose file is on disk already exists, push the Result
+    /// directly; otherwise push the create-flow host (which auto-starts duration + Customize + music; the
+    /// "Here's what I'm working with" grid is never a resting page).
+    private func startCreateOrOpen() {
+        let decision = ReopenDecision.decide(
+            outputs: story.generatedOutputs,
+            isStale: { StoryCreationCoordinator.isOutputStale(output: $0, story: story) },
+            fileExists: { RenderOutputStore.shared.exists(relative: $0) })
+        switch decision {
+        case .showResult(let outputId):
+            reopenOutput = story.generatedOutputs.first { $0.id == outputId }
+        case .create:
+            recreateParent = nil   // fresh original create (not a Create-Another-Version)
+            showPreview = true
+        }
+    }
+
     private func loadCoverage() async {
         // R-c.1 legacy backfill: videos imported BEFORE import-AU shipped have no MomentUnderstanding and no
         // job. Enqueue them once (idempotent — a Moment already understood or already queued is skipped, so

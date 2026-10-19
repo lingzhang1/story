@@ -102,6 +102,40 @@ final class MomentReferenceIntegrationTests: XCTestCase {
         XCTAssertNil(dir["must_include"])
     }
 
+    // MARK: - Create Another Version: honor Customize-entered directives (the "Moment 15 then Moment 2" bug)
+
+    func test_compose_anotherVersion_without_customize_drops_directives_stays_explore() {
+        // One-tap Create Another Version (NOT via Customize) must NOT inherit the Story's persisted directives.
+        let s = story()
+        var d = ResolvedDirectives(); d.opening = UUID()
+        s.creativeDirectivesJSON = d.toWireJSON()
+        let base = JSONValue.object(["mode": .string("explore")])
+        guard case .object(let o)? = StoryCreationCoordinator.composeRevisionContext(
+            base: base, story: s, operationType: "another_version", directedByCustomize: false) else {
+            return XCTFail("expected object")
+        }
+        XCTAssertEqual(o["mode"], .string("explore"))
+        XCTAssertNil(o["directives"], "a blind explore must not inherit persisted directives (test 12)")
+    }
+
+    func test_compose_anotherVersion_via_customize_folds_directives_as_revise() {
+        // Create Another Version launched FROM the Customize sheet with "Start from Moment 15, then Moment 2"
+        // must honor those hard directives and upgrade the explore base to revise mode.
+        let s = story()
+        let m15 = UUID(), m2 = UUID()
+        var d = ResolvedDirectives(); d.opening = m15; d.orderAdjacent = [[m2, m15]]
+        s.creativeDirectivesJSON = d.toWireJSON()
+        let base = JSONValue.object(["mode": .string("explore")])
+        guard case .object(let o)? = StoryCreationCoordinator.composeRevisionContext(
+            base: base, story: s, operationType: "another_version", directedByCustomize: true),
+              case .object(let dir)? = o["directives"] else {
+            return XCTFail("expected object with directives")
+        }
+        XCTAssertEqual(o["mode"], .string("revise"), "hard directives must upgrade explore -> revise")
+        XCTAssertEqual(dir["opening"], .string(m15.uuidString), "opening=Moment 15 must reach the planner")
+        XCTAssertEqual(dir["order_adjacent"], .array([.array([.string(m2.uuidString), .string(m15.uuidString)])]))
+    }
+
     // MARK: - RevisionContextBuilder.revise carries the EXACT base plan
 
     func test_revise_carries_exact_base_plan() {
@@ -162,5 +196,56 @@ final class MomentReferenceIntegrationTests: XCTestCase {
         s.creativeDirectivesJSON = res.directives.toWireJSON()
         XCTAssertNil(s.creativeDirectivesJSON)
         XCTAssertNil(StoryCreationCoordinator.composeRevisionContext(base: nil, story: s))
+    }
+
+    // MARK: - duration_target_source provenance (P0 revision precedence, owner 2026-10-18)
+
+    private func durSrc(_ ctxVal: JSONValue?) -> String? {
+        guard case .object(let o)? = ctxVal, case .string(let v)? = o["duration_target_source"] else { return nil }
+        return v
+    }
+
+    func test_compose_custom_mode_marks_user_exact() {
+        let s = story()
+        s.editorialMode = "custom"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["schema_version": .string("edit_plan/2")]),
+                                       "soft_direction": .string("shorten each clip to ~5s")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "user_exact")
+    }
+
+    func test_compose_highlights_mode_marks_ai_recommended() {
+        let s = story()
+        s.editorialMode = "highlights"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["schema_version": .string("edit_plan/2")]),
+                                       "soft_direction": .string("shorten each clip to ~5s")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "ai_recommended")
+    }
+
+    func test_compose_full_mode_marks_ai_recommended() {
+        let s = story()
+        s.editorialMode = "full"
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")])])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "ai_recommended")
+    }
+
+    func test_compose_no_editorial_mode_omits_source() {
+        let s = story()
+        s.editorialMode = nil
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")])])
+        XCTAssertNil(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)))
+    }
+
+    func test_compose_does_not_clobber_base_duration_source() {
+        // A revise that already carries an explicit source (e.g. a newer explicit duration instruction) wins.
+        let s = story()
+        s.editorialMode = "highlights"   // would otherwise say ai_recommended
+        let base: JSONValue = .object(["mode": .string("revise"),
+                                       "base_plan": .object(["x": .string("y")]),
+                                       "duration_target_source": .string("user_exact")])
+        XCTAssertEqual(durSrc(StoryCreationCoordinator.composeRevisionContext(base: base, story: s)), "user_exact")
     }
 }

@@ -113,6 +113,15 @@ final class StoryModel {
     // Set only when the user adds references in Creative Direction; never overwritten by inference/retry.
     var creativeDirectivesJSON: String?
 
+    // Stage 2 Creative Direction SOFT preferences — the user's free-text creative direction captured on the
+    // Customize screen ("make the cuts faster", "use the most visually striking footage first"). DRAFT TEXT:
+    // survives navigation + a failed generation so the Customize sheet can repopulate it. Additive migration
+    // (optional + defaulted nil); nil => no soft direction => behavior unchanged. This is NOT the factual Story
+    // description (intentText) — it never overwrites it. Forwarded as revision_context.soft_direction for the
+    // ORIGINAL create only (createAnotherVersion uses explore, revision supplies its own), so a one-time
+    // creative instruction is never silently inherited by an unrelated later version.
+    var creativeDirectionText: String?
+
     // Async Edit Planning (Phase 2): the in-flight planning job for THIS creation attempt. operation_id is the
     // idempotency key — persisted BEFORE submitting so a crash/restart/retry reuses the SAME job (no duplicate
     // inference). job_id is the server's handle for polling + restart recovery. A deliberate "Create Another
@@ -210,6 +219,19 @@ final class AssetModel {
     var sourceRaw: String
     var createdAt: Date
 
+    // Camera Metadata P0 (Part A) — ALL optional + defaulted = lightweight additive migration (an existing
+    // populated store decodes cleanly, matching the 60+ prior additive fields in this file). nil everywhere
+    // means "unknown" and is the honest default — location is NEVER fabricated.
+    //
+    // capturedAt: the TRUE capture instant (recording start for a capture; the PHAsset creationDate for an
+    //   import), kept SEPARATE from `createdAt` which is persist/import time. nil = original time unknown.
+    // latitude/longitude/locationAccuracyMeters: a trustworthy capture-time fix (freshness + horizontal
+    //   accuracy validated upstream), or nil when none was available. Coordinates + accuracy only — no place name.
+    var capturedAt: Date?
+    var latitude: Double?
+    var longitude: Double?
+    var locationAccuracyMeters: Double?
+
     var source: MomentSource {
         get { MomentSource(rawValue: sourceRaw) ?? .directed }
         set { sourceRaw = newValue.rawValue }
@@ -220,13 +242,21 @@ final class AssetModel {
         relativePath: String,
         durationSeconds: Double,
         source: MomentSource,
-        createdAt: Date = .now
+        createdAt: Date = .now,
+        capturedAt: Date? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        locationAccuracyMeters: Double? = nil
     ) {
         self.id = id
         self.relativePath = relativePath
         self.durationSeconds = durationSeconds
         self.sourceRaw = source.rawValue
         self.createdAt = createdAt
+        self.capturedAt = capturedAt
+        self.latitude = latitude
+        self.longitude = longitude
+        self.locationAccuracyMeters = locationAccuracyMeters
     }
 }
 
@@ -764,5 +794,153 @@ final class MyMusicAssetModel {
         self.providerTrackId = providerTrackId
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+    }
+}
+
+// MARK: - Pending AI operation (durable recovery state)
+//
+// P0 RECOVERY (Phases 1-3): a completed backend edit-plan MUST NOT be silently lost because the app was
+// backgrounded, suspended, force-quit, or the Story was reopened. The in-flight state the coordinator used to
+// keep only in memory (operation_type, parent version, music, the plan itself) is NOT enough to recover after a
+// relaunch, and a single mutable `story.planJobId` cannot tell a RESUMABLE operation apart from a finished one.
+//
+// This row is the DURABLE source of truth for ONE unfinished operation. It is written BEFORE the job is
+// submitted (so a crash between submit and the first poll is recoverable) and is DELETED only when the
+// operation reaches a logical terminal state the user keeps (saved) or explicitly abandons. Exactly one row
+// per (storyId) may be non-terminal at a time — the coordinator enforces single-flight.
+//
+// Idempotency is preserved: `operationId` is the backend idempotency key. Resume/transport-retry REUSE this
+// row's operationId (never a new job); a deliberate "Create Another Version" / "Revise" creates a NEW row with
+// a NEW operationId. So recovery never triggers a second inference.
+@Model
+final class PendingOperationModel {
+    @Attribute(.unique) var id: UUID
+
+    // Identity needed to recover the operation WITHOUT re-inference.
+    var storyId: UUID
+    var operationId: String          // backend idempotency key — reused on resume/retry, new on deliberate create
+    var jobId: String?               // server job handle for polling; nil until submit returns
+    var operationType: String        // "original" | "another_version" | "revision"
+    var baseVersionId: String?       // Explore/revision: the user-selected parent/base version row id
+    var requestFingerprint: String?  // included-Moments fingerprint at submit time (drift detection; advisory)
+
+    // Lifecycle. `phase` tracks the exactly-once pipeline: submitted -> planning -> plan_ready -> rendering ->
+    // saved. `status` mirrors the last observed backend job status (queued|running|completed|failed|...).
+    var phase: String                // submitted|planning|plan_ready|rendering|saved|abandoned
+    var jobStatus: String?           // last observed backend status (advisory)
+    var failureCategory: String?     // backend failure_category when phase ended in failure
+
+    // The completed, VALIDATED-on-fetch EditPlan/2 JSON — persisted at plan_ready so rendering can resume after
+    // a force-quit WITHOUT re-polling or re-inference. Canonical snake_case wire shape (EditPlan/2).
+    var planJSON: String?
+
+    // Render context needed to reproduce the SAME output on a resumed render (music + settings + format/target).
+    var musicSelectionRef: String?   // resolved music handle so a resumed render keeps the same soundtrack
+    // Render-time music facts captured at plan_ready so a render-resume can rebuild MediaEngineInputs WITHOUT a
+    // fresh MusicPlan (recommend()) call — the plan was already planned music-aware; recovery only needs the
+    // soundtrack file + analysis by trackId, and these two mixing knobs. nil => no-music render.
+    var soundtrackRole: String?
+    var nativeAudioPriority: String?
+    var outputFormat: String?
+    var targetSeconds: Double?
+
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        storyId: UUID,
+        operationId: String,
+        jobId: String? = nil,
+        operationType: String,
+        baseVersionId: String? = nil,
+        requestFingerprint: String? = nil,
+        phase: String = "submitted",
+        jobStatus: String? = nil,
+        failureCategory: String? = nil,
+        planJSON: String? = nil,
+        musicSelectionRef: String? = nil,
+        soundtrackRole: String? = nil,
+        nativeAudioPriority: String? = nil,
+        outputFormat: String? = nil,
+        targetSeconds: Double? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.storyId = storyId
+        self.operationId = operationId
+        self.jobId = jobId
+        self.operationType = operationType
+        self.baseVersionId = baseVersionId
+        self.requestFingerprint = requestFingerprint
+        self.phase = phase
+        self.jobStatus = jobStatus
+        self.failureCategory = failureCategory
+        self.planJSON = planJSON
+        self.musicSelectionRef = musicSelectionRef
+        self.soundtrackRole = soundtrackRole
+        self.nativeAudioPriority = nativeAudioPriority
+        self.outputFormat = outputFormat
+        self.targetSeconds = targetSeconds
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    /// Non-terminal operations are the ones recovery acts on.
+    var isRecoverable: Bool { phase != "saved" && phase != "abandoned" }
+}
+
+
+// ---------------------------------------------------------------------------
+// MusicPlan cache — latency P0. The MusicPlan LLM call (frozen music_plan/1, ~10s) was re-run on EVERY
+// "find music" open even when nothing changed. This caches the plan per Story keyed by a canonical fingerprint
+// of ALL inputs that feed /v1/music-plan (creative intent, music direction, story guide, coverage, sound
+// preference, target duration, prompt version). A hit skips the 10s inference; any input change -> fingerprint
+// miss -> recompute. ADVISORY/RECOMPUTABLE: never user-authored, safe to drop/rebuild. DERIVED, so a migration
+// failure that loses it only costs one recompute. Restart-safe (persisted). One row per Story (upsert).
+@Model
+final class MusicPlanCacheModel {
+    @Attribute(.unique) var storyId: UUID
+    var planJSON: String                 // the cached MusicPlan/1 wire JSON (snake_case), reused verbatim
+    var inputFingerprint: String         // stable hash of every output-affecting MusicPlan input + prompt ver
+    var promptVersion: String            // the music_plan prompt version the cached plan was produced under
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(storyId: UUID, planJSON: String, inputFingerprint: String,
+         promptVersion: String = "music_plan/1", createdAt: Date = .now, updatedAt: Date = .now) {
+        self.storyId = storyId
+        self.planJSON = planJSON
+        self.inputFingerprint = inputFingerprint
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Duration recommendation cache — latency P0. "Sizing your Story" is a ~4-9s LLM call
+// (duration_recommendation/1) re-run on every Customize open. Cache the recommendation per Story keyed by a
+// canonical fingerprint of its inputs (creative intent + the moments snapshot + prompt version). Advisory /
+// recomputable (same safety profile as the MusicPlan cache); one row per Story (upsert); restart-safe.
+@Model
+final class DurationRecCacheModel {
+    @Attribute(.unique) var storyId: UUID
+    var recommendationJSON: String       // cached DurationRecommendation wire JSON, decoded + reused verbatim
+    var inputFingerprint: String         // stable hash of creative intent + moments + prompt version
+    var promptVersion: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(storyId: UUID, recommendationJSON: String, inputFingerprint: String,
+         promptVersion: String = "duration_recommendation/1", createdAt: Date = .now, updatedAt: Date = .now) {
+        self.storyId = storyId
+        self.recommendationJSON = recommendationJSON
+        self.inputFingerprint = inputFingerprint
+        self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

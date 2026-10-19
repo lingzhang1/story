@@ -30,9 +30,13 @@ import CoreImage
 enum ContinuousCaptureEvent {
     case ready                       // session running, safe to record
     case recordingStarted
-    case recordingFinished(URL, Double)
+    case recordingFinished(URL, Double, Date, CaptureLocationService.LocationFix?)   // url, duration, capturedAt, location
     case captureFailed(String)       // human-readable, non-semantic
     case interrupted                 // session interrupted (phone call, etc.)
+    case presetsReady([Double])      // device-derived zoom presets available (strip can render)
+    case zoomChanged(Double)         // live USER-× zoom factor (pinch/preset) for the strip
+    case aeafLockChanged(Bool)       // AE/AF lock engaged/released (Increment 2)
+    case cameraPositionChanged(Bool) // true = front camera now active (Increment 2)
 }
 
 protocol ContinuousCameraControllerDelegate: AnyObject {
@@ -50,6 +54,40 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
     private let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer?
+
+    // Package B Increment 1 — camera controls (ADDITIVE; the recording engine is unchanged).
+    // The back-camera device + its input are retained so focus/exposure/zoom/torch can be
+    // configured on it. All device configuration is serialized on `sessionQueue` and wrapped in
+    // lockForConfiguration, so it can never interleave with the recording state machine on main.
+    private let sessionQueue = DispatchQueue(label: "com.story.continuous.session")
+    private var videoDevice: AVCaptureDevice?
+    private var videoDeviceInput: AVCaptureDeviceInput?
+
+    // Increment 2 — front/rear switching. The CURRENT camera position; a swap rebuilds only the video
+    // input inside begin/commitConfiguration (audio + outputs stay), gated out of .recording by the UI.
+    private(set) var cameraPosition: AVCaptureDevice.Position = .back
+    /// Whether a front camera exists (UI hides the flip button otherwise).
+    var hasFrontCamera: Bool {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .builtInTrueDepthCamera],
+            mediaType: .video, position: .front).devices.isEmpty == false
+    }
+    // Increment 2 — AE/AF lock. When locked, a scene change does NOT re-meter/refocus until unlocked.
+    private(set) var isAELocked = false
+
+    /// Device-supported zoom presets (e.g. 0.5×, 1×, 2×) derived from the ACTUAL virtual-device
+    /// switch-over factors — NEVER a hardcoded lens list, so an SE with no ultra-wide/tele shows
+    /// only [1×, 2×(digital)]. `1.0` is always present (the base wide). Published for the UI.
+    private(set) var zoomPresets: [Double] = [1.0]
+    /// Whether this device has a torch (UI hides the control when false).
+    var hasTorch: Bool { videoDevice?.hasTorch ?? false }
+
+    // Orientation (Increment 1 verify/fix): keep the movie-file + preview connections rotated to
+    // match the physical device so portrait/landscape clips are recorded upright. iOS 17+ uses
+    // RotationCoordinator (the Apple-recommended path); older iOS falls back to interface
+    // orientation. Held as Any to avoid a hard availability type on the stored property.
+    private var rotationCoordinator: Any?
+    private var rotationObservations: [NSKeyValueObservation] = []
 
     // Scene-scan frame grabbing — a SECOND output on the SAME session so an AI
     // scan can collect frames WITHOUT a separate camera session and WITHOUT
@@ -119,11 +157,17 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         session.beginConfiguration()
         session.sessionPreset = .high
 
-        if let camera = AVCaptureDevice.default(
-            .builtInWideAngleCamera, for: .video, position: .back),
+        // Prefer a VIRTUAL multi-camera device (triple/dual/dual-wide) when present: it exposes the
+        // real optical lenses as zoom-factor switch-over points, so pinch + presets cross 0.5×/2×
+        // optically where the hardware has them, and fall back to pure wide on an SE. This is NOT a
+        // hardcoded lens list — unavailable lenses simply never appear.
+        let device = Self.bestCamera(position: .back)
+        if let camera = device,
            let videoInput = try? AVCaptureDeviceInput(device: camera),
            session.canAddInput(videoInput) {
             session.addInput(videoInput)
+            self.videoDevice = camera
+            self.videoDeviceInput = videoInput
         }
         if let mic = AVCaptureDevice.default(for: .audio),
            let audioInput = try? AVCaptureDeviceInput(device: mic),
@@ -146,11 +190,99 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         }
         session.commitConfiguration()
 
+        // Compute device-supported zoom presets from the ACTUAL hardware (no fake lenses).
+        if let camera = device { self.zoomPresets = Self.zoomPresets(for: camera) }
+        // Publish presets to the owner immediately so the zoom strip renders on OPEN (not lazily on
+        // first tap). Dispatched to main because the delegate drives @Published UI state.
+        let presets = self.zoomPresets
+        DispatchQueue.main.async { [weak self] in self?.delegate?.captureEvent(.presetsReady(presets)) }
+
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
         preview.frame = view.bounds
         view.layer.addSublayer(preview)
         self.previewLayer = preview
+
+        // Orientation verify/fix: observe + apply rotation to preview + movie connections.
+        configureRotationCoordinator()
+    }
+
+    /// Build the movie-file location metadata (ISO-6709) from a trustworthy fix, or [] when unknown.
+    /// Coordinates only — no place name is ever synthesized. Used as `AVCaptureMovieFileOutput.metadata`.
+    static func locationMetadata(for fix: CaptureLocationService.LocationFix?) -> [AVMetadataItem] {
+        guard let fix else { return [] }
+        // ISO-6709: "+DD.dddd+DDD.dddd/" (lat, lon, trailing slash). Positive = N/E.
+        let iso = String(format: "%+09.5f%+010.5f/", fix.latitude, fix.longitude)
+        let item = AVMutableMetadataItem()
+        item.identifier = .commonIdentifierLocation
+        item.keySpace = .common
+        item.key = AVMetadataKey.commonKeyLocation as NSString
+        item.value = iso as NSString
+        return [item]
+    }
+
+    // MARK: - Device selection & capability detection (per-device, never assumed)
+
+    /// The best video device at a POSITION: a virtual multi-camera (triple → dual → dual-wide) when
+    /// present so optical lenses are reachable via zoom, else the plain wide angle. Front typically has
+    /// only wide (+ TrueDepth). Never fabricates lenses.
+    private static func bestCamera(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        let preferred: [AVCaptureDevice.DeviceType] = [
+            .builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera,
+            .builtInWideAngleCamera, .builtInTrueDepthCamera
+        ]
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: preferred, mediaType: .video, position: position)
+        for type in preferred {
+            if let d = discovery.devices.first(where: { $0.deviceType == type }) { return d }
+        }
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+    }
+
+    /// Zoom presets expressed in the UI's "×" scale relative to the 1× wide lens. Derived from the
+    /// device's real `virtualDeviceSwitchOverVideoZoomFactors` (ultra-wide gives 0.5×, each tele gives a
+    /// switch-over e.g. 2×/3×/5×). The optical switch-overs are ANCHORS; `CameraZoomFormat.ladder`
+    /// fills integer digital steps between them so the ramp is gradual (a [0.5,1,5] device becomes
+    /// [0.5,1,2,3,5]) instead of a jarring 1→5 jump. Everything is clamped to the real max.
+    private static func zoomPresets(for device: AVCaptureDevice) -> [Double] {
+        // On a virtual device the base zoom (1.0 of videoZoomFactor) is the WIDEST active lens.
+        // switchOver factors are videoZoomFactor thresholds where the lens changes.
+        let switchOvers = device.virtualDeviceSwitchOverVideoZoomFactors.map { $0.doubleValue }
+        let hasUltraWide = device.constituentDevices.contains { $0.deviceType == .builtInUltraWideCamera }
+        // Real optical anchors in USER-× terms. With ultra-wide, raw factor 1.0 == 0.5× (1× == 2.0).
+        var anchors: [Double] = []
+        if hasUltraWide {
+            anchors.append(0.5)
+            anchors.append(1.0)
+            for f in switchOvers where f > 2.0 { anchors.append((f / 2.0).rounded()) }
+        } else {
+            anchors.append(1.0)
+            for f in switchOvers where f > 1.0 { anchors.append(f.rounded()) }
+        }
+        let maxUserZoom = device.maxAvailableVideoZoomFactor / (hasUltraWide ? 2.0 : 1.0)
+        return CameraZoomFormat.ladder(anchors: anchors, maxUserZoom: maxUserZoom)
+    }
+
+    /// Convert a user-facing "×" value into the device's raw `videoZoomFactor`.
+    /// On an ultra-wide virtual device, user 1× corresponds to raw factor 2.0 (0.5× == 1.0).
+    private func rawZoomFactor(forUserZoom userZoom: Double) -> CGFloat {
+        let hasUltraWide = videoDevice?.constituentDevices.contains {
+            $0.deviceType == .builtInUltraWideCamera } ?? false
+        return CGFloat(userZoom * (hasUltraWide ? 2.0 : 1.0))
+    }
+
+    /// Inverse of `rawZoomFactor`: the device's raw `videoZoomFactor` expressed in user-× terms, so the
+    /// UI strip can show the live magnification (e.g. "2.7×") and highlight the nearest preset.
+    private func userZoom(forRawFactor raw: CGFloat) -> Double {
+        let hasUltraWide = videoDevice?.constituentDevices.contains {
+            $0.deviceType == .builtInUltraWideCamera } ?? false
+        return Double(raw) / (hasUltraWide ? 2.0 : 1.0)
+    }
+
+    /// Report the device's current zoom (user-×) to the owner on the main actor (drives the strip).
+    private func reportZoom() {
+        let user = userZoom(forRawFactor: videoDevice?.videoZoomFactor ?? 1.0)
+        DispatchQueue.main.async { [weak self] in self?.delegate?.captureEvent(.zoomChanged(user)) }
     }
 
     // MARK: - Interruption / backgrounding guards
@@ -198,6 +330,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
         activeTempURL = tempURL
         activeToken = token
         recordingStart = Date()
+        // Camera Metadata P0: embed a trustworthy capture-time GPS fix into the .mov itself (ISO-6709
+        // common metadata) so the original file carries location where available. nil fix → no location
+        // metadata (honest "unknown"), never fabricated. This does not touch the recording engine/path.
+        movieOutput.metadata = Self.locationMetadata(for: CaptureLocationService.shared.fix(at: Date()))
         movieOutput.startRecording(to: tempURL, recordingDelegate: self)
         // AVCaptureMovieFileOutput confirms the actual start via
         // didStartRecordingTo; flip to .recording there so the button can't be
@@ -262,7 +398,10 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             let dur = CMTimeGetSeconds(asset.duration)
             let duration = (dur.isFinite && dur > 0) ? dur : Date().timeIntervalSince(started)
             self.activeTempURL = nil   // ownership handed to the owner for adoption
-            self.delegate?.captureEvent(.recordingFinished(outputFileURL, duration))
+            // Location tagging (optional, non-blocking): read the trustworthy fix for the capture instant,
+            // or nil ("unknown"). `started` is the true capture time. Never blocks, never fabricates.
+            let fix = CaptureLocationService.shared.fix(at: started)
+            self.delegate?.captureEvent(.recordingFinished(outputFileURL, duration, started, fix))
         }
     }
 
@@ -356,6 +495,277 @@ final class ContinuousCameraController: UIViewController, AVCaptureFileOutputRec
             let p = max(0, min(1, elapsed / scanDuration))
             if let cb = scanProgress { DispatchQueue.main.async { cb(p) } }
             if elapsed >= scanDuration { finishScan() }
+        }
+    }
+
+    // MARK: - Camera controls (Package B Increment 1) — all ADDITIVE, serialized, lock-guarded.
+    //
+    // Every device mutation runs on `sessionQueue` inside lockForConfiguration/unlockForConfiguration,
+    // so it is atomic and never races the recording state machine (which lives on main). None of these
+    // touch the session topology (no begin/commitConfiguration, no input/output changes), so an
+    // in-flight recording and a live AI scan are unaffected — zoom/focus/exposure/torch all adjust the
+    // SAME running device both outputs already read from.
+
+    private func configureDevice(_ body: @escaping (AVCaptureDevice) -> Void) {
+        guard let device = videoDevice else { return }
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                body(device)
+                device.unlockForConfiguration()
+            } catch {
+                // A transient lock failure must never crash or corrupt recording — ignore and keep going.
+            }
+        }
+    }
+
+    /// Set zoom by user-facing "×" value (from a preset button). Clamped to the device range.
+    func setUserZoom(_ userZoom: Double) {
+        configureDevice { [weak self] device in
+            guard let self else { return }
+            let raw = self.rawZoomFactor(forUserZoom: userZoom)
+            let clamped = max(device.minAvailableVideoZoomFactor,
+                              min(raw, device.maxAvailableVideoZoomFactor))
+            device.videoZoomFactor = clamped
+            self.reportZoom()
+        }
+    }
+
+    /// Continuous pinch zoom. `scale` is the gesture's cumulative scale applied to the zoom factor
+    /// at gesture start (`base`), so the ramp feels natural. Works during recording (device-level,
+    /// no topology change). Clamped to the device's real min/max.
+    func applyPinchZoom(scale: CGFloat, base: CGFloat) {
+        configureDevice { [weak self] device in
+            let target = base * scale
+            let clamped = max(device.minAvailableVideoZoomFactor,
+                              min(target, device.maxAvailableVideoZoomFactor))
+            device.videoZoomFactor = clamped
+            self?.reportZoom()
+        }
+    }
+
+    /// The device's current raw zoom factor (gesture start reads this as its base).
+    var currentZoomFactor: CGFloat { videoDevice?.videoZoomFactor ?? 1.0 }
+
+    /// The device's zoom range expressed in USER-× terms (for the continuous thumb-dial). On an
+    /// ultra-wide virtual device, raw 1.0 == user 0.5×, so user-min is raw-min / 2.
+    var userZoomRange: ClosedRange<Double> {
+        guard let d = videoDevice else { return 1...1 }
+        let hasUltraWide = d.constituentDevices.contains { $0.deviceType == .builtInUltraWideCamera }
+        let div = hasUltraWide ? 2.0 : 1.0
+        let lo = Double(d.minAvailableVideoZoomFactor) / div
+        let hi = Double(d.maxAvailableVideoZoomFactor) / div
+        return lo...max(lo, hi)
+    }
+
+    /// Tap-to-focus + expose at a preview point (0..1 device coords from the preview layer). A tap also
+    /// CLEARS any AE/AF lock and resumes continuous tracking — the native behavior (tap to re-meter).
+    func focusAndExpose(atDevicePoint point: CGPoint) {
+        configureDevice { [weak self] device in
+            if device.isFocusPointOfInterestSupported {
+                device.focusPointOfInterest = point
+                if device.isFocusModeSupported(.autoFocus) { device.focusMode = .autoFocus }
+            }
+            if device.isExposurePointOfInterestSupported {
+                device.exposurePointOfInterest = point
+                if device.isExposureModeSupported(.autoExpose) { device.exposureMode = .autoExpose }
+            }
+            // Resume continuous tracking after a tap so the scene stays correctly focused/exposed as it
+            // moves — this also lifts an AE/AF lock (tap overrides lock, like the native camera).
+            if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+            if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+            if let self, self.isAELocked {
+                self.isAELocked = false
+                DispatchQueue.main.async { self.delegate?.captureEvent(.aeafLockChanged(false)) }
+            }
+        }
+    }
+
+    /// Convert a view-space tap into the device point-of-interest via the preview layer (handles
+    /// resizeAspectFill cropping + mirroring correctly).
+    func focusAndExpose(atViewPoint viewPoint: CGPoint) {
+        guard let preview = previewLayer else { return }
+        let devicePoint = preview.captureDevicePointConverted(fromLayerPoint: viewPoint)
+        focusAndExpose(atDevicePoint: devicePoint)
+    }
+
+    /// Toggle the torch where present. No-op (and UI-hidden) on devices without one. Torch is a
+    /// device property, independent of recording — safe to toggle mid-record.
+    func setTorch(_ on: Bool) {
+        configureDevice { device in
+            guard device.hasTorch, device.isTorchModeSupported(on ? .on : .off) else { return }
+            if on {
+                try? device.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
+            } else {
+                device.torchMode = .off
+            }
+        }
+    }
+
+    // MARK: - Increment 2 controls — front/rear swap, exposure bias, AE/AF lock
+
+    /// Flip between back and front cameras. Rebuilds ONLY the video input inside begin/commitConfiguration
+    /// (audio input + movie/data outputs are untouched), then re-applies presets, orientation and zoom.
+    /// REFUSED while recording — the UI gates the button out of .recording, and this is a second guard
+    /// (a mid-clip input swap would corrupt the movie file). Runs on the session queue.
+    func switchCamera() {
+        guard phase != .recording, phase != .stopping else { return }
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            let target: AVCaptureDevice.Position = (self.cameraPosition == .back) ? .front : .back
+            guard let newDevice = Self.bestCamera(position: target),
+                  let newInput = try? AVCaptureDeviceInput(device: newDevice) else { return }
+            self.session.beginConfiguration()
+            if let old = self.videoDeviceInput { self.session.removeInput(old) }
+            if self.session.canAddInput(newInput) {
+                self.session.addInput(newInput)
+                self.videoDevice = newDevice
+                self.videoDeviceInput = newInput
+                self.cameraPosition = target
+            } else if let old = self.videoDeviceInput {
+                // Revert if the new input cannot be added (keep a working session).
+                self.session.addInput(old)
+            }
+            self.session.commitConfiguration()
+
+            // Re-derive presets for the new device, reset zoom to 1×, re-apply orientation.
+            let presets = Self.zoomPresets(for: newDevice)
+            self.zoomPresets = presets
+            try? newDevice.lockForConfiguration()
+            newDevice.videoZoomFactor = self.rawZoomFactor(forUserZoom: 1.0)
+            newDevice.unlockForConfiguration()
+            self.isAELocked = false
+            let pos = self.cameraPosition
+            DispatchQueue.main.async {
+                self.delegate?.captureEvent(.presetsReady(presets))
+                self.delegate?.captureEvent(.zoomChanged(1.0))
+                self.delegate?.captureEvent(.aeafLockChanged(false))
+                self.delegate?.captureEvent(.cameraPositionChanged(pos == .front))
+                self.applyRotationForCurrentAPI()
+            }
+        }
+    }
+
+    /// Manual exposure bias in EV (e.g. −2…+2). Clamped to the device's real min/max target bias.
+    /// Independent of recording. Does NOT engage the AE/AF lock — it biases the running auto-exposure.
+    func setExposureBias(_ ev: Float) {
+        configureDevice { device in
+            let clamped = max(device.minExposureTargetBias, min(ev, device.maxExposureTargetBias))
+            device.setExposureTargetBias(clamped, completionHandler: nil)
+        }
+    }
+
+    /// The device's supported exposure-bias range (UI uses it to size the slider). Defaults to 0…0.
+    var exposureBiasRange: ClosedRange<Float> {
+        guard let d = videoDevice else { return 0...0 }
+        return d.minExposureTargetBias...d.maxExposureTargetBias
+    }
+
+    /// Lock / unlock Auto-Exposure AND Auto-Focus at their current values (long-press AE/AF lock). While
+    /// locked a scene change does NOT re-meter/refocus; a tap-to-focus clears the lock. Safe mid-record.
+    func setAEAFLock(_ locked: Bool) {
+        configureDevice { [weak self] device in
+            if locked {
+                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+            } else {
+                if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+                if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+            }
+            self?.isAELocked = locked
+            DispatchQueue.main.async { self?.delegate?.captureEvent(.aeafLockChanged(locked)) }
+        }
+    }
+
+    // MARK: - Orientation (Increment 1 verify/fix)
+    //
+    // The ORIGINAL engine never set any connection orientation, so a clip's upright-ness relied on
+    // the sensor default — a confirmed defect for landscape capture. Fix: keep both the PREVIEW and
+    // the MOVIE-FILE output connections rotated to match the physical device. iOS 17+ uses
+    // AVCaptureDevice.RotationCoordinator (Apple-recommended, accounts for the device + the preview
+    // layer); older iOS falls back to the interface orientation. The angle is NOT changed while a
+    // recording is in flight — a mid-clip rotation would corrupt the file — so a recording keeps the
+    // angle it started at and the next recording picks up the current one.
+
+    /// Install rotation observation. Called once after `configureSession()`.
+    private func configureRotationCoordinator() {
+        if #available(iOS 17.0, *) {
+            guard let device = videoDevice else { return }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            self.rotationCoordinator = coordinator
+            applyRotation()
+            // Observe both angles; re-apply on change (but never mid-recording).
+            rotationObservations = [
+                coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyRotation() }
+                },
+                coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyRotation() }
+                }
+            ]
+        } else {
+            // Pre-17 fallback: apply once from the interface orientation and on device rotation.
+            applyLegacyRotation()
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(applyLegacyRotation),
+                name: UIDevice.orientationDidChangeNotification, object: nil)
+        }
+    }
+
+    /// iOS 17+ — push the coordinator's horizon-level angles onto the preview + movie connections.
+    @available(iOS 17.0, *)
+    private func applyRotation() {
+        guard let coordinator = rotationCoordinator as? AVCaptureDevice.RotationCoordinator else { return }
+        if let pc = previewLayer?.connection, pc.isVideoRotationAngleSupported(coordinator.videoRotationAngleForHorizonLevelPreview) {
+            pc.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelPreview
+        }
+        // Do not re-rotate the movie connection while recording — the clip keeps its start angle.
+        guard phase != .recording, phase != .stopping else { return }
+        let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+        if let mc = movieOutput.connection(with: .video), mc.isVideoRotationAngleSupported(captureAngle) {
+            mc.videoRotationAngle = captureAngle
+        }
+    }
+
+    /// Pre-iOS-17 — map the interface orientation to a rotation angle on both connections.
+    @objc private func applyLegacyRotation() {
+        let angle: CGFloat
+        switch UIDevice.current.orientation {
+        case .landscapeLeft: angle = 0      // home button right
+        case .landscapeRight: angle = 180
+        case .portraitUpsideDown: angle = 270
+        default: angle = 90                 // portrait
+        }
+        if let pc = previewLayer?.connection, pc.isVideoRotationAngleSupported(angle) {
+            pc.videoRotationAngle = angle
+        }
+        guard phase != .recording, phase != .stopping else { return }
+        if let mc = movieOutput.connection(with: .video), mc.isVideoRotationAngleSupported(angle) {
+            mc.videoRotationAngle = angle
+        }
+    }
+
+    /// Version-agnostic rotation apply (used after a camera swap / on demand).
+    private func applyRotationForCurrentAPI() {
+        if #available(iOS 17.0, *) {
+            // Rebuild the coordinator for the CURRENT device — a front/rear swap changes the device, and
+            // the old coordinator would report the wrong device's angles (orientation-hardening).
+            if let device = videoDevice {
+                rotationObservations.removeAll()
+                let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+                self.rotationCoordinator = coordinator
+                rotationObservations = [
+                    coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak self] _, _ in
+                        DispatchQueue.main.async { self?.applyRotation() }
+                    },
+                    coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] _, _ in
+                        DispatchQueue.main.async { self?.applyRotation() }
+                    }
+                ]
+            }
+            applyRotation()
+        } else {
+            applyLegacyRotation()
         }
     }
 
