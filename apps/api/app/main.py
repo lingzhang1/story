@@ -372,6 +372,7 @@ def create_app() -> FastAPI:
     def resolve_creative_intent(
         body: ResolveCreativeIntentRequest,
         engine: CreativeIntentEngine = Depends(get_creative_intent_engine),
+        principal: Principal = Depends(optional_user),
     ) -> CreativeIntentContract:
         """Resolve free-form creative direction into a canonical CreativeIntent
         via the Model Gateway. On model/provider failure, return a designed
@@ -420,6 +421,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/interpret-revision", status_code=200)
     def interpret_revision_endpoint(
         body: InterpretRevisionRequest,
+        principal: Principal = Depends(optional_user),
     ) -> dict:
         """Phase 2 — hybrid NL revision interpretation. ONE bounded structured model call turning a free-form
         instruction into typed directives (stable ids) + soft_direction + unresolved[]. The client calls this
@@ -483,6 +485,7 @@ def create_app() -> FastAPI:
         context: str = Form(..., description="JSON: {capture_session_id, mode, story_id?}"),
         frames: list[UploadFile] = File(..., description="3-6 representative JPEG scan frames"),
         engine: SceneUnderstandingEngine = Depends(get_scene_understanding_engine),
+        principal: Principal = Depends(optional_user),
     ) -> SceneUnderstandingContract:
         """Analyze representative scan frames into a canonical SceneUnderstanding
         via a real multimodal model. Frames are ephemeral — NOT persisted server
@@ -565,6 +568,7 @@ def create_app() -> FastAPI:
         frames_meta: str = Form(..., description="JSON: [{t_ms}, ...] ordered, one per frame"),
         frames: list[UploadFile] = File(..., description="exactly 24 ordered JPEG timeline frames"),
         engine: AssetUnderstandingEngine = Depends(get_asset_understanding_engine),
+        principal: Principal = Depends(optional_user),
     ) -> MomentUnderstandingContract:
         """Analyze a 24-frame ORDERED timestamped Moment timeline into a canonical
         MomentUnderstanding via Sonnet 4.6 (FROZEN, 06-asset-understanding.md). Frames are
@@ -682,6 +686,7 @@ def create_app() -> FastAPI:
     def story_coverage(
         body: StoryCoverageRequest,
         engine: StoryCoverageEngine = Depends(get_story_coverage_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryCoverageContract:
         """Compute a StoryCoverage snapshot from CreativeIntent + completed MomentUnderstanding[] +
         pending_count via Opus (FROZEN, Milestone E). Full recomputation; text-only (no media). On
@@ -721,6 +726,7 @@ def create_app() -> FastAPI:
     def story_guide(
         body: StoryGuideRequest,
         engine: StoryGuideEngine = Depends(get_story_guide_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryGuideContract:
         """Generate the persistent StoryGuide from CreativeIntent (Milestone E2-a, FROZEN). ONCE per
         Story, text-only, Opus 4.6. Server mints canonical stable dimension/possibility ids. On failure
@@ -776,6 +782,7 @@ def create_app() -> FastAPI:
     def edit_plan(
         body: EditPlanRequest,
         engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+        principal: Principal = Depends(optional_user),
     ) -> EditPlanV2Contract:
         """Produce an executable EditPlan (Milestone M-d, frozen edit_plan/2): CreativeIntent + StoryGuide/1 +
         StoryCoverage/2 + MomentUnderstanding[] + MusicPlan/1 (+ optional MusicAsset + MusicAnalysis) -> ONE
@@ -884,6 +891,7 @@ def create_app() -> FastAPI:
         critique_revision: bool = Form(default=False, description="Phase-6 Arm D: run ONE bounded critique->revision pass after a valid plan (OFF by default; costs 2 extra model calls)"),
         sheets: list[UploadFile] = File(default=[], description="bounded Tier-1 contact-sheet JPEGs, one per Moment"),
         engine: EditPlannerEngine = Depends(get_edit_planner_engine),
+        principal: Principal = Depends(optional_user),
     ) -> EditPlanV2Contract:
         """MVP MULTIMODAL Edit Planner. Same frozen edit_plan/2 contract, same deterministic validator, same
         exception semantics as /v1/edit-plan — it additionally attaches bounded, DERIVED Tier-1 contact-sheet
@@ -1225,6 +1233,7 @@ def create_app() -> FastAPI:
     def music_plan(
         body: MusicPlanRequest,
         engine: MusicPlanEngine = Depends(get_music_plan_engine),
+        principal: Principal = Depends(optional_user),
     ) -> MusicPlanContract:
         """Produce the Story-level MusicPlan (Milestone R-d, frozen music_plan/1): CreativeIntent +
         authoritative MusicDirection + StoryGuide + StoryCoverage/2 + target duration -> ONE Opus 4.6 call,
@@ -1265,6 +1274,7 @@ def create_app() -> FastAPI:
     def duration_recommendation(
         body: DurationRecommendationRequest,
         engine: DurationPlannerEngine = Depends(get_duration_planner_engine),
+        principal: Principal = Depends(optional_user),
     ):
         """Recommend a target duration (Milestone R-d.2, frozen duration_recommendation/1). Deterministic
         evidence (useful-segment union, longest continuous span, feasible band) is computed LOCALLY; one Opus
@@ -1308,7 +1318,7 @@ def create_app() -> FastAPI:
                 "note": None if recommendation else "recommendation unavailable; choose a duration manually"}
 
     @app.post("/v1/music/candidates", status_code=200)
-    def music_candidates(body: MusicCandidatesRequest):
+    def music_candidates(body: MusicCandidatesRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY (Milestone M-d): MusicPlan -> Epidemic search -> deterministic ranked candidates +
         normalized music_analysis/1 for the top pick. Gated behind STORY_EPIDEMIC_MODE=prototyping; returns 404
         when the flag is off so it is invisible in normal production. No sublicense/safelist/export path here."""
@@ -1382,7 +1392,7 @@ def create_app() -> FastAPI:
                 "top_music_analysis": top_analysis, "next_cursor": next_cursor}
 
     @app.post("/v1/music/search", status_code=200)
-    def music_search(body: MusicSearchRequest):
+    def music_search(body: MusicSearchRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: user-driven free-text catalog search with cursor pagination. Returns candidate
         rows (same shape as /v1/music/candidates, incl. a preview url) plus a next_cursor for load-more.
         Unlike /candidates this does NOT rank by a MusicPlan or compute a top analysis — it is a browse
@@ -1424,7 +1434,7 @@ def create_app() -> FastAPI:
         return {"candidates": out, "next_cursor": next_cursor}
 
     @app.post("/v1/music/analysis", status_code=200)
-    def music_analysis(body: MusicTrackRequest):
+    def music_analysis(body: MusicTrackRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: MusicAnalysis/1 for a SPECIFIC chosen track (used when the user picks a candidate
         other than the top pick, so the Edit Planner gets analysis for the actual selection). Flag-gated 404."""
         if not _mp.prototyping_enabled():
@@ -1449,7 +1459,7 @@ def create_app() -> FastAPI:
         return analysis.model_dump(mode="json")
 
     @app.post("/v1/music/soundtrack", status_code=200)
-    def music_soundtrack(body: MusicTrackRequest):
+    def music_soundtrack(body: MusicTrackRequest, principal: Principal = Depends(optional_user)):
         """PROTOTYPING-ONLY: return a short-lived AUTHORIZED download link for the SELECTED track so the device
         can fetch the audio for a PRIVATE, NON-COMMERCIAL test render. Flag-gated 404 when the prototyping flag
         is off. This is NOT a sublicense/export surface: COMMERCIAL export stays behind a SEPARATE flag
@@ -1475,6 +1485,7 @@ def create_app() -> FastAPI:
     def story_coverage_v2(
         body: StoryCoverageV2Request,
         engine: StoryCoverageV2Engine = Depends(get_story_coverage_v2_engine),
+        principal: Principal = Depends(optional_user),
     ) -> StoryCoverageContractV2:
         """Compute StoryCoverage/2 (Milestone E2-b, FROZEN): StoryGuide + completed
         MomentUnderstanding[] + pending_count -> composed Mapper + Judge. Full recomputation,
@@ -1532,6 +1543,7 @@ def create_app() -> FastAPI:
     def director_initialize(
         body: DirectorInitializeRequest,
         engine: StoryDirectorEngine = Depends(get_story_director_engine),
+        principal: Principal = Depends(optional_user),
     ) -> DirectorOutput:
         """CreativeIntent + SceneUnderstanding + constraints -> concept + plan +
         state + first decision. 503 on failure — never a fabricated plan."""
@@ -1551,6 +1563,7 @@ def create_app() -> FastAPI:
     def director_next(
         body: DirectorNextRequest,
         engine: StoryDirectorEngine = Depends(get_story_director_engine),
+        principal: Principal = Depends(optional_user),
     ) -> DirectorOutput:
         """Prior plan/state + Story progress -> updated state + one decision."""
         cid = str(uuid4())

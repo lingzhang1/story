@@ -47,6 +47,27 @@ describe("StoryApiStack (Milestone A)", () => {
     });
   });
 
+  test("App Runner carries the Cognito + identity-table env (non-secret identifiers) — Increment 3", () => {
+    const svc = Object.values(template.findResources("AWS::AppRunner::Service"))[0] as any;
+    const envVars = svc.Properties.SourceConfiguration.ImageRepository.ImageConfiguration
+      .RuntimeEnvironmentVariables as Array<{ Name: string; Value: string }>;
+    const names = envVars.map((e) => e.Name);
+    expect(names).toEqual(expect.arrayContaining([
+      "STORY_ENVIRONMENT", "STORY_REQUIRE_AUTH", "STORY_COGNITO_USER_POOL_ID",
+      "STORY_COGNITO_APP_CLIENT_ID", "STORY_IDENTITY_CLAIMS_TABLE", "STORY_USERS_TABLE",
+    ]));
+    // test env is not production -> optional-auth window on
+    expect(envVars.find((e) => e.Name === "STORY_REQUIRE_AUTH")!.Value).toBe("0");
+  });
+
+  test("instance role has scoped identity-table access (not a wildcard) — Increment 3", () => {
+    const blob = JSON.stringify(Object.values(template.findResources("AWS::IAM::Policy")));
+    expect(blob).toContain("dynamodb:TransactWriteItems");
+    expect(blob).toContain("table/story-test-identity-claims");
+    expect(blob).toContain("table/story-test-users");
+    expect(blob).not.toContain("table/*");  // never a wildcard over all tables
+  });
+
   test("instance role has least-privilege Bedrock InvokeModel grant (Milestone C)", () => {
     template.hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: Match.objectLike({
