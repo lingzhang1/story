@@ -29,9 +29,10 @@ jobs:
       - name: Install (editable packages + test deps)
         run: |
           python -m pip install --upgrade pip
-          pip install pydantic pytest
-          # Install local packages the tests import (observability, edit_plan_jobs, contracts, etc.)
-          # via PYTHONPATH rather than a build step, matching the repo's dev layout.
+          pip install pydantic pytest boto3 fastapi httpx
+          # boto3 is a declared apps/api dependency (pyproject.toml) exercised by the music_provider
+          # auth test; fastapi/httpx back the TestClient used by the endpoint tests. Installed here so
+          # CI runs those suites as written rather than erroring on a missing import.
       - name: Run pytest (packages + contracts)
         env:
           PYTHONPATH: ${{ github.workspace }}/packages:${{ github.workspace }}
