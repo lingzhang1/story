@@ -47,6 +47,8 @@ struct MusicPickerView: View {
     @State private var searchError: String? = nil
     @State private var searchTask: Task<Void, Never>? = nil
     private let music = MusicCandidatesService()
+    @Environment(AuthStore.self) private var auth
+    @State private var cloudGate = CloudAuthGateModel()
 
     // "Next page" over the RECOMMENDATIONS: each page replaces the list with a different ranked set for the
     // same Story. Page 1 is the injected recommendation; later pages are fetched via the resolver.
@@ -113,6 +115,7 @@ struct MusicPickerView: View {
                       allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff],
                       allowsMultipleSelection: false) { handleFileImport($0) }
         .onDisappear { searchTask?.cancel(); stopPreview(); stopMyMusicPreview() }
+        .cloudAuthGate(cloudGate)
     }
 
     private enum PickerTab { case songs, myMusic }
@@ -252,6 +255,13 @@ struct MusicPickerView: View {
     private func runSearch(reset: Bool) {
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
+        // Direct music search hits the paid Epidemic search endpoint — require a session first. When signed in
+        // the gate runs the closure immediately (debounced typing is unaffected); when signed out it presents
+        // sign-in once and resumes this search exactly once after success.
+        cloudGate.run { self.performSearch(reset: reset, query: q) }
+    }
+
+    private func performSearch(reset: Bool, query q: String) {
         searching = true; searchError = nil
         if reset { searchResults = []; searchCursor = nil }
         Task {

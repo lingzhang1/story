@@ -36,6 +36,8 @@ struct ContinuousCaptureView: View {
     @State private var zoomDialActive = false
     @State private var dialStartFraction: Double = 0
     @State private var showLocationExplainer = false
+    @Environment(AuthStore.self) private var auth
+    @State private var cloudGate = CloudAuthGateModel()
     // Once-ever (persisted): the benefit explainer is shown a single time, not on every camera open.
     @AppStorage("story.location.explainerShown") private var locationExplainerShown = false
 
@@ -139,6 +141,7 @@ struct ContinuousCaptureView: View {
         .alert("Couldn't save that clip", isPresented: $model.showError, actions: {
             Button("OK", role: .cancel) {}
         }, message: { Text(model.errorMessage ?? "Please try again.") })
+        .cloudAuthGate(cloudGate)
     }
 
     // MARK: - Top bar: ✕ close · "Saves to Moments" pill (or REC + timer while recording)
@@ -339,7 +342,13 @@ struct ContinuousCaptureView: View {
     // "Get an AI shot idea" entry pill.
     private var aiIdeaPill: some View {
         Button {
-            model.getAIShotIdeaTapped()
+            // Reopening cached ideas is free (no inference) — stays ungated. A fresh scan is a paid Director
+            // call, so require a session first; the gate resumes the tap exactly once after sign-in.
+            if model.hasCachedIdeas {
+                model.getAIShotIdeaTapped()
+            } else {
+                cloudGate.run { model.getAIShotIdeaTapped() }
+            }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").font(.system(size: 14))
@@ -475,7 +484,7 @@ struct ContinuousCaptureView: View {
             .background(panelBG, in: RoundedRectangle(cornerRadius: 16))
 
             // Rescan is the ONLY explicit way to replace cached ideas with fresh scene evidence.
-            Button { model.scanAgain() } label: {
+            Button { cloudGate.run { model.scanAgain() } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.clockwise").font(.system(size: 14))
                     Text("Rescan").font(.system(size: 15, weight: .medium))
@@ -497,7 +506,7 @@ struct ContinuousCaptureView: View {
         HStack(spacing: 10) {
             Text(msg).font(.system(size: 14)).foregroundStyle(ink.opacity(0.9))
             Spacer()
-            Button("Try again") { model.scanAgain() }
+            Button("Try again") { cloudGate.run { model.scanAgain() } }
                 .font(.system(size: 14, weight: .medium)).foregroundStyle(gold)
             Button { model.dismissIdeas() } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))

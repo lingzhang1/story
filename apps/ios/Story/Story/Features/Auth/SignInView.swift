@@ -61,10 +61,11 @@ struct SignInView: View {
 
     private var codeStep: some View {
         VStack(spacing: 12) {
-            Text("Enter the code sent to \(AuthHelpers.normalizeEmail(email))")
-                .font(.footnote).foregroundStyle(.secondary)
+            Text("Enter the code sent to \(challenge?.maskedDestination ?? AuthHelpers.normalizeEmail(email))")
+                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             TextField("123456", text: $code)
                 .keyboardType(.numberPad).textFieldStyle(.roundedBorder).multilineTextAlignment(.center)
+                .textContentType(.oneTimeCode)
             Button { Task { await verify() } } label: {
                 HStack { if busy { ProgressView() }; Text("Verify") }.frame(maxWidth: .infinity)
             }
@@ -93,7 +94,18 @@ struct SignInView: View {
         do {
             try await auth.verifyEmailOTP(code, challenge: challenge)
             onSignedIn()
-        } catch { self.error = (error as? LocalizedError)?.errorDescription ?? "That code didn't work." }
+        } catch CognitoAuthError.badCode {
+            code = ""; error = CognitoAuthError.badCode.errorDescription
+        } catch CognitoAuthError.expiredCode {
+            // The code (and this challenge) are dead — send the user back to request a fresh one.
+            code = ""; self.challenge = nil; step = .email
+            error = CognitoAuthError.expiredCode.errorDescription
+        } catch CognitoAuthError.tooManyAttempts {
+            code = ""; self.challenge = nil; step = .email
+            error = CognitoAuthError.tooManyAttempts.errorDescription
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "That code didn't work."
+        }
     }
 
     private func appleSignIn() async {

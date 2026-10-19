@@ -32,6 +32,8 @@ struct ReviseStorySheet: View {
     // Interpretation lifecycle (owner safeguards #1/#2) — mirror of CustomizeYourStoryView.
     @State private var isInterpreting = false
     @State private var interpretToken = UUID()
+    @Environment(AuthStore.self) private var auth
+    @State private var cloudGate = CloudAuthGateModel()
     @State private var retryable = false
 
     private var numbering: StoryMomentNumbering { StoryMomentNumbering(story: story.moments) }
@@ -132,6 +134,7 @@ struct ReviseStorySheet: View {
                 }
                 Button("Cancel", role: .cancel) { confirmPartial = nil }
             } message: { Text(confirmPartial ?? "") }
+            .cloudAuthGate(cloudGate)
         }
     }
 
@@ -163,8 +166,13 @@ struct ReviseStorySheet: View {
     }
 
     /// The actual interpret+apply flow (unchanged), reached once capability pre-checks pass or the user
-    /// confirms partial execution.
+    /// confirms partial execution. Paid NL interpretation is a cloud action — require a session first; the gate
+    /// resumes THIS exact call once after sign-in (no duplicate inference, snapshot preserved).
     private func proceedApply(_ snapshotText: String) {
+        cloudGate.run { self.performApply(snapshotText) }
+    }
+
+    private func performApply(_ snapshotText: String) {
         let snapshotChips = chips
         let n = numbering
         let token = UUID()

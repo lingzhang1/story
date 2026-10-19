@@ -69,6 +69,10 @@ struct StoryApp: App {
             HomeView()
                 .environment(auth)
                 .task {
+                    // Gate paid Asset Understanding on an authenticated session (Phase 4): the AU queue drains
+                    // only when this returns true. In dev optional-auth a restored/real session reports true;
+                    // signed out, AU jobs stay PENDING and resume on sign-in (no model call meanwhile).
+                    AssetUnderstandingQueue.sharedIsAuthed = { [weak auth] in auth?.isSignedIn ?? false }
                     // Restore a prior session (silent refresh if the access token expired) and install the
                     // first-sign-in ADOPTION hook: stamp the resolved account onto the device's LocalIdentity
                     // so existing anonymous Stories/Moments are adopted with ZERO data movement. Never deletes
@@ -85,6 +89,15 @@ struct StoryApp: App {
                         // local content stays with its original owner (Phase 5: no cross-account transfer).
                     }
                     await auth.restore()
+                }
+                .onChange(of: auth.state) { _, newState in
+                    // On sign-in, resume any deferred background AU (Phase 4): jobs enqueued while signed out
+                    // are still PENDING; the existing idempotent upsert + orphan recovery process each exactly
+                    // once under the now-authenticated account — never a duplicate understanding row.
+                    if newState == .signedIn {
+                        let q = AssetUnderstandingQueue(context: container.mainContext)
+                        Task { await q.drain() }
+                    }
                 }
         }
         .modelContainer(container)

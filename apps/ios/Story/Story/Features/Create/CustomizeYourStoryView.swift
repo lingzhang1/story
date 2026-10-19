@@ -49,6 +49,8 @@ struct CustomizeYourStoryView: View {
     @State private var isInterpreting = false
     @State private var interpretToken = UUID()
     @State private var retryableInstruction: String?   // non-nil => a Retry affordance is shown
+    @Environment(AuthStore.self) private var auth
+    @State private var cloudGate = CloudAuthGateModel()
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
          initialEditingApproach: EditingApproach = .default, visualFirstAvailable: Bool = false,
@@ -241,6 +243,7 @@ struct CustomizeYourStoryView: View {
                         .map { MomentReferenceChipModel(id: $0.id, displayNumber: $0.number) }
                 })
         }
+        .cloudAuthGate(cloudGate)
     }
 
     /// Resolve the typed references + chips against the stable snapshot. Hard references that cannot resolve
@@ -251,6 +254,14 @@ struct CustomizeYourStoryView: View {
     /// unresolved references BLOCK submit with clarification. Never silently downgrade a hard clause.
     private func attemptCreate() {
         guard !isInterpreting else { return }                 // duplicate-tap protection (#1)
+        // Paid NL interpretation is a cloud action — require a session first. The gate stores THIS closure and
+        // resumes it exactly once after sign-in, so the draft/chips snapshot below is taken from the values the
+        // user sees at resume time and the paid call fires only once (no duplicate inference).
+        cloudGate.run { self.performInterpretation() }
+    }
+
+    private func performInterpretation() {
+        guard !isInterpreting else { return }
         // Immutable submission snapshot (#1): the exact values the user sees right now.
         let snapshotText = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshotChips = chips

@@ -12,76 +12,85 @@ import Foundation
 enum CognitoAuthError: Error, LocalizedError {
     case transport(Error)
     case service(String)        // Cognito __type / error message
-    case badCode                // wrong/expired OTP
+    case badCode                // wrong OTP
+    case expiredCode            // OTP expired — a new one is needed
+    case tooManyAttempts        // challenge exhausted; restart the flow
     case decoding
     case noChallengeSession
 
     var errorDescription: String? {
         switch self {
         case .transport: return "Couldn't reach sign-in. Check your connection and try again."
-        case .badCode: return "That code is incorrect or expired. Request a new one."
+        case .badCode: return "That code is incorrect. Check it and try again."
+        case .expiredCode: return "That code has expired. Request a new one."
+        case .tooManyAttempts: return "Too many tries. Request a new code to continue."
         case .service(let m): return m
         case .decoding, .noChallengeSession: return "Sign-in failed. Please try again."
         }
     }
 }
 
-struct OTPChallenge { let session: String; let email: String }
+/// A Cognito service error that preserves the raw `__type` so callers can branch (expired vs mismatch).
+private struct CognitoServiceError: Error { let type: String; let message: String }
+
+/// Result of requesting an email code. `maskedDestination` is Cognito's own masked address (e.g. "p***@s***")
+/// — the UI shows the OTP entry screen ONLY when this is non-nil, i.e. a code was actually dispatched.
+struct OTPChallenge { let session: String; let email: String; let maskedDestination: String }
 
 actor CognitoAuthClient {
     private let urlSession: URLSession
     init(urlSession: URLSession = .shared) { self.urlSession = urlSession }
 
     // ---- Email OTP ----------------------------------------------------------------------------------
-    /// Step 1: request a code. Returns a challenge session to carry into `verifyEmailOTP`.
+    /// Step 1: request a code via the NATIVE passwordless flow — no SignUp, no temporary password.
     ///
-    /// Passwordless-but-Cognito-needs-a-user: native EMAIL_OTP sign-IN only delivers a code for a user that
-    /// EXISTS in the pool — for an unknown email InitiateAuth returns SELECT_CHALLENGE and sends nothing. So we
-    /// SIGN THE USER UP FIRST (with a random, never-surfaced password), swallowing UsernameExistsException for
-    /// returning users, THEN InitiateAuth — which now returns the EMAIL_OTP challenge and dispatches the code.
+    /// The dev pool has `PreventUserExistenceErrors=ENABLED`, `EMAIL_OTP` as an allowed first-auth factor, and
+    /// self-signup enabled. Verified against the live pool: a plain
+    /// `InitiateAuth(USER_AUTH, PREFERRED_CHALLENGE=EMAIL_OTP)` returns `ChallengeName=EMAIL_OTP` with
+    /// `CODE_DELIVERY_*` for BOTH a brand-new email and a returning one — Cognito creates/confirms the account
+    /// atomically on the first successful code verification, so there is no phantom unconfirmed user and no
+    /// client-generated credential. New-user-signup vs existing-user-sign-in is therefore a single UX step at
+    /// this layer (anti-enumeration by design); the new-vs-returning distinction is resolved AFTER verification
+    /// by the backend identity claim (a first verify mints a new StoryUser, a returning verify resolves it).
+    ///
+    /// Returns a challenge ONLY when Cognito reports a dispatched code (`CODE_DELIVERY_DELIVERY_MEDIUM`). A
+    /// `SELECT_CHALLENGE` (EMAIL_OTP not offered) or any response without a delivery medium is surfaced as an
+    /// error rather than advancing the UI to a code screen that would never receive a code.
     func startEmailOTP(email: String) async throws -> OTPChallenge {
         let normalized = AuthHelpers.normalizeEmail(email)
-        try await signUpIfNeeded(email: normalized)
         let body: [String: Any] = [
             "AuthFlow": "USER_AUTH",
             "ClientId": StoryAuthConfig.appClientId,
             "AuthParameters": ["USERNAME": normalized, "PREFERRED_CHALLENGE": "EMAIL_OTP"],
         ]
-        let json = try await idpCall(target: "InitiateAuth", body: body)
-        // Expect the EMAIL_OTP challenge (code dispatched). A SELECT_CHALLENGE here means EMAIL_OTP was not
-        // offered (user still unconfirmed / factor unavailable) — surface it rather than silently showing a
-        // code screen that will never receive a code.
-        if (json["ChallengeName"] as? String) == "EMAIL_OTP", let session = json["Session"] as? String {
-            return OTPChallenge(session: session, email: normalized)
+        let json: [String: Any]
+        do { json = try await idpCall(target: "InitiateAuth", body: body) }
+        catch let e as CognitoServiceError {
+            throw CognitoAuthError.service(e.message.isEmpty
+                ? "Couldn't send a code to that email. Check the address and try again." : e.message)
         }
-        if let session = json["Session"] as? String, (json["ChallengeName"] as? String) == nil {
-            return OTPChallenge(session: session, email: normalized)
+        let challengeName = json["ChallengeName"] as? String
+        let params = json["ChallengeParameters"] as? [String: Any]
+        let medium = params?["CODE_DELIVERY_DELIVERY_MEDIUM"] as? String
+        guard challengeName == "EMAIL_OTP", let session = json["Session"] as? String, medium == "EMAIL" else {
+            // SELECT_CHALLENGE or no delivery -> no code was sent. Do not show the OTP screen.
+            throw CognitoAuthError.service("Couldn't send a code to that email. Check the address and try again.")
         }
-        throw CognitoAuthError.service("Couldn't start email sign-in. Please try again.")
+        let masked = (params?["CODE_DELIVERY_DESTINATION"] as? String) ?? normalized
+        return OTPChallenge(session: session, email: normalized, maskedDestination: masked)
     }
 
-    /// Create the pool user so EMAIL_OTP has someone to send to. The password is random and never used (Story
-    /// has no password flow); it only satisfies Cognito's SignUp requirement. A returning user already exists
-    /// -> UsernameExistsException is expected and ignored.
-    private func signUpIfNeeded(email: String) async throws {
-        let randomPassword = "Aa1!" + AuthHelpers.base64url(Data((0..<16).map { _ in UInt8.random(in: 0...255) }))
-        let body: [String: Any] = [
-            "ClientId": StoryAuthConfig.appClientId,
-            "Username": email,
-            "Password": randomPassword,
-            "UserAttributes": [["Name": "email", "Value": email]],
-        ]
-        do { _ = try await idpCall(target: "SignUp", body: body) }
-        catch let CognitoAuthError.service(msg) {
-            // Returning user -> already signed up. Any other error propagates.
-            if msg.localizedCaseInsensitiveContains("UsernameExists") || msg.localizedCaseInsensitiveContains("already exists") {
-                return
-            }
-            throw CognitoAuthError.service(msg)
-        }
+    /// Resend: identical to `startEmailOTP` (a fresh InitiateAuth dispatches a new code and a new Session).
+    func resendEmailOTP(email: String) async throws -> OTPChallenge {
+        try await startEmailOTP(email: email)
     }
 
     /// Step 2: verify the code. Returns tokens on success.
+    ///
+    /// Cognito signals a bad code two ways: (a) a thrown `CodeMismatchException`/`ExpiredCodeException`/
+    /// `NotAuthorizedException` (attempts exhausted), or (b) a 200 that RE-ISSUES an `EMAIL_OTP` challenge
+    /// instead of an `AuthenticationResult` (wrong code, retries remaining). Both are mapped to a typed error
+    /// so the UI can tell "wrong code, try again" from "expired/exhausted, request a new one".
     func verifyEmailOTP(_ code: String, challenge: OTPChallenge) async throws -> AuthTokens {
         let body: [String: Any] = [
             "ChallengeName": "EMAIL_OTP",
@@ -91,12 +100,18 @@ actor CognitoAuthClient {
         ]
         do {
             let json = try await idpCall(target: "RespondToAuthChallenge", body: body)
-            return try Self.tokens(fromAuthResult: json)
-        } catch let CognitoAuthError.service(msg) {
-            if msg.lowercased().contains("code") || msg.lowercased().contains("notauthorized") {
-                throw CognitoAuthError.badCode
+            if json["AuthenticationResult"] != nil {
+                return try Self.tokens(fromAuthResult: json)
             }
-            throw CognitoAuthError.service(msg)
+            // Re-issued challenge -> the code was wrong but the flow is still open.
+            throw CognitoAuthError.badCode
+        } catch let e as CognitoServiceError {
+            switch e.type {
+            case let t where t.contains("ExpiredCode"):   throw CognitoAuthError.expiredCode
+            case let t where t.contains("CodeMismatch"):  throw CognitoAuthError.badCode
+            case let t where t.contains("NotAuthorized"): throw CognitoAuthError.tooManyAttempts
+            default: throw CognitoAuthError.service(e.message.isEmpty ? e.type : e.message)
+            }
         }
     }
 
@@ -136,8 +151,8 @@ actor CognitoAuthClient {
         let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         if let http = resp as? HTTPURLResponse, http.statusCode >= 400 {
             let type = (obj["__type"] as? String) ?? ""
-            let msg = (obj["message"] as? String) ?? (obj["Message"] as? String) ?? type
-            throw CognitoAuthError.service(msg.isEmpty ? "sign-in error" : msg)
+            let msg = (obj["message"] as? String) ?? (obj["Message"] as? String) ?? ""
+            throw CognitoServiceError(type: type, message: msg)
         }
         return obj
     }
