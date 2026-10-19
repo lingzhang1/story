@@ -32,7 +32,7 @@ class FakeStore:
             if self.jobs[jid]["fp"] != payload_fingerprint:
                 raise _jobs.PayloadConflict("different payload for same operation_id")
             return jid, False
-        self.jobs[jid] = {"job_id": jid, "status": "queued", "approach": approach,
+        self.jobs[jid] = {"job_id": jid, "status": "queued", "approach": approach, "owner": owner,
                           "fp": payload_fingerprint, "staging_prefix": staging_prefix,
                           "request_ref": {"staging_prefix": staging_prefix,
                                           "sheet_order": json.dumps(sheet_order)}}

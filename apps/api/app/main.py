@@ -116,6 +116,7 @@ from app.deps import (
     get_duration_planner_engine,
 )
 from app.store import InMemoryStoryStore
+from app.auth import optional_user, Principal  # P0 Beta Auth Increment 2: trusted-identity dependency
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -995,10 +996,26 @@ def create_app() -> FastAPI:
         import os as _os
         return _os.environ.get("STORY_JOBS_API_ENABLED", "1") == "1"
 
+    # P0 Beta Auth Increment 2: scope job identity + ownership to the authenticated principal.
+    def _scoped_op_id(principal, operation_id: str) -> str:
+        """Namespace the client operation_id by the trusted story_user_id BEFORE job_id_for/fingerprint, so
+        two users submitting the SAME client op-id get DIFFERENT deterministic job ids and can never collide
+        on idempotency. The worker is unaffected (it only ever sees the derived job_id). Scoping is applied
+        here, at the trusted seam — the frozen jobs module is untouched."""
+        return f"{principal.story_user_id}\x1f{operation_id.strip()}"
+
+    def _require_owned(job: dict, principal) -> None:
+        """Enforce job ownership. A job owned by a DIFFERENT principal is reported as 404 (never 403) so a
+        caller cannot even discover another user's job exists. Legacy owner='dev' jobs are owned by the legacy
+        principal only — a real story_user_id never equals 'dev', so they are invisible to authenticated users
+        and vice-versa."""
+        if job.get("owner") != principal.story_user_id:
+            raise HTTPException(status_code=404, detail="job not found")
+
     @app.post("/v1/edit-plan-jobs", status_code=202)
     async def submit_edit_plan_job(
         operation_id: str = Form(..., description="client idempotency key; a NEW version uses a NEW id"),
-        owner: str = Form(default="dev", description="advisory only — NOT trusted as identity (adjustment 1)"),
+        owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
         sheet_order: str = Form(default="[]", description="JSON array of Moment ids, one per sheet"),
         creative_brief: str | None = Form(default=None),
@@ -1006,6 +1023,7 @@ def create_app() -> FastAPI:
         approach: str = Form(default="storytelling", description="storytelling|visual_first (diagnostics)"),
         test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it); simulates a long job"),
         sheets: list[UploadFile] = File(default=[]),
+        principal: Principal = Depends(optional_user),
     ):
         """Submit an async Edit Planning job. Returns {job_id,status} promptly (no model call). Idempotent on
         operation_id; a same-id DIFFERENT-payload submit is 409. Stages derived sheets to encrypted S3, then
@@ -1045,9 +1063,13 @@ def create_app() -> FastAPI:
             digests.append(_jobs.sheet_digest(data))
 
         store = _job_store()
+        # Increment 2: scope the operation id to the authenticated principal so idempotency + the deterministic
+        # job id are per-user (no cross-user collision); persist the trusted story_user_id as owner (client
+        # `owner` is ignored).
+        scoped_op = _scoped_op_id(principal, operation_id)
         fp = _jobs.payload_fingerprint(body, order, bool(critique_revision), approach,
                                        creative_brief=creative_brief, sheet_digests=digests)
-        jid = _jobs.job_id_for(operation_id)
+        jid = _jobs.job_id_for(scoped_op)
         # Stage BEFORE create so the worker always finds its inputs. Re-staging on a duplicate is harmless
         # (same prefix, same content). Body carries brief + critique + approach so the worker is self-contained.
         import json as _j2
@@ -1057,7 +1079,7 @@ def create_app() -> FastAPI:
         prefix = store.stage_request(jid, body_envelope, staged)
         try:
             job_id, created = store.create_or_get(
-                operation_id=operation_id, owner=owner, approach=approach,
+                operation_id=scoped_op, owner=principal.story_user_id, approach=approach,
                 critique_requested=bool(critique_revision), staging_prefix=prefix,
                 sheet_order=order, payload_fingerprint=fp)
         except _jobs.PayloadConflict as e:
@@ -1070,12 +1092,13 @@ def create_app() -> FastAPI:
         return {"job_id": job_id, "status": "queued"}
 
     @app.get("/v1/edit-plan-jobs/{job_id}")
-    def get_edit_plan_job(job_id: str):
+    def get_edit_plan_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         job = _job_store().get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         out = {k: job.get(k) for k in ("job_id", "status", "approach", "failure_category",
                                        "failure_detail", "diagnostics")}
         if job.get("status") == "completed":
@@ -1083,18 +1106,21 @@ def create_app() -> FastAPI:
         return out
 
     @app.post("/v1/edit-plan-jobs/{job_id}/cancel")
-    def cancel_edit_plan_job(job_id: str):
+    def cancel_edit_plan_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         store = _job_store()
-        if not store.get(job_id):
+        job = store.get(job_id)
+        if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         return {"job_id": job_id, "status": store.request_cancel(job_id)}
 
     @app.post("/v1/edit-plan-jobs/_reconcile")
-    def reconcile_edit_plan_jobs():
+    def reconcile_edit_plan_jobs(principal: Principal = Depends(optional_user)):
         """Lost-enqueue recovery sweep (concern 6). Called by a scheduled EventBridge rule in CDK; also
-        callable manually in dev. Re-enqueues only never-leased stranded queued jobs, capped."""
+        callable manually in dev. Re-enqueues only never-leased stranded queued jobs, capped. Requires a
+        principal (not anonymous); it re-enqueues by job_id only and discloses no job data cross-user."""
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         return {"reenqueued": _job_store().reconcile_lost_enqueue()}
@@ -1111,9 +1137,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/story-coverage/v2/jobs", status_code=202)
     def submit_coverage_job(
         operation_id: str = Form(..., description="canonical coverage op-id (see coverage_operation_id); a changed snapshot uses a new id"),
-        owner: str = Form(default="dev", description="advisory only — not trusted as identity"),
+        owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON StoryCoverageV2Request body (same shape as POST /v1/story-coverage/v2)"),
         test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it)"),
+        principal: Principal = Depends(optional_user),
     ):
         """Submit an async Coverage/2 job. Returns {job_id,status} promptly (no model call). Idempotent on
         operation_id; a same-id DIFFERENT-payload submit is 409 (payload conflict preserved). Recovers an
@@ -1136,16 +1163,17 @@ def create_app() -> FastAPI:
         body_json = _json.dumps(canon, sort_keys=True, default=str)
 
         store = _job_store()
-        fp = _jobs.coverage_payload_fingerprint(body_json, operation_id)
+        scoped_op = _scoped_op_id(principal, operation_id)  # Increment 2: per-user job identity + idempotency
+        fp = _jobs.coverage_payload_fingerprint(body_json, scoped_op)
         # Compact bodies inline into the DynamoDB item; a large body stages to encrypted S3 (worker reads either).
         staging_prefix = ""
         if len(body_json.encode("utf-8")) > _COV_JOB_MAX_INLINE_BYTES:
-            jid = _jobs.job_id_for(operation_id)
+            jid = _jobs.job_id_for(scoped_op)
             staging_prefix = store.stage_request(jid, body_json, [])
             body_json = ""   # not inlined; worker loads from S3
         try:
             job_id, created = store.create_or_get_coverage(
-                operation_id=operation_id, owner=owner, body_json=body_json,
+                operation_id=scoped_op, owner=principal.story_user_id, body_json=body_json,
                 payload_fingerprint=fp, staging_prefix=staging_prefix)
         except _jobs.PayloadConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
@@ -1157,7 +1185,7 @@ def create_app() -> FastAPI:
         return {"job_id": job_id, "status": "queued", "created": created}
 
     @app.get("/v1/story-coverage/v2/jobs/{job_id}")
-    def get_coverage_job(job_id: str):
+    def get_coverage_job(job_id: str, principal: Principal = Depends(optional_user)):
         """Durable status. Polling NEVER triggers inference — it only reads DynamoDB. On completion returns the
         StoryCoverage/2 result AND the operation_id, so the client can reject a result that is stale for the
         CURRENT Story (safeguard 4: input-freshness is enforced client-side against the live fingerprint)."""
@@ -1166,23 +1194,29 @@ def create_app() -> FastAPI:
         job = _job_store().get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
             # Never serve an edit-plan job through the coverage status route (dispatch isolation).
             raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
         out = {k: job.get(k) for k in ("job_id", "status", "operation_id", "failure_category",
                                        "failure_detail", "diagnostics")}
+        # Return the CLIENT operation_id (strip the internal per-principal scope prefix "<user>\x1f") so the
+        # client's staleness check (safeguard 4) sees the id it submitted, not the server-internal scoped key.
+        if isinstance(out.get("operation_id"), str) and "\x1f" in out["operation_id"]:
+            out["operation_id"] = out["operation_id"].split("\x1f", 1)[1]
         if job.get("status") == "completed":
             out["result"] = job.get("result")
         return out
 
     @app.post("/v1/story-coverage/v2/jobs/{job_id}/cancel")
-    def cancel_coverage_job(job_id: str):
+    def cancel_coverage_job(job_id: str, principal: Principal = Depends(optional_user)):
         if not _dev_access_ok():
             raise HTTPException(status_code=404, detail="not found")
         store = _job_store()
         job = store.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
+        _require_owned(job, principal)  # cross-user -> 404
         if job.get("operation_type", _jobs.OP_EDIT_PLAN) != _jobs.OP_COVERAGE_V2:
             raise HTTPException(status_code=409, detail="job is not a coverage_v2 job")
         return {"job_id": job_id, "status": store.request_cancel(job_id)}
