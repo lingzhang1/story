@@ -242,7 +242,13 @@ struct MediaEngineV1 {
     /// Fire-and-forget diagnostic beacon: GET /health?music=<note>. Lands in the App Runner ACCESS log so the
     /// no-music investigation can read the device-side music state server-side (no console/dev-mode needed).
     /// Best-effort, non-blocking — never affects the render.
+    ///
+    /// Release-boundary safety: these diagnostic beacons are OFF BY DEFAULT and make NO network call on
+    /// the normal generation path. They fire ONLY when the launch/env flag `STORY_DIAG_BEACONS == "1"`
+    /// is set (a dev/debug session), so a production/beta build emits nothing. Keeps the instrumentation
+    /// available for on-device diagnosis without adding chatter to normal use.
     static func beacon(_ note: String) {
+        guard ProcessInfo.processInfo.environment["STORY_DIAG_BEACONS"] == "1" else { return }
         var comps = URLComponents(url: StoryBackend.baseURL.appendingPathComponent("health"),
                                   resolvingAgainstBaseURL: false)
         comps?.queryItems = [URLQueryItem(name: "music", value: String(note.prefix(180)))]
