@@ -28,6 +28,8 @@ struct SceneScanFlowView: View {
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(AuthStore.self) private var authStore
+    @State private var cloudGate = CloudAuthGateModel()
 
     /// Capture Anywhere seam (75435fa): the ONLY difference between Home capture and in-Story
     /// capture. `.standalone` → no Story, library-only, scene-only AI intent (no stale-Story leak).
@@ -122,6 +124,7 @@ struct SceneScanFlowView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .cloudAuthGate(cloudGate)   // P0 Phase 4: Start Scan runs the Director (Bedrock) — gate it behind sign-in
     }
 
     private var integrityFailBinding: Binding<Bool> {
@@ -194,7 +197,7 @@ struct SceneScanFlowView: View {
                     .foregroundStyle(ink.opacity(0.65))
             }
             Spacer()
-            primaryButton("Start Scan") { state = .scanning }
+            primaryButton("Start Scan") { cloudGate.run { state = .scanning } }
             secondaryButton("Skip Scan") { pendingCaptureContext = nil; showCamera = true }   // shoot immediately — no scan, no Director, no wait, no context
             Button("Cancel") { dismiss() }
                 .foregroundStyle(.gray).frame(maxWidth: .infinity)

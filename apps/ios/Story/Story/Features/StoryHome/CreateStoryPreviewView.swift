@@ -13,6 +13,7 @@ import AVKit
 // production path. See ui-capability-matrix.md.
 struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
+    @State private var cloudGate = CloudAuthGateModel()
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
     /// When set, this host launches a CREATE ANOTHER VERSION from that parent (Explore + Customize), not a
@@ -316,12 +317,14 @@ struct CreateStoryPreviewView: View {
             // elsewhere). It deliberately does NOT do recovery routing — doing so here raced the app-level
             // PendingOperationRecovery on the SAME op and stuck the UI in a "Preparing" loop. A Create Another
             // Version from a parent (Explore + Customize), else a fresh original create.
+            // P0 Phase 4: creating a video runs paid AI (duration rec, music recommend, edit-plan) — require
+            // sign-in first, then start the flow (resumes once; no duplicate create).
             if let parent = forceNewVersionFrom {
                 MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
-                handleRecreate(from: parent)
+                cloudGate.run { handleRecreate(from: parent) }
             } else {
                 MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8))")
-                beginCreateFlow()
+                cloudGate.run { beginCreateFlow() }
             }
         }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
@@ -399,6 +402,7 @@ struct CreateStoryPreviewView: View {
                 }
             }
         }
+        .cloudAuthGate(cloudGate)   // P0 Phase 4: gate the create flow (duration/music/edit-plan AI) behind sign-in
     }
 
     private func thumb(_ m: MomentModel) -> some View {
