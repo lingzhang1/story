@@ -9,6 +9,10 @@ import SwiftData
 struct CreativeDirectionView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    // P0 Beta Auth Increment 4: gate the cloud-AI "resolve" behind sign-in; present SignInView and resume.
+    @Environment(AuthStore.self) private var auth
+    @State private var gate: AuthGate?
+    @State private var showSignIn = false
 
     /// Phase 3: when Story creation starts from the Moments Library, the selected Moments are
     /// seeded here. On final confirmation they are linked to the newly-created Story (order
@@ -91,6 +95,21 @@ struct CreativeDirectionView: View {
             Button("Try Again") { Task { await resolve() } }
             Button("Cancel", role: .cancel) {}
         } message: { Text(errorMessage ?? "") }
+        .sheet(isPresented: $showSignIn) {
+            SignInView(auth: auth,
+                       onSignedIn: { showSignIn = false; gate?.didSignIn() },
+                       onCancel: { showSignIn = false; gate?.cancel() })
+        }
+    }
+
+    /// Require authentication before a cloud-AI action, preserving + resuming it once (P0 Phase 4). In dev
+    /// optional-auth the backend still accepts no token, but the app prompts sign-in so the cutover to
+    /// required-auth is a one-line flip and the user sees a real prompt rather than a silent anonymous call.
+    private func requireAuthThen(_ action: @escaping () -> Void) {
+        let g = gate ?? AuthGate(auth: auth)
+        gate = g
+        g.run(action)
+        showSignIn = g.presentingSignIn
     }
 
     private var backRow: some View {
@@ -186,7 +205,7 @@ struct CreativeDirectionView: View {
             Text("or describe it").font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
             StoryTextField(placeholder: "Mostly landscapes and the scale of the mountains. Include us naturally. Slow, cinematic feeling.",
                            text: $description, minHeight: 96)
-            StoryPrimaryButton(title: "Continue") { Task { await resolve() } }
+            StoryPrimaryButton(title: "Continue") { requireAuthThen { Task { await resolve() } } }
         }
     }
 

@@ -12,6 +12,9 @@ import AVFoundation
 struct ChangeMusicSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(AuthStore.self) private var auth
+    @State private var gate: AuthGate?
+    @State private var showSignIn = false
     @Bindable var story: StoryModel
     let source: GeneratedOutputModel
     /// Called with the newly created version on success, so the Result screen can switch to it.
@@ -54,7 +57,17 @@ struct ChangeMusicSheet: View {
             }
             .navigationBarBackButtonHidden(true)
         }
-        .task { await loadRecommendations() }
+        .task {
+            // P0 Phase 4: Change Music calls paid music recommendation — require sign-in first, then load.
+            let g = AuthGate(auth: auth); gate = g
+            g.run { Task { await loadRecommendations() } }
+            showSignIn = g.presentingSignIn
+        }
+        .sheet(isPresented: $showSignIn) {
+            SignInView(auth: auth,
+                       onSignedIn: { showSignIn = false; gate?.didSignIn() },
+                       onCancel: { showSignIn = false; gate?.cancel(); dismiss() })
+        }
         .alert("Couldn't change music", isPresented: Binding(get: { errorText != nil },
                                                              set: { if !$0 { errorText = nil } })) {
             Button("OK", role: .cancel) { errorText = nil }
