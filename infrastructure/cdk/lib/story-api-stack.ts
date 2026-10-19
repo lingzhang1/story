@@ -431,10 +431,13 @@ export class StoryApiStack extends cdk.Stack {
       cfnExecRole.addToPolicy(new iam.PolicyStatement({
         sid: "StoryDevStackPassRole",
         actions: ["iam:PassRole"],
+        // Resource scope (only story-*/StoryApiStack-* roles) is the guardrail. The PassedToService
+        // condition is intentionally NOT set here: App Runner's control plane does not reliably present
+        // the iam:PassedToService context key when validating PassRole during a SERVICE UPDATE, which
+        // denied the digest re-pin. Scoping by role name keeps this safe (it can only pass Story's own
+        // app roles), without the condition that App Runner update breaks on.
         resources: [`arn:aws:iam::${this.account}:role/story-${environment}-*`,
                     `arn:aws:iam::${this.account}:role/StoryApiStack-*`],
-        conditions: { StringEquals: { "iam:PassedToService":
-          ["apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "lambda.amazonaws.com", "tasks.apprunner.amazonaws.com", "events.amazonaws.com"] } },
       }));
 
       // IAM PassRole on the DEPLOY role: it may pass EXACTLY the dedicated cfn-exec role to
