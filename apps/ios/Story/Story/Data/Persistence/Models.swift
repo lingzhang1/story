@@ -456,13 +456,20 @@ final class GeneratedOutputModel {
 }
 
 // Opaque local identity — no account required (spec 03 §9).
+// P0 Beta Auth Increment 4: additive, defaulted account fields (SwiftData lightweight-migration-safe). On
+// first sign-in the device's existing local content is ADOPTED by the account by stamping accountId here —
+// zero data movement, nothing deleted. nil accountId = anonymous local content (pre-sign-in / signed out).
 @Model
 final class LocalIdentityModel {
     @Attribute(.unique) var id: UUID
     var createdAt: Date
-    init(id: UUID = UUID(), createdAt: Date = .now) {
+    var accountId: String?   // resolved story_user_id of the account that adopted this device's content
+    var linkedAt: Date?
+    init(id: UUID = UUID(), createdAt: Date = .now, accountId: String? = nil, linkedAt: Date? = nil) {
         self.id = id
         self.createdAt = createdAt
+        self.accountId = accountId
+        self.linkedAt = linkedAt
     }
 }
 

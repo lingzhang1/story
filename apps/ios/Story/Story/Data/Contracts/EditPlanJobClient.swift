@@ -83,6 +83,7 @@ final class EditPlanJobClient: EditPlanJobClienting {
                 critiqueRevision: Bool) async throws -> String {
         let boundary = "story.job.\(UUID().uuidString)"
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-jobs"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
@@ -135,6 +136,7 @@ final class EditPlanJobClient: EditPlanJobClienting {
     /// One status read. Transport errors are SAFE (the job keeps running server-side); the caller retries.
     func status(jobId: String) async throws -> EditPlanJobState {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-jobs/\(jobId)"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "GET"
         let data: Data, resp: URLResponse
         do { (data, resp) = try await session.data(for: req) }
@@ -179,6 +181,7 @@ final class EditPlanJobClient: EditPlanJobClienting {
 
     func cancel(jobId: String) async {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-jobs/\(jobId)/cancel"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         _ = try? await session.data(for: req)   // best-effort; the backend finalizes cancelled
     }

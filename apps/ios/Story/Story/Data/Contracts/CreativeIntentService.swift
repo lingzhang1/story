@@ -61,6 +61,19 @@ enum StoryBackend {
         cfg.httpMaximumConnectionsPerHost = 2
         return URLSession(configuration: cfg)
     }()
+
+    /// P0 Beta Auth Increment 4: the single token seam. AuthStore sets this to a closure returning the current
+    /// access token (or nil when signed out). Every service stamps its request through `authorize(_:)` so the
+    /// Authorization header is added in ONE place rather than 14 request-builders.
+    nonisolated(unsafe) static var authTokenProvider: (() -> String?)?
+
+    /// Stamp the bearer token onto a request when a session exists. No-op when signed out (dev optional-auth
+    /// keeps working; prod rejects the unauthenticated request server-side).
+    static func authorize(_ request: inout URLRequest) {
+        if let token = authTokenProvider?(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+    }
 }
 
 enum CreativeIntentServiceError: Error, LocalizedError {
@@ -89,6 +102,7 @@ struct CreativeIntentService {
 
     func resolve(rawText: String) async throws -> CreativeIntentContractDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/creative-intent"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["raw_text": rawText])

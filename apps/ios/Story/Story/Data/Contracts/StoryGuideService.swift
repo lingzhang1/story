@@ -36,6 +36,7 @@ final class StoryGuideService: StoryGuideGenerating {
 
     func generate(_ request: StoryGuideRequestDTO) async throws -> StoryGuideDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-guide"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {

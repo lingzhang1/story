@@ -8,6 +8,9 @@ import SwiftData
 @main
 struct StoryApp: App {
     let container: ModelContainer
+    // P0 Beta Auth Increment 4: the shared session layer. Restored on launch; adopts anonymous local content
+    // on first sign-in. Views read it from the environment; the networking seam gets its token via AuthStore.
+    @State private var auth = AuthStore()
 
     init() {
         let schema = Schema([
@@ -64,6 +67,25 @@ struct StoryApp: App {
     var body: some Scene {
         WindowGroup {
             HomeView()
+                .environment(auth)
+                .task {
+                    // Restore a prior session (silent refresh if the access token expired) and install the
+                    // first-sign-in ADOPTION hook: stamp the resolved account onto the device's LocalIdentity
+                    // so existing anonymous Stories/Moments are adopted with ZERO data movement. Never deletes
+                    // SwiftData; never reassigns content already owned by a DIFFERENT account.
+                    auth.onFirstSignInAdopt = { accountId in
+                        let ctx = container.mainContext
+                        guard let ident = (try? ctx.fetch(FetchDescriptor<LocalIdentityModel>()))?.first else { return }
+                        if ident.accountId == nil {
+                            ident.accountId = accountId
+                            ident.linkedAt = .now
+                            try? ctx.save()
+                        }
+                        // If ident.accountId belongs to a DIFFERENT account, we do NOT reassign it — the
+                        // local content stays with its original owner (Phase 5: no cross-account transfer).
+                    }
+                    await auth.restore()
+                }
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in

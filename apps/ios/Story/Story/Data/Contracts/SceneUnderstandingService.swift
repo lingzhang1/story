@@ -33,6 +33,7 @@ struct SceneUnderstandingService {
                  mode: String,
                  storyId: UUID?) async throws -> SceneUnderstandingContractDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/scene-understanding"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         let boundary = "Boundary-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)",

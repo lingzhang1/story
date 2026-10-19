@@ -135,6 +135,7 @@ struct StoryCoverageV2Service: StoryCoverageV2Computing {
 
     private func submit(operationId: String, body: String) async throws -> String {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage/v2/jobs"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         let boundary = "Boundary-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -165,6 +166,7 @@ struct StoryCoverageV2Service: StoryCoverageV2Computing {
         let url = baseURL.appendingPathComponent("v1/story-coverage/v2/jobs/\(jobId)")
         while Date() < deadline {
             var req = URLRequest(url: url)
+            StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
             req.httpMethod = "GET"
             let data: Data; let resp: URLResponse
             do { (data, resp) = try await session.data(for: req) }
@@ -206,6 +208,7 @@ struct StoryCoverageService: StoryCoverageComputing {
 
     func compute(_ request: StoryCoverageRequestDTO) async throws -> StoryCoverageDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-coverage"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {

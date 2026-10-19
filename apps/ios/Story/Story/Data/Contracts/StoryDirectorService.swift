@@ -40,6 +40,7 @@ struct StoryDirectorService {
                     targetDurationSeconds: Double?,
                     selectedOpportunity: SelectedOpportunityDTO? = nil) async throws -> DirectorOutputDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/director/initialize"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 

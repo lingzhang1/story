@@ -138,6 +138,7 @@ final class EditPlannerService: EditPlanning {
 
     func plan(_ request: EditPlanRequestDTO) async throws -> EditPlanV2 {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do { req.httpBody = try StoryContractCoding.encoder().encode(request) }
@@ -219,6 +220,7 @@ final class EditPlannerService: EditPlanning {
                                critiqueRevision: Bool = false) async throws -> EditPlanV2 {
         let boundary = "story.mm.\(UUID().uuidString)"
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-mm"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
