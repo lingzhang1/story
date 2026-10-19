@@ -34,19 +34,51 @@ actor CognitoAuthClient {
 
     // ---- Email OTP ----------------------------------------------------------------------------------
     /// Step 1: request a code. Returns a challenge session to carry into `verifyEmailOTP`.
+    ///
+    /// Passwordless-but-Cognito-needs-a-user: native EMAIL_OTP sign-IN only delivers a code for a user that
+    /// EXISTS in the pool — for an unknown email InitiateAuth returns SELECT_CHALLENGE and sends nothing. So we
+    /// SIGN THE USER UP FIRST (with a random, never-surfaced password), swallowing UsernameExistsException for
+    /// returning users, THEN InitiateAuth — which now returns the EMAIL_OTP challenge and dispatches the code.
     func startEmailOTP(email: String) async throws -> OTPChallenge {
         let normalized = AuthHelpers.normalizeEmail(email)
+        try await signUpIfNeeded(email: normalized)
         let body: [String: Any] = [
             "AuthFlow": "USER_AUTH",
             "ClientId": StoryAuthConfig.appClientId,
             "AuthParameters": ["USERNAME": normalized, "PREFERRED_CHALLENGE": "EMAIL_OTP"],
         ]
         let json = try await idpCall(target: "InitiateAuth", body: body)
-        guard let session = json["Session"] as? String else {
-            // If Cognito returned an immediate challenge list instead, EMAIL_OTP may not be selectable.
-            throw CognitoAuthError.noChallengeSession
+        // Expect the EMAIL_OTP challenge (code dispatched). A SELECT_CHALLENGE here means EMAIL_OTP was not
+        // offered (user still unconfirmed / factor unavailable) — surface it rather than silently showing a
+        // code screen that will never receive a code.
+        if (json["ChallengeName"] as? String) == "EMAIL_OTP", let session = json["Session"] as? String {
+            return OTPChallenge(session: session, email: normalized)
         }
-        return OTPChallenge(session: session, email: normalized)
+        if let session = json["Session"] as? String, (json["ChallengeName"] as? String) == nil {
+            return OTPChallenge(session: session, email: normalized)
+        }
+        throw CognitoAuthError.service("Couldn't start email sign-in. Please try again.")
+    }
+
+    /// Create the pool user so EMAIL_OTP has someone to send to. The password is random and never used (Story
+    /// has no password flow); it only satisfies Cognito's SignUp requirement. A returning user already exists
+    /// -> UsernameExistsException is expected and ignored.
+    private func signUpIfNeeded(email: String) async throws {
+        let randomPassword = "Aa1!" + AuthHelpers.base64url(Data((0..<16).map { _ in UInt8.random(in: 0...255) }))
+        let body: [String: Any] = [
+            "ClientId": StoryAuthConfig.appClientId,
+            "Username": email,
+            "Password": randomPassword,
+            "UserAttributes": [["Name": "email", "Value": email]],
+        ]
+        do { _ = try await idpCall(target: "SignUp", body: body) }
+        catch let CognitoAuthError.service(msg) {
+            // Returning user -> already signed up. Any other error propagates.
+            if msg.localizedCaseInsensitiveContains("UsernameExists") || msg.localizedCaseInsensitiveContains("already exists") {
+                return
+            }
+            throw CognitoAuthError.service(msg)
+        }
     }
 
     /// Step 2: verify the code. Returns tokens on success.
