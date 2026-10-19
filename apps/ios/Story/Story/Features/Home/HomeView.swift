@@ -8,11 +8,13 @@ import SwiftData
 // "Use existing photos/videos" entries are removed (owner decision V0.2.2).
 struct HomeView: View {
     @Environment(\.modelContext) private var context
+    @Environment(AuthStore.self) private var auth
     @Query private var stories: [StoryModel]
     @Query private var moments: [MomentModel]
 
     @State private var showCapture = false
     @State private var showStories = false
+    @State private var confirmSignOut = false
 
     // Active Stories first (most recent first), then completed below.
     private var sortedStories: [StoryModel] {
@@ -85,8 +87,31 @@ struct HomeView: View {
         HStack {
             StoryEyebrow(text: "Story")
             Spacer()
+            // Account affordance — only when signed in. Lets the user (and beta testers) sign out,
+            // which is required to RE-TEST the OTP flow and to verify "logout keeps local content".
+            // AuthStore exposes only storyUserId (never the email), so we show a short id, by design.
+            if auth.isSignedIn {
+                Menu {
+                    if let uid = auth.storyUserId {
+                        Text("Signed in · \(String(uid.prefix(8)))")
+                    } else {
+                        Text("Signed in")
+                    }
+                    Button("Sign Out", role: .destructive) { confirmSignOut = true }
+                } label: {
+                    Image(systemName: "person.crop.circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.7))
+                }
+            }
         }
         .padding(.top, 32).padding(.bottom, 22)
+        .confirmationDialog("Sign out of Story?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) { auth.signOut() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your Moments and Stories stay on this device. You'll sign in again to use Story's AI.")
+        }
     }
 
     // Compact secondary destination card (icon + count row, title, sub).
