@@ -59,6 +59,13 @@ jobs:
               "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
           echo "registry=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_OUTPUT"
 
+      - name: Login to public ECR (authenticated base-image pull — avoids anonymous 429 rate limit)
+        run: |
+          # The Dockerfile pulls public.ecr.aws/docker/library/python; anonymous pulls hit a strict
+          # data limit (429). An AUTHENTICATED pull via the OIDC creds gets a much higher quota.
+          aws ecr-public get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin public.ecr.aws
+
       - name: Build + push IMMUTABLE API image (tagged by git SHA), capture digest
         id: image
         run: |

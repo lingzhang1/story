@@ -284,10 +284,11 @@ export class StoryApiStack extends cdk.Stack {
           githubOidc.openIdConnectProviderArn,
           {
             StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-            // Scope to THIS repo + the `development` GitHub Environment only.
+            // GitHub may emit a numeric-id-qualified sub (repo:owner@<id>/repo@<id>:environment:...);
+            // match it with a StringLike that still pins owner + repo name + the development environment.
             StringLike: {
               "token.actions.githubusercontent.com:sub":
-                "repo:lingzhang1/story:environment:development",
+                "repo:lingzhang1*/story*:environment:development",
             },
           }
         ),
@@ -317,8 +318,10 @@ export class StoryApiStack extends cdk.Stack {
       // is resource-scoped.
       deployRole.addToPolicy(new iam.PolicyStatement({
         sid: "EcrAuthToken",
-        actions: ["ecr:GetAuthorizationToken"],
-        resources: ["*"],   // API LIMITATION: GetAuthorizationToken does not support resource-level perms
+        actions: ["ecr:GetAuthorizationToken",
+                  // Public-ECR login for an authenticated base-image pull (avoids the anonymous 429 limit).
+                  "ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"],
+        resources: ["*"],   // API LIMITATION: these auth-token actions do not support resource-level perms
       }));
       deployRole.addToPolicy(new iam.PolicyStatement({
         sid: "CdkAssetUpload",
@@ -403,8 +406,12 @@ export class StoryApiStack extends cdk.Stack {
         actions: ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
                   "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PutRolePolicy", "iam:DeleteRolePolicy",
                   "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
-                  "iam:CreatePolicy", "iam:DeletePolicy", "iam:CreateOpenIDConnectProvider",
-                  "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider"],
+                  "iam:UpdateAssumeRolePolicy", "iam:UpdateRole", "iam:UpdateRoleDescription",
+                  "iam:CreatePolicy", "iam:DeletePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+                  "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions",
+                  "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+                  "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider",
+                  "iam:UpdateOpenIDConnectProviderThumbprint", "iam:AddClientIDToOpenIDConnectProvider"],
         resources: [
           `arn:aws:iam::${this.account}:role/story-${environment}-*`,
           `arn:aws:iam::${this.account}:role/StoryApiStack-*`,
@@ -429,6 +436,13 @@ export class StoryApiStack extends cdk.Stack {
         actions: ["iam:PassRole"],
         resources: [cfnExecRole.roleArn],
         conditions: { StringEquals: { "iam:PassedToService": "cloudformation.amazonaws.com" } },
+      }));
+
+      // CDK CLI reads the bootstrap version SSM param to confirm compatibility before a deploy.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "CdkBootstrapVersionRead",
+        actions: ["ssm:GetParameter", "ssm:GetParameters"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/cdk-bootstrap/*`],
       }));
 
       new cdk.CfnOutput(this, "GitHubDeployRoleArn", {
