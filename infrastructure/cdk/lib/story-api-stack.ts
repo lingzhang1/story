@@ -260,6 +260,106 @@ export class StoryApiStack extends cdk.Stack {
       value: `https://${service.attrServiceUrl}`,
       description: "App Runner service URL (Story API base URL)",
     });
+
+    // --- Gate 2: GitHub Actions OIDC deploy role (DEV ONLY) ---------------
+    // Short-lived, keyless CI deploys. The role trusts GitHub's OIDC provider
+    // and is scoped by the `sub` claim to THIS repo + the development
+    // environment, so only a run of `lingzhang1/story` in the `development`
+    // GitHub Environment can assume it. NEVER AdministratorAccess — the inline
+    // policy lists exactly the actions a `cdk deploy` + artifact push of THIS
+    // stack needs (documented per statement below). Provisioned only for
+    // non-production environments; production gets a separately-reviewed role.
+    if (environment !== "production") {
+      // One OIDC provider per account (reused if it already exists out-of-band).
+      const githubOidc = new iam.OpenIdConnectProvider(this, "GitHubOIDCProvider", {
+        url: "https://token.actions.githubusercontent.com",
+        clientIds: ["sts.amazonaws.com"],
+      });
+
+      const deployRole = new iam.Role(this, "StoryDevDeployRole", {
+        roleName: `story-${environment}-github-deploy`,
+        description: "GitHub Actions OIDC role for DEV cdk deploy + artifact push (least privilege)",
+        maxSessionDuration: cdk.Duration.hours(1),
+        assumedBy: new iam.WebIdentityPrincipal(
+          githubOidc.openIdConnectProviderArn,
+          {
+            StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
+            // Scope to THIS repo + the `development` GitHub Environment only.
+            StringLike: {
+              "token.actions.githubusercontent.com:sub":
+                "repo:lingzhang1/story:environment:development",
+            },
+          }
+        ),
+      });
+
+      // CloudFormation: cdk deploy drives CFN on this stack's stacks only.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "CloudFormationDeploy",
+        actions: [
+          "cloudformation:DescribeStacks", "cloudformation:CreateStack", "cloudformation:UpdateStack",
+          "cloudformation:DeleteStack", "cloudformation:DescribeStackEvents",
+          "cloudformation:GetTemplate", "cloudformation:DescribeStackResources",
+          "cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
+          "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
+          "cloudformation:GetTemplateSummary",
+        ],
+        resources: [
+          `arn:aws:cloudformation:${this.region}:${this.account}:stack/story-${environment}-api/*`,
+          `arn:aws:cloudformation:${this.region}:${this.account}:stack/CDKToolkit/*`,
+        ],
+      }));
+
+      // CDK asset upload: the bootstrap S3 asset bucket + ECR assets repo.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "CdkAssetUpload",
+        actions: [
+          "s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation",
+          "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:PutImage",
+          "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload",
+          "ecr:BatchGetImage", "ecr:DescribeImages",
+        ],
+        resources: ["*"],   // CDK bootstrap bucket/repo names are account-scoped; tighten to cdk-* once confirmed
+      }));
+
+      // App Runner: update + deploy the service by image digest.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "AppRunnerDeploy",
+        actions: [
+          "apprunner:DescribeService", "apprunner:UpdateService",
+          "apprunner:StartDeployment", "apprunner:ListServices",
+          "apprunner:DescribeOperation",
+        ],
+        resources: ["*"],   // App Runner service ARNs include a random id; scope by tag/name post-create
+      }));
+
+      // Lambda: publish + update the async worker.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "LambdaDeploy",
+        actions: [
+          "lambda:GetFunction", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
+          "lambda:PublishVersion", "lambda:GetFunctionConfiguration",
+        ],
+        resources: [`arn:aws:lambda:${this.region}:${this.account}:function:story-${environment}-*`],
+      }));
+
+      // IAM PassRole: cdk passes the App Runner access/instance + worker roles
+      // to the services at deploy time. Scoped to roles in THIS account; a
+      // PassedToService condition restricts WHICH services may receive them.
+      deployRole.addToPolicy(new iam.PolicyStatement({
+        sid: "IamPassRole",
+        actions: ["iam:PassRole", "iam:GetRole"],
+        resources: [`arn:aws:iam::${this.account}:role/story-${environment}-*`,
+                    `arn:aws:iam::${this.account}:role/StoryApiStack-*`],
+        conditions: { StringEquals: { "iam:PassedToService":
+          ["apprunner.amazonaws.com", "build.apprunner.amazonaws.com", "lambda.amazonaws.com", "tasks.apprunner.amazonaws.com"] } },
+      }));
+
+      new cdk.CfnOutput(this, "GitHubDeployRoleArn", {
+        value: deployRole.roleArn,
+        description: "ARN GitHub Actions assumes via OIDC for dev deploys",
+      });
+    }
     new cdk.CfnOutput(this, "Environment", { value: environment });
     new cdk.CfnOutput(this, "EditPlanJobsTableName", { value: jobsTable.tableName });
     new cdk.CfnOutput(this, "EditPlanJobsQueueUrl", { value: jobsQueue.queueUrl });

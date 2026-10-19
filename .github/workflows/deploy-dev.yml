@@ -1,0 +1,85 @@
+name: Deploy (dev)
+
+# Gate 2 dev deployment. MANUAL DISPATCH ONLY for now (req 5) — automatic post-merge deploy is enabled
+# only after Gate 2 acceptance. Keyless via GitHub OIDC (req 1). Scoped to the protected `development`
+# Environment (req 2) with a concurrency guard so two dev deploys never overlap. Dev account only.
+# NO production, NO CodeDeploy, NO auto-prod.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'deploy-dev' to confirm a development deployment"
+        required: true
+        default: ""
+
+permissions:
+  id-token: write      # required to request the OIDC token
+  contents: read
+
+concurrency:
+  group: deploy-development          # req 2: never two concurrent dev deploys
+  cancel-in-progress: false          # let an in-flight deploy finish rather than abort mid-way
+
+jobs:
+  deploy-dev:
+    name: Build immutable artifacts + deploy to dev
+    runs-on: ubuntu-latest
+    environment: development          # req 2: protected GitHub Environment (approvals/secrets live here)
+    if: ${{ github.event.inputs.confirm == 'deploy-dev' }}
+    env:
+      AWS_REGION: us-east-1
+      ENVIRONMENT: development
+      ECR_REPO: story-development-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC (no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEV_DEPLOY_ROLE_ARN }}   # set in the development Environment after Inc B provisioning
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin \
+              "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+          echo "registry=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push IMMUTABLE API image (tagged by git SHA), capture digest
+        id: image
+        run: |
+          IMG="${{ steps.ecr.outputs.registry }}/${ECR_REPO}"
+          SHA="${GITHUB_SHA::12}"
+          docker build -f apps/api/Dockerfile -t "$IMG:git-$SHA" .
+          docker push "$IMG:git-$SHA"
+          # The IMMUTABLE identifier is the digest, not the tag.
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPO" \
+            --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=$IMG@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Build reproducible worker asset + hash
+        id: worker
+        run: |
+          bash scripts/build_worker_asset.sh
+          ( cd infrastructure/cdk/.worker-asset && zip -qr -X "$GITHUB_WORKSPACE/worker.zip" . )
+          echo "sha256=$(shasum -a 256 worker.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Write release manifest
+        run: bash scripts/release-manifest.sh "$ENVIRONMENT" "${{ steps.image.outputs.digest }}" worker.zip
+
+      - name: CDK deploy (dev) by digest
+        working-directory: infrastructure/cdk
+        run: |
+          npm ci || npm install
+          npx cdk deploy -c environment=development --require-approval never
+        # Note: the stack pins App Runner to the pushed image; the deploy triggers App Runner by digest.
+
+      - name: Upload release manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: release-manifests/*.json
