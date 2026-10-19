@@ -34,17 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Diagnose OIDC claims (sub/aud only — non-secret)
-        run: |
-          # Request the GitHub OIDC token this job is issued, decode its payload, print ONLY sub + aud
-          # (neither is a secret) so a trust-policy mismatch is diagnosable. The signature/token are not printed.
-          TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c "import sys,json;print(json.load(sys.stdin)['value'])")
-          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2)
-          # base64url pad + decode
-          PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 )); PADDED="$PAYLOAD$(printf '=%.0s' $(seq 1 $PAD))"
-          echo "$PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print('sub=',d.get('sub'));print('aud=',d.get('aud'));print('repository=',d.get('repository'))"
-
       - name: Configure AWS via OIDC (no static keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -96,6 +85,7 @@ jobs:
           # Drive CloudFormation through Story's dedicated scoped exec role, NOT the admin bootstrap role.
           # CFN_EXEC_ROLE_ARN is set in the development Environment (the CfnExecRoleArn stack output).
           npx cdk deploy -c environment=development --require-approval never \
+            -c imageDigest="${{ steps.image.outputs.digest }}" \
             --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
 
       - name: Upload release manifest artifact
