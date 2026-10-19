@@ -63,7 +63,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         func pollUntilTerminal(jobId: String, maxSeconds: Int,
                                shouldCancel: @MainActor () -> Bool,
                                onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState {
-            if shouldCancel() { throw CancellationError() }
+            if await shouldCancel() { throw CancellationError() }
             switch behavior {
             case .ok(let p):
                 return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
