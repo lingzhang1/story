@@ -37,6 +37,10 @@ export class StoryApiStack extends cdk.Stack {
 
     const { environment } = props;
 
+    // Immutable deploy: the pipeline passes `-c imageDigest=sha256:...` so App Runner is pinned to an
+    // exact digest (auto-deploy off). Absent (legacy/local synth) -> mutable :latest fallback.
+    const imageDigest = this.node.tryGetContext("imageDigest") as string | undefined;
+
     // --- ECR repository for the App Runner image -------------------------
     // Stable, deterministic name so the image can be built + pushed (via
     // CodeBuild or local Docker) BEFORE App Runner is created — App Runner
@@ -209,12 +213,17 @@ export class StoryApiStack extends cdk.Stack {
         authenticationConfiguration: {
           accessRoleArn: accessRole.roleArn,
         },
-        autoDeploymentsEnabled: true,
+        // Pipeline-controlled releases: when the deploy passes an immutable digest
+        // (`-c imageDigest=sha256:...`) the service is pinned to that digest and AUTO-DEPLOY IS OFF
+        // (App Runner forbids auto-deploy on a digest ref, and we want exactly-one deploy authority — the
+        // GitHub pipeline). With no digest (a legacy/local synth) it falls back to the mutable :latest tag
+        // with auto-deploy, so the old path still works until it is retired.
+        autoDeploymentsEnabled: imageDigest ? false : true,
         imageRepository: {
           imageRepositoryType: "ECR",
-          // ':latest' — a concrete tag/digest is injected by the deploy
-          // pipeline; this is the repository URI the service pulls from.
-          imageIdentifier: `${repository.repositoryUri}:latest`,
+          imageIdentifier: imageDigest
+            ? `${repository.repositoryUri}@${imageDigest}`
+            : `${repository.repositoryUri}:latest`,
           imageConfiguration: {
             port: "8080",
             // NOTE: App Runner runtimeEnvironmentVariables is a FULL REPLACE, not a merge. Every var the
