@@ -2,8 +2,8 @@ import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
 import { StoryAuthStack } from "../lib/story-auth-stack";
 
-function synth(): Template {
-  const app = new cdk.App();
+function synth(context: Record<string, unknown> = {}): Template {
+  const app = new cdk.App({ context });
   const stack = new StoryAuthStack(app, "story-test-auth", {
     environment: "test",
     env: { account: "123456789012", region: "us-east-1" },
@@ -13,6 +13,13 @@ function synth(): Template {
 
 describe("StoryAuthStack (P0 Beta Auth, Increment 1)", () => {
   const template = synth();
+  // A second synth WITH Apple creds present (simulates post-Apple-portal provisioning).
+  const withApple = synth({
+    applePrivateKey: "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----",
+    appleServicesId: "com.story.signin",
+    appleTeamId: "TEAM123456",
+    appleKeyId: "KEY1234567",
+  });
 
   test("provisions exactly one Cognito user pool", () => {
     template.resourceCountIs("AWS::Cognito::UserPool", 1);
@@ -24,11 +31,41 @@ describe("StoryAuthStack (P0 Beta Auth, Increment 1)", () => {
     });
   });
 
-  test("native passwordless EMAIL_OTP is enabled as a first-auth factor (no custom OTP Lambda needed)", () => {
+  test("EMAIL_OTP is an allowed first-auth factor; PASSWORD is pool-level only (Cognito requires it)", () => {
+    // Cognito rejects an EMAIL_OTP-only factor list, so PASSWORD must appear at the pool level. The real
+    // no-password guarantee is enforced on the CLIENT (no SRP/password flow — asserted in the next test).
     template.hasResourceProperties("AWS::Cognito::UserPool", {
       Policies: Match.objectLike({
         SignInPolicy: { AllowedFirstAuthFactors: Match.arrayWith(["EMAIL_OTP"]) },
       }),
+    });
+  });
+
+  test("app client has NO SRP/password flow; only USER_AUTH + REFRESH (correction 3)", () => {
+    const clients = template.findResources("AWS::Cognito::UserPoolClient");
+    const client = Object.values(clients)[0] as any;
+    const flows: string[] = client.Properties.ExplicitAuthFlows;
+    expect(flows).toEqual(expect.arrayContaining(["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]));
+    expect(flows).not.toContain("ALLOW_USER_SRP_AUTH");
+    expect(flows).not.toContain("ALLOW_USER_PASSWORD_AUTH");
+    expect(flows).not.toContain("ALLOW_ADMIN_USER_PASSWORD_AUTH");
+  });
+
+  test("Apple OAuth code-grant flow + callback configured, and a Cognito domain exists (correction 2)", () => {
+    template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      AllowedOAuthFlows: Match.arrayWith(["code"]),
+      CallbackURLs: Match.arrayWith(["story://auth"]),
+    });
+    template.resourceCountIs("AWS::Cognito::UserPoolDomain", 1);
+    withApple.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      SupportedIdentityProviders: Match.arrayWith(["SignInWithApple", "COGNITO"]),
+    });
+  });
+
+  test("atomic identity-claim table exists for uniqueness (correction 1 — not GSI-only)", () => {
+    template.hasResourceProperties("AWS::DynamoDB::Table", {
+      TableName: Match.stringLikeRegexp("identity-claims"),
+      KeySchema: Match.arrayWith([{ AttributeName: "claim_key", KeyType: "HASH" }]),
     });
   });
 
@@ -43,17 +80,24 @@ describe("StoryAuthStack (P0 Beta Auth, Increment 1)", () => {
     expect(triggers.VerifyAuthChallengeResponse).toBeUndefined();
   });
 
-  test("Sign in with Apple IdP is configured", () => {
-    template.hasResourceProperties("AWS::Cognito::UserPoolIdentityProvider", {
+  test("Sign in with Apple IdP is configured WHEN Apple creds are supplied", () => {
+    withApple.hasResourceProperties("AWS::Cognito::UserPoolIdentityProvider", {
       ProviderType: "SignInWithApple",
       ProviderName: "SignInWithApple",
     });
   });
 
-  test("app client enables the USER_AUTH choice-based flow + refresh (native iOS, no secret)", () => {
+  test("dev-provision reality: NO Apple IdP without creds; EMAIL_OTP still works (correction 9)", () => {
+    // Apple creds are not yet available — the dev stack provisions without the Apple IdP.
+    template.resourceCountIs("AWS::Cognito::UserPoolIdentityProvider", 0);
+    template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+      SupportedIdentityProviders: ["COGNITO"],
+    });
+  });
+
+  test("app client is public (no secret) for native iOS", () => {
     template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
       GenerateSecret: false,
-      ExplicitAuthFlows: Match.arrayWith(["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]),
     });
   });
 

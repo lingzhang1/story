@@ -37,6 +37,7 @@ export interface StoryAuthStackProps extends cdk.StackProps {
 export class StoryAuthStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+  public readonly identityClaimTable: dynamodb.Table;
   public readonly storyUserTable: dynamodb.Table;
   public readonly userUsageTable: dynamodb.Table;
 
@@ -61,55 +62,101 @@ export class StoryAuthStack extends cdk.Stack {
     const cfnPool = this.userPool.node.defaultChild as cognito.CfnUserPool;
     // Essentials feature plan — REQUIRED for native passwordless EMAIL_OTP.
     cfnPool.addPropertyOverride("UserPoolTier", "ESSENTIALS");
-    // Choice-based sign-in factors: PASSWORD is always allowed; add EMAIL_OTP for passwordless.
+    // Correction 3 (passwordless): Story exposes NO password UI. Cognito REQUIRES `PASSWORD` to appear in
+    // AllowedFirstAuthFactors (an EMAIL_OTP-only list is rejected: "PASSWORD should be configured as one of
+    // the allowed first auth factors"), so PASSWORD stays here at the POOL level — but NO password auth flow
+    // is enabled on the app client (no ALLOW_USER_PASSWORD_AUTH / ALLOW_USER_SRP_AUTH below), so a client can
+    // never actually perform a password sign-in. EMAIL_OTP is the real first factor; Apple is federated.
     cfnPool.addPropertyOverride("Policies.SignInPolicy.AllowedFirstAuthFactors", ["PASSWORD", "EMAIL_OTP"]);
     // Cognito sends the OTP email via its default sender (SES later for branded/high-volume). Documented
     // in the design: SES is in SANDBOX today — default Cognito email is rate-limited and NOT for production
     // beta volume; SES production access is a provisioning prerequisite (NOT enabled here).
 
     // ---- Sign in with Apple (federated IdP) -----------------------------------------------------------
-    // Raw Cfn because 2.160.0 has no Apple L2. Credentials are passed at provision time (context), never
-    // committed. Apple's `sub` becomes the provider identity; the Apple relay email is a contact attribute
+    // Raw Cfn because 2.160.0 has no Apple L2. Credentials are passed at provision time (context/Secrets),
+    // never committed. Apple's `sub` is the provider identity; the Apple relay email is a contact attribute
     // only — never the Story identity.
-    const appleIdp = new cognito.CfnUserPoolIdentityProvider(this, "AppleIdp", {
-      userPoolId: this.userPool.userPoolId,
-      providerName: "SignInWithApple",
-      providerType: "SignInWithApple",
-      attributeMapping: { email: "email", email_verified: "email_verified" },
-      providerDetails: {
-        client_id: props.appleServicesId ?? this.node.tryGetContext("appleServicesId") ?? "PLACEHOLDER_SERVICES_ID",
-        team_id: props.appleTeamId ?? this.node.tryGetContext("appleTeamId") ?? "PLACEHOLDER_TEAM_ID",
-        key_id: props.appleKeyId ?? this.node.tryGetContext("appleKeyId") ?? "PLACEHOLDER_KEY_ID",
-        // private_key is injected from a Secrets Manager reference at provision time — NOT in source.
-        private_key: this.node.tryGetContext("applePrivateKey") ?? "PLACEHOLDER_PRIVATE_KEY",
-        authorize_scopes: "email name",
-      },
-    });
+    // Correction 9 / dev-provision reality: Apple creds are NOT yet available (Apple Developer portal step).
+    // The Apple IdP is created ONLY when a real private key is supplied (-c applePrivateKey=...), so the dev
+    // auth stack can be provisioned NOW (pool + EMAIL_OTP + tables + domain) and Apple is added later without
+    // a rebuild. Email OTP is fully functional without it.
+    const applePrivateKey = this.node.tryGetContext("applePrivateKey") as string | undefined;
+    const appleEnabled = !!applePrivateKey && applePrivateKey !== "PLACEHOLDER_PRIVATE_KEY";
+    let appleIdp: cognito.CfnUserPoolIdentityProvider | undefined;
+    if (appleEnabled) {
+      appleIdp = new cognito.CfnUserPoolIdentityProvider(this, "AppleIdp", {
+        userPoolId: this.userPool.userPoolId,
+        providerName: "SignInWithApple",
+        providerType: "SignInWithApple",
+        attributeMapping: { email: "email", email_verified: "email_verified" },
+        providerDetails: {
+          client_id: props.appleServicesId ?? this.node.tryGetContext("appleServicesId"),
+          team_id: props.appleTeamId ?? this.node.tryGetContext("appleTeamId"),
+          key_id: props.appleKeyId ?? this.node.tryGetContext("appleKeyId"),
+          private_key: applePrivateKey,
+          authorize_scopes: "email name",
+        },
+      });
+    }
 
-    // ---- App client (native iOS; no secret — public client; choice-based USER_AUTH) ------------------
+    // Correction 2 (Apple flow): a User Pool federates Apple via the OAuth Authorization-Code + PKCE flow
+    // against the Cognito DOMAIN — the native ASAuthorization identity token CANNOT be swapped directly for
+    // User-Pool tokens (that direct path is Identity-Pool-only, which issues AWS creds, not our account).
+    // Flow: app opens ASWebAuthenticationSession -> Cognito /oauth2/authorize?identity_provider=SignInWithApple
+    // -> Apple consent -> Cognito callback (custom scheme) -> app gets the code -> exchanges at Cognito
+    // /oauth2/token for id/access/refresh JWTs. REQUIRES a Cognito domain + callback URLs + code-grant.
+    this.userPool.addDomain("StoryAuthDomain", {
+      cognitoDomain: { domainPrefix: `story-${env}-auth` },
+    });
+    const callbackScheme = "story://auth"; // native iOS custom-scheme redirect
+
+    // ---- App client (native iOS; public, no secret) ---------------------------------------------------
     this.userPoolClient = this.userPool.addClient("StoryiOSClient", {
       userPoolClientName: `story-${env}-ios`,
       generateSecret: false,
-      authFlows: { userSrp: true }, // password-SRP retained; USER_AUTH added via override below.
-      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.custom("SignInWithApple")],
+      // Correction 3: NO userSrp / userPassword. Email OTP uses USER_AUTH (override below); Apple uses the
+      // OAuth code-grant configured here.
+      authFlows: {},
+      oAuth: {
+        flows: { authorizationCodeGrant: true }, // PKCE client-side; implicit + client-creds OFF
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+        callbackUrls: [callbackScheme],
+        logoutUrls: [callbackScheme],
+      },
+      supportedIdentityProviders: appleEnabled
+        ? [
+            cognito.UserPoolClientIdentityProvider.custom("SignInWithApple"),
+            cognito.UserPoolClientIdentityProvider.COGNITO,
+          ]
+        : [cognito.UserPoolClientIdentityProvider.COGNITO], // EMAIL_OTP path works without Apple
       accessTokenValidity: cdk.Duration.minutes(60),
       idTokenValidity: cdk.Duration.minutes(60),
       refreshTokenValidity: cdk.Duration.days(30),
       preventUserExistenceErrors: true,
     });
-    this.userPoolClient.node.addDependency(appleIdp);
+    if (appleIdp) this.userPoolClient.node.addDependency(appleIdp);
     const cfnClient = this.userPoolClient.node.defaultChild as cognito.CfnUserPoolClient;
-    // ALLOW_USER_AUTH enables the choice-based flow that carries EMAIL_OTP; ALLOW_REFRESH_TOKEN_AUTH for refresh.
-    cfnClient.addPropertyOverride("ExplicitAuthFlows", [
-      "ALLOW_USER_AUTH",
-      "ALLOW_USER_SRP_AUTH",
-      "ALLOW_REFRESH_TOKEN_AUTH",
-    ]);
+    // Correction 3: ONLY USER_AUTH (carries EMAIL_OTP) + REFRESH. No ALLOW_USER_SRP_AUTH, no password flow.
+    cfnClient.addPropertyOverride("ExplicitAuthFlows", ["ALLOW_USER_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]);
+
+    // ---- Correction 1: ATOMIC identity-uniqueness claim table -----------------------------------------
+    // GSIs do NOT enforce uniqueness. A claim is a conditional PutItem with attribute_not_exists(claim_key)
+    // — or a TransactWriteItems that writes the StoryUser row AND this claim together. claim_key =
+    // "cognito#<sub>" | "apple#<sub>" | "email#<verified_email>". The condition makes a concurrent second
+    // sign-in/link for the SAME subject FAIL atomically, so one subject/provider identity maps to exactly one
+    // story_user_id even under race. This table is the uniqueness source of truth; the StoryUser GSIs are
+    // lookup-only.
+    this.identityClaimTable = new dynamodb.Table(this, "IdentityClaimTable", {
+      tableName: `story-${env}-identity-claims`,
+      partitionKey: { name: "claim_key", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
 
     // ---- StoryUser mapping table (immutable story_user_id <- cognito_sub) ------------------------------
-    // story_user_id is the application-owned identity. cognito_sub maps TO it (GSI for lookup on each
-    // authenticated request). Provider identities are recorded here; linking is an explicit write, never an
-    // automatic email match.
+    // story_user_id is the application-owned identity. by_cognito_sub resolves it per request. Uniqueness is
+    // enforced by the claim table above (conditional write), NOT by these GSIs (lookup-only).
     this.storyUserTable = new dynamodb.Table(this, "StoryUserTable", {
       tableName: `story-${env}-users`,
       partitionKey: { name: "story_user_id", type: dynamodb.AttributeType.STRING },
@@ -141,6 +188,7 @@ export class StoryAuthStack extends cdk.Stack {
     // ---- Outputs --------------------------------------------------------------------------------------
     new cdk.CfnOutput(this, "UserPoolId", { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, "UserPoolClientId", { value: this.userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, "IdentityClaimTableName", { value: this.identityClaimTable.tableName });
     new cdk.CfnOutput(this, "StoryUserTableName", { value: this.storyUserTable.tableName });
     new cdk.CfnOutput(this, "UserUsageTableName", { value: this.userUsageTable.tableName });
     new cdk.CfnOutput(this, "JwksUrl", {
