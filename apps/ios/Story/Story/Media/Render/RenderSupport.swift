@@ -235,6 +235,48 @@ enum EditPlanRequestBuilder {
         }
     }
 
+    /// Directive-eligibility PREFLIGHT (invalid_after_repair root-cause fix). A hard directive may reference a
+    /// Moment the planner payload will NOT contain (build() drops a Moment with no local file OR no completed
+    /// AU). Submitting such a directive deterministically fails `directive … references Moment not in the
+    /// eligible source set` -> invalid_after_repair. This reports, for the Story's PERSISTED directives, which
+    /// referenced Moments are NOT eligible and WHY, so the caller can restore a missing file on demand (R6) or
+    /// block honestly ("still being analyzed") instead of submitting a doomed request. Pure read; no network.
+    struct DirectiveEligibility {
+        var ineligibleNeedsRestore: [UUID]   // linked, cloud-backed, no local bytes yet -> restorable
+        var ineligibleNeedsAU: [UUID]        // local file present but AU not completed -> wait, cannot force
+        var ineligibleUnknown: [UUID]        // referenced id not a linked Moment at all (stale chip)
+        var allEligible: Bool { ineligibleNeedsRestore.isEmpty && ineligibleNeedsAU.isEmpty && ineligibleUnknown.isEmpty }
+    }
+
+    static func directiveEligibility(for story: StoryModel, context: ModelContext) -> DirectiveEligibility {
+        var out = DirectiveEligibility(ineligibleNeedsRestore: [], ineligibleNeedsAU: [], ineligibleUnknown: [])
+        guard let dirs = ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON) else { return out }
+        var ids = Set(dirs.mustInclude + dirs.exclude)
+        if let o = dirs.opening { ids.insert(o) }
+        if let e = dirs.ending { ids.insert(e) }
+        for pair in dirs.orderAfter + dirs.orderAdjacent { ids.formUnion(pair) }
+        // exclude-directives do NOT require the Moment to be in the payload (excluding an absent Moment is
+        // trivially satisfied), so drop pure-exclude ids from the eligibility requirement.
+        for ex in dirs.exclude { ids.remove(ex) }
+        guard !ids.isEmpty else { return out }
+
+        let momentById = Dictionary(uniqueKeysWithValues: story.moments.map { ($0.id, $0) })
+        let allMUs = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []
+        let hasAU = Set(allMUs.map { $0.momentId })
+        for id in ids {
+            guard let m = momentById[id] else { out.ineligibleUnknown.append(id); continue }
+            let hasFile = (m.asset?.relativePath).map { MediaStore.shared.fileExists(relativePath: $0) } ?? false
+            if !hasFile {
+                if m.cloudMediaId != nil { out.ineligibleNeedsRestore.append(id) }   // restorable on demand
+                else { out.ineligibleUnknown.append(id) }                             // no bytes, not backed up
+            } else if !hasAU.contains(id) {
+                out.ineligibleNeedsAU.append(id)   // local but not analyzed yet -> planner would drop it
+            }
+            // else: eligible (file + AU) — will be in the payload.
+        }
+        return out
+    }
+
     /// Issue (R7 regression): the Customize / Revise "Moment N" numbering MUST be built from the SAME usable
     /// set the planner receives — a Moment is usable iff it has a resolvable LOCAL file AND a completed
     /// MomentUnderstanding (identical to `build()`'s filter), ordered by createdAt. After R7-C a Story can hold

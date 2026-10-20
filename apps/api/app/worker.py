@@ -63,6 +63,45 @@ def _build_coverage_engine():
     return RealStoryCoverageV2Engine(gw, model_id=model)
 
 
+def _validator_error_codes(errs: list[str]) -> list[str]:
+    """Map validate_plan's human error strings to LOW-CARDINALITY, stable codes for diagnostics/metrics.
+    Never echoes a raw id, instruction, path, or model output — only the invariant that failed."""
+    codes: set[str] = []
+    for e in errs:
+        s = str(e).lower()
+        if "not in the eligible source set" in s: codes.add("directive_ref_ineligible")
+        elif "appears in no segment" in s: codes.add("directive_include_unplaced")
+        elif "must not be used but appears" in s: codes.add("directive_exclude_violated")
+        elif "first segment must be" in s: codes.add("directive_opening_unplaced")
+        elif "last segment must be" in s: codes.add("directive_ending_unplaced")
+        elif "order_after" in s or "order_adjacent" in s: codes.add("directive_order_violated")
+        elif "no segments" in s: codes.add("no_segments")
+        elif "not a known moment id" in s: codes.add("segment_unknown_asset")
+        elif "overlaps no useful_segment" in s: codes.add("source_outside_useful")
+        elif "exceeds moment duration" in s: codes.add("source_exceeds_duration")
+        elif "invalid source range" in s or "missing source in/out" in s: codes.add("source_range_invalid")
+        elif "out of renderer-supported range" in s: codes.add("speed_unrenderable")
+        elif "inconsistent with source span" in s: codes.add("output_span_inconsistent")
+        elif "upper bound" in s: codes.add("duration_overshoot")
+        elif "lower bound" in s: codes.add("duration_undershoot")
+        elif "transition" in s and "infeasible" in s: codes.add("transition_infeasible")
+        elif "native_audio" in s: codes.add("native_audio_invalid")
+        else: codes.add("other")
+    return sorted(codes)
+
+
+def _directive_categories(inputs) -> list[str]:
+    """Which hard-directive CATEGORIES the request carried (not the ids/values). Low-cardinality."""
+    if inputs is None:
+        return []
+    ctx = getattr(inputs, "revision_context", None) or {}
+    d = ctx.get("directives") or {}
+    if not isinstance(d, dict):
+        return []
+    return sorted(k for k in ("must_include", "exclude", "opening", "ending", "order_after", "order_adjacent")
+                  if d.get(k))
+
+
 def _classify(exc: Exception, inputs: EditPlanInputs) -> tuple[str, str]:
     """Map the engine's exceptions to a contract failure_category + detail."""
     if isinstance(exc, MalformedPlanError):
@@ -319,6 +358,23 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         _eng = locals().get("engine")
         if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "unsupported_operation":
             cat = "unsupported_operation"
+        # Phase 1 — privacy-safe validator diagnostics. Emit LOW-CARDINALITY error codes (never raw user
+        # instructions, media paths, GPS, images, or raw model output) so invalid_after_repair is debuggable in
+        # CloudWatch and future metrics. Correlation id (job_id) stays in the log, never a metric dimension.
+        _diag = getattr(_eng, "last_diagnostics", {}) or {}
+        if cat in ("invalid_after_repair", "material_infeasible", "unsupported_operation"):
+            _inp = locals().get("inputs")
+            print(json.dumps({
+                "msg": "worker_validation_diag",
+                "job_id": job_id,
+                "operation_type": (getattr(_inp, "revision_context", None) or {}).get("mode", "original") if _inp else "unknown",
+                "terminal": _diag.get("final", cat),
+                "repairs_used": _diag.get("executability_repairs_used", 0),
+                "final_error_codes": _validator_error_codes(_diag.get("final_errors") or []),
+                "usable_moment_count": len(getattr(_inp, "moments", []) or []) if _inp else None,
+                "target_seconds": (getattr(_inp, "creative_intent", None) or {}).get("target_duration_seconds") if _inp else None,
+                "directive_categories": _directive_categories(_inp),
+            })[:1500])
         store.fail(job_id, cat, detail, token)
         store.delete_staging(prefix)
         return f"failed:{cat}"

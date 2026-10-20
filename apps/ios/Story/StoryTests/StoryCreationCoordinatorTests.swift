@@ -505,6 +505,32 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         XCTAssertEqual(numbering.items.first { $0.id == m2.id }?.localAvailable, false, "cloud-only -> cloud badge")
     }
 
+    // invalid_after_repair ROOT-CAUSE regression: a directive referencing a Moment NOT in the planner payload
+    // (no AU yet, or cloud-only, or stale) is caught by the preflight so the app blocks honestly instead of
+    // submitting a doomed request. Proven against the real validator that such a directive -> invalid_after_repair.
+    func test_directiveEligibility_classifiesIneligibleReferences() throws {
+        let s = newStory()
+        let mOK = momentWithFile(s, rel: "media/elig-ok.mov", dur: 6); completeAU(mOK, useful: [(0, 4)])  // file+AU
+        let mNoAU = momentWithFile(s, rel: "media/elig-noau.mov", dur: 6)                                 // file, NO AU
+        // Cloud-only shell (no local bytes, backed up) -> restorable.
+        let shell = AssetModel(relativePath: "media/elig-cloud.mov", durationSeconds: 6, source: .directed)
+        shell.localAvailability = .evicted
+        let mCloud = MomentModel(source: .directed, asset: shell); mCloud.cloudMediaId = "cm-x"
+        ctx.insert(shell); ctx.insert(mCloud); if let l = s.attach(mCloud) { ctx.insert(l) }
+        try ctx.save()
+
+        var d = ResolvedDirectives(); d.opening = mNoAU.id; d.mustInclude = [mCloud.id]
+        s.creativeDirectivesJSON = d.toWireJSON(); try ctx.save()
+        let e = EditPlanRequestBuilder.directiveEligibility(for: s, context: ctx)
+        XCTAssertFalse(e.allEligible)
+        XCTAssertEqual(e.ineligibleNeedsAU, [mNoAU.id], "a local-but-unanalyzed referenced Moment needs AU")
+        XCTAssertEqual(e.ineligibleNeedsRestore, [mCloud.id], "a cloud-only referenced Moment needs restore")
+
+        var d2 = ResolvedDirectives(); d2.opening = mOK.id
+        s.creativeDirectivesJSON = d2.toWireJSON(); try ctx.save()
+        XCTAssertTrue(EditPlanRequestBuilder.directiveEligibility(for: s, context: ctx).allEligible)
+    }
+
     // MARK: - Music-ready seam
 
     func test_noMusic_threadsNilSoundtrack() async throws {

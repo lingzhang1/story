@@ -61,6 +61,9 @@ struct CreateStoryPreviewView: View {
     // Stage 2 music-routing: set when an explicit Stage 2 music preference conflicts with a user-authored
     // MusicDirection — surfaced as an advisory (owner §2), never a silent overwrite.
     @State private var musicConflictMessage: String?
+    // invalid_after_repair root-cause fix: set when a directive references a Moment not yet in the planner
+    // payload (AU still running / stale ref). Shown as an honest alert; the directive is preserved for retry.
+    @State private var directiveBlockMessage: String?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -200,6 +203,19 @@ struct CreateStoryPreviewView: View {
             // (never a bulk download). A failure does NOT abort or change the Moment set — the user's selections
             // are preserved and the planner is told honestly about what it has.
             await restoreReferencedCloudOnlyMoments()
+            // Directive-eligibility PREFLIGHT (invalid_after_repair root-cause fix): after restoring referenced
+            // files, a directive-referenced Moment may STILL be missing from the planner payload because its AU
+            // has not completed (or it is a stale reference). Submitting it would deterministically fail
+            // `directive … not in the eligible source set` -> invalid_after_repair. Block with an honest,
+            // specific message instead — the directive is PRESERVED, nothing is silently stripped.
+            let elig = EditPlanRequestBuilder.directiveEligibility(for: story, context: context)
+            if !elig.allEligible {
+                await MainActor.run {
+                    resolvingMusic = false
+                    directiveBlockMessage = Self.directiveBlockText(elig, story: story)
+                }
+                return
+            }
             let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
             await MainActor.run {
                 resolvingMusic = false
@@ -210,6 +226,26 @@ struct CreateStoryPreviewView: View {
                 }
             }
         }
+    }
+
+    /// Honest, specific block text naming the referenced Moments that are not yet usable (AU pending / stale),
+    /// by their stable display number — never a generic "something went wrong". The directive stays persisted.
+    private static func directiveBlockText(_ e: EditPlanRequestBuilder.DirectiveEligibility,
+                                           story: StoryModel) -> String {
+        let numbering = StoryMomentNumbering(story: story.moments)
+        func nums(_ ids: [UUID]) -> String {
+            ids.compactMap { numbering.number(forId: $0) }.sorted().map { "Moment \($0)" }.joined(separator: ", ")
+        }
+        if !e.ineligibleNeedsAU.isEmpty {
+            let who = nums(e.ineligibleNeedsAU)
+            return "\(who) \(e.ineligibleNeedsAU.count == 1 ? "is" : "are") still being analyzed. "
+                 + "Give it a moment, then create your Story — your instruction is saved."
+        }
+        if !e.ineligibleUnknown.isEmpty {
+            return "A Moment your instruction refers to isn't available on this device. "
+                 + "Edit your instruction, or wait for it to finish syncing."
+        }
+        return "Some referenced Moments aren't ready yet. Please try again in a moment."
     }
 
     /// Restore (R6) only the cloud-only Moments this Story's PERSISTED directives reference, on demand, before
@@ -452,6 +488,11 @@ struct CreateStoryPreviewView: View {
             get: { musicConflictMessage != nil }, set: { if !$0 { musicConflictMessage = nil } })) {
             Button("OK", role: .cancel) { musicConflictMessage = nil }
         } message: { Text(musicConflictMessage ?? "") }
+        .alert("Almost ready", isPresented: Binding(
+            get: { directiveBlockMessage != nil }, set: { if !$0 { directiveBlockMessage = nil } })) {
+            // The instruction is preserved — OK returns to the Story so the user can retry once AU finishes.
+            Button("OK", role: .cancel) { directiveBlockMessage = nil; userBackedOut = true }
+        } message: { Text(directiveBlockMessage ?? "") }
         .overlay {
             if resolvingMusic || preparingSelection || recommendingDuration {
                 ZStack {
