@@ -9,9 +9,9 @@ struct AutoBackupStore {
 
     /// The preference row for an account, or nil if never set (= disabled, Wi-Fi-only, no existing-choice yet).
     func setting(for accountId: String) -> AutoBackupSettingModel? {
-        let want: String? = accountId
+        // accountId is a NON-optional stored property, so compare to a plain String (not an Optional bind).
         return (try? context.fetch(FetchDescriptor<AutoBackupSettingModel>(
-            predicate: #Predicate { $0.accountId == want })))?.first
+            predicate: #Predicate { $0.accountId == accountId })))?.first
     }
 
     func isEnabled(for accountId: String) -> Bool { setting(for: accountId)?.enabled ?? false }
