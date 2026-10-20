@@ -90,4 +90,30 @@ enum StoryCreationReadiness: Equatable {
         let usable = fileIds.intersection(auIds).count
         return classify(usable: usable, withFile: fileIds.count, total: total)
     }
+
+    /// R6 — restore cloud-only Moments FIRST, then evaluate. Before planning, any Moment whose local original
+    /// is missing but is backed up (cloudMediaId set, owned by the active account) is downloaded + verified +
+    /// atomically installed via MediaResolver, so a Story whose files were evicted/absent becomes plannable
+    /// again (req #8). A Moment that cannot be restored (not this account's, or no cloud copy) stays missing
+    /// and is reflected honestly in the returned readiness — never presented as recovered (req #9/#12).
+    /// Returns the readiness AND the list of moments that could not be restored, for honest UI.
+    @MainActor
+    static func restoreThenEvaluate(story: StoryModel, context: ModelContext,
+                                    activeOwner: String?,
+                                    token: @escaping () async -> String?)
+        async -> (readiness: StoryCreationReadiness, unrestored: [(momentId: UUID, error: Error)]) {
+        var unrestored: [(UUID, Error)] = []
+        for m in story.moments {
+            guard let rel = m.asset?.relativePath else { continue }
+            if MediaStore.shared.fileExists(relativePath: rel) { continue }   // already local — no network
+            guard m.cloudMediaId != nil else { continue }                     // not backed up — nothing to do
+            do {
+                _ = try await MediaResolver.shared.ensureLocal(
+                    moment: m, context: context, activeOwner: activeOwner, token: token)
+            } catch {
+                unrestored.append((m.id, error))
+            }
+        }
+        return (evaluate(story: story, context: context), unrestored.map { ($0.0, $0.1) })
+    }
 }

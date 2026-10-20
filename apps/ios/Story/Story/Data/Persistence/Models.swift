@@ -1101,3 +1101,60 @@ final class AutoBackupSettingModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// R6 — Cloud media DOWNLOAD / restoration state, PERSISTENT (survives app relaunch — req #5/#7).
+// One row per (ownerAccountId, cloudMediaId). The composite is the natural de-dupe key: two concurrent
+// requests to restore the same cloud asset for the same account resolve to the SAME row (req #3), and an
+// in-process coalescing actor (MediaResolver) ensures only one download task runs for it.
+//
+// OWNERSHIP: ownerAccountId is the canonical story_user_id that owns the Moment (immutable binding, read
+// from MomentModel.ownerAccountId — never re-derived from the active account in a callback). A download is
+// only ever attempted when the active account == ownerAccountId, and the presign call carries that owner's
+// token (req #6 / safeguard #6). No cross-account restoration.
+//
+// expectedSize / expectedSha256 are filled from the SERVER-AUTHORITATIVE download response (safeguard #7),
+// NOT from a local MediaUploadJobModel — a fresh install or Device B has no upload job but can still verify.
+@Model
+final class MediaDownloadJobModel {
+    @Attribute(.unique) var key: String          // "\(ownerAccountId)#\(cloudMediaId)" — de-dupe identity
+    var ownerAccountId: String                   // canonical story_user_id of the owner
+    var cloudMediaId: String
+    var momentId: UUID
+    var targetRelativePath: String               // the Moment asset's relativePath the verified file installs to
+
+    var expectedSize: Int = 0                    // server-authoritative (0 until first presign)
+    var expectedSha256: String = ""              // server-authoritative full-file sha256 hex
+
+    var stateRaw: String = "pending"             // pending|running|verified|failed
+    var attempts: Int = 0
+    var lastError: String?
+    var progress: Double = 0                     // 0..1 advisory
+    var updatedAt: Date = Date.now
+
+    enum State: String { case pending, running, verified, failed }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+
+    static func makeKey(ownerAccountId: String, cloudMediaId: String) -> String {
+        "\(ownerAccountId)#\(cloudMediaId)"
+    }
+
+    init(ownerAccountId: String, cloudMediaId: String, momentId: UUID, targetRelativePath: String,
+         expectedSize: Int = 0, expectedSha256: String = "", state: State = .pending,
+         attempts: Int = 0, updatedAt: Date = .now) {
+        self.key = Self.makeKey(ownerAccountId: ownerAccountId, cloudMediaId: cloudMediaId)
+        self.ownerAccountId = ownerAccountId
+        self.cloudMediaId = cloudMediaId
+        self.momentId = momentId
+        self.targetRelativePath = targetRelativePath
+        self.expectedSize = expectedSize
+        self.expectedSha256 = expectedSha256
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.updatedAt = updatedAt
+    }
+}

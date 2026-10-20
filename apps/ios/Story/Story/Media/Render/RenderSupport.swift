@@ -26,6 +26,32 @@ enum MomentResolver {
         return out
     }
 
+    /// R6 — the ASYNC resolution gate for editing/rendering: for each Moment that is cloud-only, download +
+    /// verify + atomically install its original FIRST (via MediaResolver), THEN delegate to the synchronous
+    /// `resolve`. This guarantees a render/edit never silently drops a backed-up Moment just because its local
+    /// bytes were evicted/absent (req #8). A Moment that is cloud-only AND cannot be restored (not this
+    /// account's, or no cloud copy) is collected in `unavailable` so the caller can refuse honestly rather than
+    /// render a partial Story (req #9/#12) — it is NEVER silently skipped here.
+    @MainActor
+    static func resolveEnsuringLocal(moments: [MomentModel],
+                                     context: ModelContext,
+                                     activeOwner: String?,
+                                     token: @escaping () async -> String?)
+        async -> (media: [MomentMedia], unavailable: [(momentId: UUID, error: Error)]) {
+        var unavailable: [(UUID, Error)] = []
+        for m in moments {
+            guard let rel = m.asset?.relativePath else { continue }
+            if MediaStore.shared.fileExists(relativePath: rel) { continue }   // already local
+            do {
+                _ = try await MediaResolver.shared.ensureLocal(
+                    moment: m, context: context, activeOwner: activeOwner, token: token)
+            } catch {
+                unavailable.append((m.id, error))
+            }
+        }
+        return (resolve(moments: moments), unavailable.map { ($0.0, $0.1) })
+    }
+
     /// A Media-Engine URL resolver closure keyed by the Moment id STRING (matches EditSegmentV2.assetId).
     /// UUIDs are case-insensitive: the Edit Planner round-trips the id through the model, which may normalize
     /// its hex case (Swift's `uuidString` is UPPERCASE; the planner returns it lowercased), so we lowercase

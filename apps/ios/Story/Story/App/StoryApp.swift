@@ -25,7 +25,8 @@ struct StoryApp: App {
             MusicPlanCacheModel.self,
             DurationRecCacheModel.self,
             MediaUploadJobModel.self,  // R4-A: persistent cloud-upload queue
-            AutoBackupSettingModel.self   // R4-A.1: account-scoped Auto Backup preference
+            AutoBackupSettingModel.self,   // R4-A.1: account-scoped Auto Backup preference
+            MediaDownloadJobModel.self   // R6: persistent cloud-download/restore state
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -53,6 +54,7 @@ struct StoryApp: App {
             }
         }
         MediaStore.shared.ensureMediaDirectory()
+        MediaStore.shared.purgeDownloadTemps()   // R6: discard partial downloads from a prior run (whole-file retry)
         Self.ensureLocalIdentity(container.mainContext)
         // Milestone D §6-7: recover orphaned RUNNING AU jobs (app killed mid-run) to
         // PENDING, then drain opportunistically. Non-blocking.

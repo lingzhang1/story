@@ -267,7 +267,14 @@ class MediaStore:
             "get_object",
             Params={"Bucket": self.cfg.bucket, "Key": rec["s3_key"]},
             ExpiresIn=DOWNLOAD_URL_TTL_SECONDS)
-        return {"url": url, "expires_in": DOWNLOAD_URL_TTL_SECONDS}
+        # R6: return the SERVER-AUTHORITATIVE expectation so a device that never held the upload job (a fresh
+        # install, or Device B after R7 sync) can still verify the download. content_sha256 is the FULL-FILE
+        # sha256 (hex) recorded at initiate — the authoritative whole-file check for a downloaded original; the
+        # multipart composite checksum is an upload-time artifact and is NOT used to verify a download.
+        return {"url": url, "expires_in": DOWNLOAD_URL_TTL_SECONDS,
+                "size_bytes": int(rec.get("size_bytes", 0)),
+                "content_sha256": rec.get("content_sha256", ""),
+                "content_type": rec.get("content_type", "application/octet-stream")}
 
     # --- MULTIPART (R4-B; large files) ---------------------------------------------------------------
     def initiate_multipart(self, *, owner: str, content_sha256: str, size_bytes: int,
