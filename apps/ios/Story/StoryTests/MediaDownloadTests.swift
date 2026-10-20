@@ -59,6 +59,8 @@ final class MediaDownloadTests: XCTestCase {
         var presignCount = 0
         var downloadCount = 0
         var failFirstDownloadWith403 = false
+        var mediaRecords: [CloudMediaRecord] = []
+        var listCount = 0
 
         init(blob: Data, size: Int? = nil, sha: String? = nil) {
             self.blob = blob
@@ -71,6 +73,11 @@ final class MediaDownloadTests: XCTestCase {
             return MediaDownloadTarget(url: URL(string: "https://example.test/\(cloudMediaId)")!,
                                        expiresIn: 600, expectedSize: declaredSize,
                                        expectedSha256Hex: declaredSha, contentType: "video/quicktime")
+        }
+
+        func listMedia(accessToken: String) async throws -> [CloudMediaRecord] {
+            listCount += 1
+            return mediaRecords
         }
 
         func download(target: MediaDownloadTarget, to destURL: URL, progress: ((Double) -> Void)?) async throws {
@@ -194,5 +201,50 @@ final class MediaDownloadTests: XCTestCase {
         _ = try await resolver.ensureLocal(moment: moment, context: ctx, activeOwner: "owner-A", token: { "tok" })
         XCTAssertEqual(fake.presignCount, 0)
         XCTAssertEqual(fake.downloadCount, 0)
+    }
+
+    // 8. Reconcile: a local Moment that LOST its verified stamp (store migration / reinstall) is re-stamped
+    // cloud_verified from the server's /v1/media record (matched by source_moment_id). Root-cause fix for the
+    // "uploaded before but shows local-only" regression.
+    func test_reconcile_restores_verified_stamp_from_server() async throws {
+        let owner = "owner-A"
+        // A local Moment whose local state says local_only (as after a migration reset), but the server has it.
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        let moment = MomentModel(source: .directed, asset: asset)
+        moment.cloudStateRaw = "local_only"          // stamp was lost locally
+        moment.cloudMediaId = nil
+        ctx.insert(asset); ctx.insert(moment); try ctx.save()
+
+        let fake = FakeDownloader(blob: Data("x".utf8))
+        fake.mediaRecords = [CloudMediaRecord(cloudMediaId: "cm-server-1", state: "cloud_verified",
+                                              sizeBytes: 123, sourceMomentId: moment.id.uuidString)]
+        let resolver = MediaResolver(service: fake)
+        let n = await resolver.reconcileCloudState(context: ctx, activeOwner: owner, token: { "tok" })
+        XCTAssertEqual(n, 1)
+        XCTAssertEqual(moment.cloudStateRaw, "cloud_verified")
+        XCTAssertEqual(moment.cloudMediaId, "cm-server-1")
+        XCTAssertEqual(moment.ownerAccountId, owner)
+        // Idempotent: a second reconcile stamps nothing new.
+        let n2 = await resolver.reconcileCloudState(context: ctx, activeOwner: owner, token: { "tok" })
+        XCTAssertEqual(n2, 0)
+    }
+
+    // 9. Reconcile NEVER re-keys another account's Moment (immutable-owner rule).
+    func test_reconcile_never_rekeys_other_account() async throws {
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        asset.ownerAccountId = "owner-B"
+        let moment = MomentModel(source: .directed, asset: asset)
+        moment.ownerAccountId = "owner-B"           // owned by B
+        moment.cloudStateRaw = "local_only"
+        ctx.insert(asset); ctx.insert(moment); try ctx.save()
+        let fake = FakeDownloader(blob: Data("x".utf8))
+        fake.mediaRecords = [CloudMediaRecord(cloudMediaId: "cm-x", state: "cloud_verified",
+                                              sizeBytes: 1, sourceMomentId: moment.id.uuidString)]
+        let resolver = MediaResolver(service: fake)
+        let n = await resolver.reconcileCloudState(context: ctx, activeOwner: "owner-A", token: { "tok" })
+        XCTAssertEqual(n, 0)                         // A must not claim B's Moment
+        XCTAssertEqual(moment.ownerAccountId, "owner-B")
     }
 }

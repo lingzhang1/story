@@ -59,6 +59,19 @@ protocol MediaDownloading {
     /// into `destURL` only after verification passes; on any failure `destURL` is left absent.
     func download(target: MediaDownloadTarget, to destURL: URL,
                   progress: ((Double) -> Void)?) async throws
+    /// GET /v1/media — the caller's own cloud media records (account-scoped). Used to RECONCILE local Moment
+    /// cloud-state after a store migration / reinstall / on a new device (R6/R7): the server is authoritative
+    /// about what is backed up, and `source_moment_id` links a record back to a local Moment.
+    func listMedia(accessToken: String) async throws -> [CloudMediaRecord]
+}
+
+/// One server-side media record (the fields /v1/media returns). `sourceMomentId` links it to a local Moment.
+struct CloudMediaRecord {
+    let cloudMediaId: String
+    let state: String                 // "cloud_verified" | "uploading" | ...
+    let sizeBytes: Int
+    let sourceMomentId: String        // local Moment UUID string (empty if the upload carried none)
+    var isVerified: Bool { state == "cloud_verified" }
 }
 
 struct MediaDownloadService: MediaDownloading {
@@ -95,6 +108,29 @@ struct MediaDownloadService: MediaDownloading {
             expectedSize: size,
             expectedSha256Hex: sha,
             contentType: (obj["content_type"] as? String) ?? "application/octet-stream")
+    }
+
+    func listMedia(accessToken: String) async throws -> [CloudMediaRecord] {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/media"))
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let (data, resp): (Data, URLResponse)
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw MediaDownloadError.transport(error) }
+        let http = resp as! HTTPURLResponse
+        if http.statusCode == 401 { throw MediaDownloadError.unauthorized }
+        guard http.statusCode == 200 else { throw MediaDownloadError.badStatus(http.statusCode) }
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let arr = obj["media"] as? [[String: Any]] else { throw MediaDownloadError.decoding }
+        return arr.compactMap { r in
+            guard let cmid = r["cloud_media_id"] as? String else { return nil }
+            let size = (r["size_bytes"] as? Int) ?? (r["size_bytes"] as? NSNumber)?.intValue ?? 0
+            return CloudMediaRecord(
+                cloudMediaId: cmid,
+                state: (r["state"] as? String) ?? "",
+                sizeBytes: size,
+                sourceMomentId: (r["source_moment_id"] as? String) ?? "")
+        }
     }
 
     func download(target: MediaDownloadTarget, to destURL: URL,

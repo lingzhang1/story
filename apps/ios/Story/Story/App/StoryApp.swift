@@ -138,6 +138,15 @@ struct StoryApp: App {
                         let uq = makeUploadQueue()
                         uq.recoverOrphans()
                         Task { await uq.drain() }
+                        // R6: reconcile local Moment cloud-state from the SERVER (/v1/media). Restores the
+                        // "backed up" truth (badges + on-demand restore eligibility) after a store migration,
+                        // reinstall, or on a new device — the server is authoritative about what is verified.
+                        // Best-effort, non-blocking, idempotent; never clears a stamp, never downloads bytes.
+                        let ctx = container.mainContext
+                        let owner = auth.storyUserId
+                        Task { await MediaResolver.shared.reconcileCloudState(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
                     }
                 }
         }
@@ -157,6 +166,15 @@ struct StoryApp: App {
                 let uq = makeUploadQueue()
                 uq.recoverOrphans()
                 Task { await uq.drain() }
+                // R6: reconcile cloud-state from the server on foreground too, so an ALREADY-signed-in relaunch
+                // (the sign-in onChange does not fire) still restores backup badges after a store migration.
+                if auth.isSignedIn {
+                    let ctx = container.mainContext
+                    let owner = auth.storyUserId
+                    Task { await MediaResolver.shared.reconcileCloudState(
+                        context: ctx, activeOwner: owner,
+                        token: { [weak auth] in await auth?.validAccessToken() }) }
+                }
             }
         }
     }

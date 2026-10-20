@@ -145,6 +145,44 @@ final class MediaResolver {
         return store.absoluteURL(for: rel)
     }
 
+    // MARK: - reconcile local cloud-state from the server (R6 self-heal)
+
+    /// Re-stamp local Moments' cloud-state from the SERVER-AUTHORITATIVE /v1/media list. The server knows what
+    /// is backed up; a local SwiftData store can lose that knowledge (a schema migration that reset defaults, a
+    /// reinstall, or a brand-new device in R7). For each VERIFIED server record whose `source_moment_id` matches
+    /// a local Moment owned by (or local-only and claimable by) the active account, set cloudMediaId +
+    /// cloudStateRaw="cloud_verified" + ownerAccountId. It NEVER clears a stamp and never downloads bytes (that
+    /// stays on-demand via ensureLocal) — it only restores the "is this backed up?" truth. Returns how many
+    /// Moments it (re)stamped. Safe to call on every sign-in; idempotent.
+    @discardableResult
+    func reconcileCloudState(context: ModelContext, activeOwner: String?,
+                             token: @escaping () async -> String?) async -> Int {
+        guard let owner = activeOwner, let accessToken = await token() else { return 0 }
+        let records: [CloudMediaRecord]
+        do { records = try await service.listMedia(accessToken: accessToken) }
+        catch { return 0 }   // best-effort; a failed reconcile never blocks the UI
+
+        var stamped = 0
+        for rec in records where rec.isVerified && !rec.sourceMomentId.isEmpty {
+            guard let mid = UUID(uuidString: rec.sourceMomentId),
+                  let m = fetchMoment(mid, context: context) else { continue }
+            // Only claim a Moment that is this account's OR still shared local-only (never re-key another
+            // account's Moment — immutable-owner rule).
+            if let existingOwner = m.ownerAccountId, existingOwner != owner { continue }
+            let needs = (m.cloudMediaId != rec.cloudMediaId) || (m.cloudStateRaw != "cloud_verified")
+                || (m.ownerAccountId != owner)
+            if needs {
+                m.cloudMediaId = rec.cloudMediaId
+                m.cloudStateRaw = "cloud_verified"
+                m.ownerAccountId = owner
+                m.asset?.ownerAccountId = owner
+                stamped += 1
+            }
+        }
+        if stamped > 0 { try? context.save() }
+        return stamped
+    }
+
     // MARK: - persistence helpers
 
     private func upsertJob(owner: String, cloudMediaId: String, momentId: UUID,
