@@ -300,3 +300,113 @@ def test_17_legacy_dev_cannot_access(ctx):
     assert client.get("/v1/media").status_code == 401
     assert client.get("/v1/media/whatever").status_code == 401
     assert client.get("/v1/media/whatever/download").status_code == 401
+
+
+# --- R4-B multipart API ------------------------------------------------------
+import hashlib as _hl
+
+
+def _psha(data: bytes) -> str:
+    return base64.b64encode(_hl.sha256(data).digest()).decode()
+
+
+class MPUFakeS3(FakeS3):
+    def __init__(self):
+        super().__init__()
+        self.mpus = {}
+        self._n = 0
+    def create_multipart_upload(self, Bucket, Key, ContentType=None, ChecksumAlgorithm=None):
+        self._n += 1; uid = f"mpu-{self._n}"; self.mpus[uid] = {"key": Key, "parts": {}}; return {"UploadId": uid}
+    def put_part(self, uid, pn, data, csum):
+        self.mpus[uid]["parts"][pn] = {"etag": f"e{pn}", "csum": csum, "data": data}
+    def get_paginator(self, _n):
+        s3 = self
+        class _P:
+            def paginate(self, Bucket, Key, UploadId):
+                parts = s3.mpus.get(UploadId, {}).get("parts", {})
+                yield {"Parts": [{"PartNumber": pn, "ETag": p["etag"], "ChecksumSHA256": p["csum"],
+                                  "Size": len(p["data"])} for pn, p in sorted(parts.items())]}
+        return _P()
+    def complete_multipart_upload(self, Bucket, Key, UploadId, MultipartUpload):
+        mpu = self.mpus[UploadId]
+        data = b"".join(mpu["parts"][p["PartNumber"]]["data"] for p in MultipartUpload["Parts"])
+        shas = [mpu["parts"][p["PartNumber"]]["csum"] for p in MultipartUpload["Parts"]]
+        concat = b"".join(base64.b64decode(s) for s in shas)
+        comp = base64.b64encode(_hl.sha256(concat).digest()).decode() + f"-{len(shas)}"
+        self.objects[Key] = {"size": len(data), "sha_b64": comp}
+        return {"ETag": "final"}
+
+
+@pytest.fixture
+def mpuctx(monkeypatch):
+    monkeypatch.setenv("STORY_ENVIRONMENT", "development")
+    monkeypatch.setenv("STORY_REQUIRE_AUTH", "0")
+    app = create_app()
+    app.state._jwt_verifier_override = FakeVerifier()
+    app.state._identity_store_override = FakeIdentityStore()
+    s3 = MPUFakeS3(); ddb = FakeDDB()
+    store = _media.MediaStore(_media.MediaStoreConfig(table="t", bucket="b", region=REGION), ddb=ddb, s3=s3)
+    app.state._media_store_override = store
+    return TestClient(app), s3, store
+
+
+def test_mp_01_initiate_requires_auth(mpuctx):
+    client, _, _ = mpuctx
+    r = client.post("/v1/media/multipart/initiate",
+                    json={"content_sha256": "a"*64, "size_bytes": 100, "part_shas": ["x"]})
+    assert r.status_code == 401
+
+
+def test_mp_02_happy_path(mpuctx):
+    client, s3, store = mpuctx
+    p1, p2 = b"X"*1000, b"Y"*500
+    shas = [_psha(p1), _psha(p2)]
+    r = client.post("/v1/media/multipart/initiate", headers=_auth("alice"),
+                    json={"content_sha256": "a"*64, "size_bytes": 1500, "part_shas": shas})
+    assert r.status_code == 200
+    cmid = r.json()["cloud_media_id"]; uid = r.json()["upload_id"]
+    # presign parts (owner-scoped)
+    pr = client.post(f"/v1/media/{cmid}/parts", headers=_auth("alice"), json={"part_numbers": [1, 2]})
+    assert pr.status_code == 200 and set(pr.json()["parts"].keys()) == {"1", "2"}
+    # simulate the device PUTting both parts to S3
+    s3.put_part(uid, 1, p1, shas[0]); s3.put_part(uid, 2, p2, shas[1])
+    c = client.post(f"/v1/media/{cmid}/multipart/complete", headers=_auth("alice"))
+    assert c.status_code == 200 and c.json()["state"] == "cloud_verified"
+
+
+def test_mp_03_resume_reconcile_then_complete(mpuctx):
+    client, s3, store = mpuctx
+    p1, p2 = b"X"*1000, b"Y"*500
+    shas = [_psha(p1), _psha(p2)]
+    cmid = client.post("/v1/media/multipart/initiate", headers=_auth("alice"),
+                       json={"content_sha256": "a"*64, "size_bytes": 1500, "part_shas": shas}).json()["cloud_media_id"]
+    uid = store.get("story-alice", cmid)["upload_id"]
+    s3.put_part(uid, 1, p1, shas[0])   # interruption: only part 1
+    up = client.get(f"/v1/media/{cmid}/parts/uploaded", headers=_auth("alice")).json()["uploaded_parts"]
+    assert [p["part_number"] for p in up] == [1]
+    # complete before part 2 -> 422 (missing), record recoverable
+    assert client.post(f"/v1/media/{cmid}/multipart/complete", headers=_auth("alice")).status_code == 422
+    # upload part 2, then complete
+    s3.put_part(uid, 2, p2, shas[1])
+    assert client.post(f"/v1/media/{cmid}/multipart/complete", headers=_auth("alice")).json()["state"] == "cloud_verified"
+
+
+def test_mp_04_cross_account_denied(mpuctx):
+    client, s3, store = mpuctx
+    shas = [_psha(b"X"*1000)]
+    cmid = client.post("/v1/media/multipart/initiate", headers=_auth("alice"),
+                       json={"content_sha256": "a"*64, "size_bytes": 1000, "part_shas": shas}).json()["cloud_media_id"]
+    # bob cannot presign parts, reconcile, or complete alice's MPU
+    assert client.post(f"/v1/media/{cmid}/parts", headers=_auth("bob"), json={"part_numbers": [1]}).status_code == 404
+    assert client.get(f"/v1/media/{cmid}/parts/uploaded", headers=_auth("bob")).status_code == 404
+    assert client.post(f"/v1/media/{cmid}/multipart/complete", headers=_auth("bob")).status_code == 404
+
+
+def test_mp_05_idempotent_initiate_recovers_upload(mpuctx):
+    client, _, _ = mpuctx
+    shas = [_psha(b"X"*1000)]
+    body = {"content_sha256": "a"*64, "size_bytes": 1000, "part_shas": shas}
+    a = client.post("/v1/media/multipart/initiate", headers=_auth("alice"), json=body).json()
+    b = client.post("/v1/media/multipart/initiate", headers=_auth("alice"), json=body).json()
+    assert a["cloud_media_id"] == b["cloud_media_id"] and a["upload_id"] == b["upload_id"]
+    assert a["created"] is True and b["created"] is False

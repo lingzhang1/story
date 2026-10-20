@@ -177,6 +177,24 @@ class MediaInitiateRequest(BaseModel):
     source_moment_id: str = Field(default="")
 
 
+class MediaMultipartInitiateRequest(BaseModel):
+    """POST /v1/media/multipart/initiate body (R4-B). Declares the full-file sha256 + size AND the per-part
+    sha256 (base64), in order. Ownership derives from the authenticated principal."""
+
+    model_config = ConfigDict(extra="forbid")
+    content_sha256: str = Field(..., description="full-file sha256 (64-char hex); provenance + single-PUT guarantee")
+    size_bytes: int = Field(..., gt=0)
+    part_shas: list[str] = Field(..., description="per-part sha256 (base64), in part order")
+    content_type: str = Field(default="video/quicktime")
+    device_asset_id: str = Field(default="")
+    source_moment_id: str = Field(default="")
+
+
+class MediaPresignPartsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    part_numbers: list[int] = Field(..., description="1-based part numbers to presign")
+
+
 class StoryCoverageRequest(BaseModel):
     """POST /v1/story-coverage body. COMPACT structured inputs only — the client sends
     CreativeIntent + COMPLETE MomentUnderstanding records + pending_count. No media/frames."""
@@ -470,6 +488,68 @@ def create_app() -> FastAPI:
         return {"media": [{k: r.get(k) for k in ("cloud_media_id", "state", "size_bytes",
                                                  "verified_at", "device_asset_id", "source_moment_id")}
                           for r in recs]}
+
+    # ---- R4-B: large-file MULTIPART (all require_user; account-scoped; no bytes via App Runner) -----
+    @app.post("/v1/media/multipart/initiate", status_code=200)
+    def media_multipart_initiate(body: MediaMultipartInitiateRequest,
+                                 principal: Principal = Depends(require_user)):
+        """Begin (or idempotently recover) a multipart upload. Idempotent on (owner, content_sha256): a
+        re-initiate recovers the SAME record + S3 upload_id (never a duplicate object). part_shas are the
+        device's per-part sha256 (base64), in order — recorded for composite verification."""
+        if len(body.content_sha256.strip()) != 64:
+            raise HTTPException(status_code=422, detail="content_sha256 must be a 64-char hex sha256")
+        if body.size_bytes <= 0 or not body.part_shas:
+            raise HTTPException(status_code=422, detail="size_bytes>0 and non-empty part_shas required")
+        store = _media_store()
+        try:
+            rec, created = store.initiate_multipart(
+                owner=principal.story_user_id, content_sha256=body.content_sha256.strip(),
+                size_bytes=body.size_bytes, part_shas_b64=body.part_shas, content_type=body.content_type,
+                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id)
+        except _media.MediaOwnershipConflict as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"cloud_media_id": rec["cloud_media_id"], "state": rec["state"], "created": created,
+                "upload_id": rec.get("upload_id"), "part_count": rec.get("part_count")}
+
+    @app.post("/v1/media/{cloud_media_id}/parts", status_code=200)
+    def media_presign_parts(cloud_media_id: str, body: MediaPresignPartsRequest,
+                            principal: Principal = Depends(require_user)):
+        """Presigned upload-part URLs for the requested part numbers (caller's own MPU only)."""
+        store = _media_store()
+        try:
+            out = store.presign_parts(owner=principal.story_user_id, cloud_media_id=cloud_media_id,
+                                      part_numbers=body.part_numbers)
+        except _media.MediaNotFound:
+            raise HTTPException(status_code=404, detail="media not found")
+        except _media.MediaVerificationError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return out
+
+    @app.get("/v1/media/{cloud_media_id}/parts/uploaded", status_code=200)
+    def media_uploaded_parts(cloud_media_id: str, principal: Principal = Depends(require_user)):
+        """Reconcile: the parts S3 already has for the caller's MPU (so the client re-uploads only the rest)."""
+        store = _media_store()
+        try:
+            parts = store.list_uploaded_parts(owner=principal.story_user_id, cloud_media_id=cloud_media_id)
+        except _media.MediaNotFound:
+            raise HTTPException(status_code=404, detail="media not found")
+        except _media.MediaVerificationError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"uploaded_parts": parts}
+
+    @app.post("/v1/media/{cloud_media_id}/multipart/complete", status_code=200)
+    def media_multipart_complete(cloud_media_id: str, principal: Principal = Depends(require_user)):
+        """Complete + durably verify the multipart object (size + composite checksum) -> cloud_verified. A
+        successful CompleteMultipartUpload alone is NOT sufficient; size + composite must match."""
+        store = _media_store()
+        try:
+            rec = store.complete_multipart(owner=principal.story_user_id, cloud_media_id=cloud_media_id)
+        except _media.MediaNotFound:
+            raise HTTPException(status_code=404, detail="media not found")
+        except _media.MediaVerificationError as e:
+            raise HTTPException(status_code=422, detail=f"verification failed: {e}")
+        return {"cloud_media_id": rec["cloud_media_id"], "state": rec["state"],
+                "verified_at": rec.get("verified_at", 0)}
 
     @app.post("/v1/creative-intent", response_model=CreativeIntentContract, status_code=200)
     def resolve_creative_intent(

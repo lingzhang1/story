@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -50,6 +51,26 @@ UNFINISHED_UPLOAD_TTL_SECONDS = 7 * 24 * 3600
 # add part-level multipart; this increment is a single presigned PUT with whole-file retry).
 DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 UPLOAD_URL_TTL_SECONDS = 60 * 60
+
+# R4-B multipart. S3 requires every part except the last to be >= 5 MiB. We use 8 MiB parts and switch to
+# multipart only above a threshold so small files keep the single-PUT path unchanged.
+MIN_S3_PART_SIZE = 5 * 1024 * 1024
+MULTIPART_PART_SIZE = 8 * 1024 * 1024
+MULTIPART_THRESHOLD = 16 * 1024 * 1024   # <= this -> single PUT; above -> multipart
+#
+# CHECKSUM STRATEGY (owner Phase 2 — documented, equivalent integrity; no bytes through App Runner):
+#   • The device declares the FULL-FILE sha256 (hex) at initiate (provenance + the single-PUT guarantee).
+#   • SINGLE PUT (small files): S3 validates the whole object's ChecksumSHA256 against the declared digest at
+#     PUT, and complete re-checks it via HeadObject. Unchanged, strongest guarantee.
+#   • MULTIPART (large files): each PART uploads with its OWN ChecksumSHA256, which S3 validates on arrival — a
+#     corrupt part is REJECTED at PUT (the same per-byte guarantee as single-PUT, applied per part). The device
+#     sends each part's sha256 (base64) to initiate, so the server records the EXPECTED per-part digests.
+#     CompleteMultipartUpload passes those per-part checksums in order; S3 validates the assembly and returns a
+#     COMPOSITE checksum ("<base64>-N"). A multipart ETag/composite is NOT a full-file sha256 and is NEVER
+#     treated as one. Verification before cloud_verified = (object exists) ∧ (ContentLength == declared size) ∧
+#     (S3's returned composite ChecksumSHA256 == the composite the SERVER recomputes from the recorded per-part
+#     digests). Every part is sha256-validated by S3 at upload AND the composite + size match the server's
+#     independent computation, so the object is integrity-assured end to end without re-downloading the bytes.
 
 
 def cloud_media_id_for(owner: str, content_sha256: str) -> str:
@@ -236,6 +257,151 @@ class MediaStore:
             ExpiresIn=DOWNLOAD_URL_TTL_SECONDS)
         return {"url": url, "expires_in": DOWNLOAD_URL_TTL_SECONDS}
 
+    # --- MULTIPART (R4-B; large files) ---------------------------------------------------------------
+    def initiate_multipart(self, *, owner: str, content_sha256: str, size_bytes: int,
+                           part_shas_b64: list[str], content_type: str = "video/quicktime",
+                           device_asset_id: str = "", source_moment_id: str = "") -> tuple[dict, bool]:
+        """Create (or idempotently recover) a MULTIPART upload for (owner, content). `part_shas_b64` is the
+        device's per-part sha256 (base64), in order — recorded as the EXPECTED digests for composite
+        verification. Returns (record, created). A re-initiate of the SAME content recovers the existing
+        record + its S3 upload_id (never a second MPU, never a duplicate object). Owner is the trusted
+        story_user_id. Conflict on a different size/sha."""
+        cmid = cloud_media_id_for(owner, content_sha256)
+        existing = self.get(owner, cmid)
+        if existing is not None:
+            if (existing.get("content_sha256") != content_sha256
+                    or int(existing.get("size_bytes", -1)) != int(size_bytes)):
+                raise MediaOwnershipConflict(f"cloud_media_id {cmid} exists with a different content descriptor")
+            if existing.get("state") == STATE_CLOUD_VERIFIED:
+                return existing, False
+            if existing.get("upload_id"):
+                return existing, False   # resume the SAME multipart upload
+            # record exists (e.g. from a prior single-PUT initiate) but no MPU yet — fall through to create one.
+
+        key = object_key(owner, cmid)
+        mpu = self._s3_c().create_multipart_upload(
+            Bucket=self.cfg.bucket, Key=key, ContentType=content_type, ChecksumAlgorithm="SHA256")
+        upload_id = mpu["UploadId"]
+        now = _now()
+        item = {
+            "story_user_id": {"S": owner}, "cloud_media_id": {"S": cmid},
+            "state": {"S": STATE_UPLOADING}, "upload_mode": {"S": "multipart"},
+            "content_sha256": {"S": content_sha256}, "size_bytes": {"N": str(int(size_bytes))},
+            "content_type": {"S": content_type}, "s3_key": {"S": key}, "upload_id": {"S": upload_id},
+            "part_shas": {"S": json.dumps(part_shas_b64)}, "part_count": {"N": str(len(part_shas_b64))},
+            "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
+            "device_asset_id": {"S": device_asset_id}, "source_moment_id": {"S": source_moment_id},
+            "verified_at": {"N": "0"},
+        }
+        # Overwrite any prior single-PUT record for this cmid (same owner) with the multipart record.
+        self._ddb_c().put_item(TableName=self.cfg.table, Item=item)
+        return self._decode(item), True
+
+    def presign_parts(self, *, owner: str, cloud_media_id: str, part_numbers: list[int]) -> dict:
+        """Bounded presigned upload-part URLs for the requested 1-based part numbers of the owner's own MPU.
+        Each URL requires the part's ChecksumSHA256 header (recorded at initiate) so S3 validates the part on
+        arrival. 404 if not the caller's; conflict if not a multipart record."""
+        rec = self.get(owner, cloud_media_id)
+        if rec is None:
+            raise MediaNotFound(cloud_media_id)
+        upload_id = rec.get("upload_id")
+        if not upload_id:
+            raise MediaVerificationError("not a multipart upload")
+        part_shas = json.loads(rec.get("part_shas", "[]"))
+        urls: dict[int, dict] = {}
+        for pn in part_numbers:
+            if pn < 1 or pn > len(part_shas):
+                continue
+            params = {"Bucket": self.cfg.bucket, "Key": rec["s3_key"], "UploadId": upload_id,
+                      "PartNumber": pn, "ChecksumSHA256": part_shas[pn - 1]}
+            urls[pn] = {"url": self._s3_c().generate_presigned_url(
+                "upload_part", Params=params, ExpiresIn=UPLOAD_URL_TTL_SECONDS),
+                "checksum_sha256": part_shas[pn - 1]}
+        return {"parts": urls, "expires_in": UPLOAD_URL_TTL_SECONDS}
+
+    def list_uploaded_parts(self, *, owner: str, cloud_media_id: str) -> list[dict]:
+        """Reconcile: the parts S3 has already received for this MPU (so the client re-uploads only what's
+        missing after an interruption). Returns [{part_number, etag, checksum_sha256, size}]."""
+        rec = self.get(owner, cloud_media_id)
+        if rec is None:
+            raise MediaNotFound(cloud_media_id)
+        upload_id = rec.get("upload_id")
+        if not upload_id:
+            raise MediaVerificationError("not a multipart upload")
+        out: list[dict] = []
+        paginator = self._s3_c().get_paginator("list_parts")
+        for page in paginator.paginate(Bucket=self.cfg.bucket, Key=rec["s3_key"], UploadId=upload_id):
+            for p in page.get("Parts", []):
+                out.append({"part_number": p["PartNumber"], "etag": p["ETag"],
+                            "checksum_sha256": p.get("ChecksumSHA256", ""), "size": p.get("Size", 0)})
+        return out
+
+    def complete_multipart(self, *, owner: str, cloud_media_id: str) -> dict:
+        """Complete the MPU (passing the recorded per-part checksums), then VERIFY: object exists ∧ size matches
+        ∧ the COMPOSITE ChecksumSHA256 S3 returns == the composite the SERVER recomputes from the recorded
+        per-part digests. Only then uploading -> cloud_verified. A multipart completion SUCCEEDING is NOT
+        sufficient — the composite + size must match. Idempotent. Never marks verified on client say-so."""
+        rec = self.get(owner, cloud_media_id)
+        if rec is None:
+            raise MediaNotFound(cloud_media_id)
+        if rec.get("state") == STATE_CLOUD_VERIFIED:
+            return rec
+        upload_id = rec.get("upload_id")
+        if not upload_id:
+            raise MediaVerificationError("not a multipart upload")
+        part_shas = json.loads(rec.get("part_shas", "[]"))
+
+        # Reconcile the actually-uploaded parts; every expected part must be present.
+        uploaded = {p["part_number"]: p for p in self.list_uploaded_parts(owner=owner, cloud_media_id=cloud_media_id)}
+        parts_payload = []
+        for pn in range(1, len(part_shas) + 1):
+            got = uploaded.get(pn)
+            if got is None:
+                raise MediaVerificationError(f"missing part {pn}")
+            if got.get("checksum_sha256") and got["checksum_sha256"] != part_shas[pn - 1]:
+                raise MediaVerificationError(f"part {pn} checksum mismatch")
+            parts_payload.append({"ETag": got["etag"], "PartNumber": pn,
+                                  "ChecksumSHA256": part_shas[pn - 1]})
+
+        try:
+            self._s3_c().complete_multipart_upload(
+                Bucket=self.cfg.bucket, Key=rec["s3_key"], UploadId=upload_id,
+                MultipartUpload={"Parts": parts_payload})
+        except Exception as e:
+            # A duplicate completion after S3 already assembled the object is tolerable — fall through to verify.
+            if "NoSuchUpload" not in str(e):
+                raise
+
+        head = self._head_object(rec["s3_key"])
+        if head is None:
+            raise MediaVerificationError("object not found after complete")
+        actual_size = int(head.get("ContentLength", -1))
+        if actual_size != int(rec.get("size_bytes", -2)):
+            raise MediaVerificationError(f"size mismatch: expected {rec.get('size_bytes')} got {actual_size}")
+        expected_composite = _composite_checksum(part_shas)
+        actual_composite = head.get("ChecksumSHA256", "")
+        if not actual_composite or actual_composite != expected_composite:
+            raise MediaVerificationError("composite checksum mismatch")
+
+        now = _now()
+        try:
+            self._ddb_c().update_item(
+                TableName=self.cfg.table,
+                Key={"story_user_id": {"S": owner}, "cloud_media_id": {"S": cloud_media_id}},
+                UpdateExpression="SET #s = :v, verified_at = :t, updated_at = :t",
+                ConditionExpression="#s = :uploading",
+                ExpressionAttributeNames={"#s": "state"},
+                ExpressionAttributeValues={
+                    ":v": {"S": STATE_CLOUD_VERIFIED}, ":t": {"N": str(now)},
+                    ":uploading": {"S": STATE_UPLOADING}})
+        except Exception as e:
+            if self._is_conditional(e):
+                cur = self.get(owner, cloud_media_id)
+                if cur and cur.get("state") == STATE_CLOUD_VERIFIED:
+                    return cur
+            raise
+        return self.get(owner, cloud_media_id) or rec
+
     # --- helpers --------------------------------------------------------------------------------------
     def _head_object(self, key: str) -> Optional[dict]:
         try:
@@ -274,3 +440,18 @@ def _sha256_hex_to_b64(hex_digest: str) -> str:
         return base64.b64encode(bytes.fromhex(h)).decode("ascii")
     except ValueError:
         return ""
+
+
+def _composite_checksum(part_shas_b64: list[str]) -> str:
+    """Recompute S3's multipart COMPOSITE ChecksumSHA256 from the ordered per-part sha256 digests (base64):
+    sha256( concat(raw_part_digests) ), base64-encoded, suffixed '-<N>'. This is how S3 derives the object's
+    composite checksum for a multipart upload whose parts each carry a ChecksumSHA256 — so matching it against
+    S3's returned value (plus the size check and S3's own per-part validation) assures end-to-end integrity
+    WITHOUT re-downloading the object. It is deliberately NOT a full-file sha256, and never treated as one."""
+    import base64
+    import hashlib
+    if not part_shas_b64:
+        return ""
+    concat = b"".join(base64.b64decode(p) for p in part_shas_b64)
+    digest = hashlib.sha256(concat).digest()
+    return f"{base64.b64encode(digest).decode('ascii')}-{len(part_shas_b64)}"
