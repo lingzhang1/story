@@ -24,6 +24,8 @@ enum LibraryContext {
         if case .story(let s) = self { return s }
         return nil
     }
+    /// LibraryContext has an associated value (.story), so it is NOT Equatable — use this instead of `== .home`.
+    var isHome: Bool { if case .home = self { return true }; return false }
 }
 
 // MomentsLibraryView — the GLOBAL Moments library. Shows EVERY Moment across all Stories,
@@ -155,7 +157,7 @@ struct MomentsLibraryView: View {
             }
             Spacer()
             // R4-A.1: Auto Backup settings entry (home library + signed in).
-            if auth.isSignedIn, libraryContext == .home {
+            if auth.isSignedIn, libraryContext.isHome {
                 Button { showBackupSettings = true } label: {
                     Image(systemName: "icloud").font(.system(size: 18))
                         .foregroundStyle(StoryTheme.cream.opacity(0.6))
