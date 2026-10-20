@@ -206,3 +206,62 @@ extension StorySyncTests {
         try? FileManager.default.removeItem(at: MediaStore.shared.absoluteURL(for: rel))
     }
 }
+
+// R7-F — derived AI-state round-trip + understanding restore + hydration gate.
+extension StorySyncTests {
+    func test_derived_block_roundtrip_guide_coverage() throws {
+        let s = try makeStory(owner: "A", title: "Derived")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"g\":1}", schemaVersion: "story_guide/1"))
+        ctx.insert(StoryCoverageModel(storyId: s.id, coverageJSON: "{\"c\":1}",
+                   sourceUnderstandingIdsFingerprint: "sfp", creativeIntentFingerprint: "ifp",
+                   pendingCount: 0, storyGuideFingerprint: "gfp"))
+        try ctx.save()
+        let doc = StoryDocCodec.encodeFull(story: s, context: ctx)
+        XCTAssertEqual(doc["schema_version"] as? String, "story_doc/2")
+        let derived = doc["derived"] as? [String: Any]
+        XCTAssertNotNil(derived?["guide"]); XCTAssertNotNil(derived?["coverage"])
+        // Wipe local caches and restore from the doc.
+        for g in try ctx.fetch(FetchDescriptor<StoryGuideModel>()) { ctx.delete(g) }
+        for c in try ctx.fetch(FetchDescriptor<StoryCoverageModel>()) { ctx.delete(c) }
+        try ctx.save()
+        let n = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx)
+        XCTAssertGreaterThanOrEqual(n, 2)
+        let g2 = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g2?.guideJSON, "{\"g\":1}")
+        let c2 = try ctx.fetch(FetchDescriptor<StoryCoverageModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(c2?.coverageJSON, "{\"c\":1}")
+        XCTAssertEqual(c2?.sourceUnderstandingIdsFingerprint, "sfp")   // provenance preserved
+    }
+
+    func test_understanding_restore_reuse_gated_by_cloud_backing() async throws {
+        // A cloud-backed Moment (cloudMediaId set) with NO local understanding -> restore should adopt it.
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        let m = MomentModel(source: .directed, asset: asset); m.cloudMediaId = "cm-1"
+        ctx.insert(asset); ctx.insert(m); try ctx.save()
+        final class FakeU: UnderstandingSyncing, @unchecked Sendable {
+            func batchGet(accessToken: String, momentIds: [String]) async throws -> [CloudUnderstandingRecord] {
+                momentIds.map { CloudUnderstandingRecord(momentId: $0, understandingJSON: "{\"u\":1}",
+                    schemaVersion: "moment_understanding/1", promptVersion: "p", framePolicy: "f",
+                    contentSha256: "sha", modelId: "") }
+            }
+            func put(accessToken: String, records: [CloudUnderstandingRecord]) async throws {}
+        }
+        let sync = UnderstandingSync(service: FakeU())
+        let n = await sync.restore(momentIds: [m.id], context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(n, 1)
+        let mu = try ctx.fetch(FetchDescriptor<MomentUnderstandingModel>()).first { $0.momentId == m.id }
+        XCTAssertNotNil(mu, "a cloud-backed Moment's understanding must restore (no re-analysis)")
+        try? FileManager.default.removeItem(at: MediaStore.shared.absoluteURL(for: rel))
+    }
+
+    func test_hydration_gate_blocks_au_for_hydrating_moment() async throws {
+        let gate = CloudHydrationGate.shared
+        let sid = UUID(); let mid = UUID()
+        gate.beginStory(sid, moments: [mid])
+        XCTAssertTrue(gate.isHydrating(momentId: mid))
+        XCTAssertTrue(gate.isHydrating(storyId: sid))
+        gate.endStory(sid, moments: [mid])
+        XCTAssertFalse(gate.isHydrating(momentId: mid))
+    }
+}

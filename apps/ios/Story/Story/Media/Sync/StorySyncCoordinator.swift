@@ -53,7 +53,7 @@ final class StorySyncCoordinator {
         guard story.ownerAccountId == owner else { return }
         let job = upsert(owner: owner, storyId: storyId, context: context)
         if job.inConflict { return }                     // wait for the user to resolve before pushing again
-        let doc = StoryDocCodec.encode(story: story)
+        let doc = StoryDocCodec.encodeFull(story: story, context: context)
         let hash = StoryDocCodec.contentHash(doc)
         if !job.dirty && hash == job.lastSyncedHash { return }   // nothing changed
         // Stable mutation_id for THIS attempt: reuse the pending one so a lost-response retry is idempotent;
@@ -76,7 +76,7 @@ final class StorySyncCoordinator {
             j2.lastSyncedHash = hash
             j2.pendingMutationId = nil
             // Only clear dirty if NO newer local edit happened during the request (hash still current).
-            let current = StoryDocCodec.contentHash(StoryDocCodec.encode(story: story))
+            let current = StoryDocCodec.contentHash(StoryDocCodec.encodeFull(story: story, context: context))
             j2.dirty = (current != hash)      // a newer edit while in flight keeps it dirty (rule: preserve newer)
             j2.lastError = nil; j2.updatedAt = .now
             try? context.save()
@@ -103,7 +103,7 @@ final class StorySyncCoordinator {
         for s in stories where s.ownerAccountId == owner {
             let job = upsert(owner: owner, storyId: s.id, context: context)
             if job.inConflict { continue }
-            let hash = StoryDocCodec.contentHash(StoryDocCodec.encode(story: s))
+            let hash = StoryDocCodec.contentHash(StoryDocCodec.encodeFull(story: s, context: context))
             if hash != job.lastSyncedHash { job.dirty = true }
             if job.dirty {
                 await pushIfDirty(storyId: s.id, context: context, owner: owner, token: token)
@@ -129,7 +129,7 @@ final class StorySyncCoordinator {
                     do {
                         let srv = try await service.get(accessToken: accessToken, storyId: e.storyId)
                         if let story = fetchStory(sid, context: context) {
-                            let localDoc = StoryDocCodec.encode(story: story)
+                            let localDoc = StoryDocCodec.encodeFull(story: story, context: context)
                             recordConflict(owner: owner, storyId: sid, serverRevision: srv.revision,
                                            serverDoc: srv.doc, localDoc: localDoc, context: context)
                         }
@@ -141,7 +141,17 @@ final class StorySyncCoordinator {
             do {
                 let srv = try await service.get(accessToken: accessToken, storyId: e.storyId)
                 guard j_ownerStable(owner: owner, storyId: sid, context: context) else { continue }  // account switch guard
+                // R7-F: hold AU/Guide/Coverage/Music inference for this Story + its moments until hydration
+                // completes (restore first, regenerate only if genuinely missing).
+                let momentIds: [UUID] = ((srv.doc["moment_refs"] as? [[String: Any]]) ?? [])
+                    .compactMap { ($0["moment_id"] as? String).flatMap(UUID.init) }
+                CloudHydrationGate.shared.beginStory(sid, moments: momentIds)
                 try apply(doc: srv.doc, deleted: srv.deleted, owner: owner, storyId: sid, context: context)
+                StoryDocCodec.applyDerived(srv.doc, storyId: sid, context: context)  // R7-F: restore Guide/Coverage/Music/plans
+                // Restore Moment Understanding from the account-level store (so AU is not re-run on B).
+                _ = await UnderstandingSync.shared.restore(momentIds: momentIds, context: context,
+                                                           activeOwner: owner, token: token)
+                CloudHydrationGate.shared.endStory(sid, moments: momentIds)
                 job.baseRevision = srv.revision
                 job.lastSyncedHash = StoryDocCodec.contentHash(srv.doc)
                 job.dirty = false; job.updatedAt = .now

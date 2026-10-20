@@ -128,6 +128,9 @@ final class AssetUnderstandingQueue {
         var processed = 0
         while processed < maxJobs, let job = nextEligibleJob() {
             processed += 1
+            // R7-F: do NOT analyze a Moment while its Story's cloud state is still hydrating — a restore may
+            // be about to supply a reusable understanding (restore first, regenerate only if missing).
+            if CloudHydrationGate.shared.isHydrating(momentId: job.momentId) { continue }
             await run(job)
         }
     }

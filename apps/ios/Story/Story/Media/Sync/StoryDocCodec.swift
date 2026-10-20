@@ -82,8 +82,8 @@ enum StoryDocCodec {
                 "source_moment_ids": (o.sourceMomentIds.isEmpty ? o.momentIds : o.sourceMomentIds).map { $0.uuidString },
                 "source_fingerprint": o.sourceFingerprint,
                 "edit_plan_provenance": o.editPlanProvenance,
-                "cloud_media_id": NSNull(),   // R7-D will populate this + the full edit-plan reference
-                "cloud_verified": false,
+                "cloud_media_id": (o.cloudMediaId as Any),     // R7-D: the uploaded MP4's media record (nil until backed up)
+                "cloud_verified": (o.cloudVerifiedAt != nil),
             ]
         }
 
@@ -121,7 +121,7 @@ enum StoryDocCodec {
     /// Reject an unsupported schema BEFORE any decode (owner: explicit rejection, never best-effort).
     static func validateSchema(_ doc: [String: Any]) throws {
         let v = (doc["schema_version"] as? String) ?? ""
-        guard v == schemaVersion else { throw StoryDocError.unsupportedSchema(v) }
+        guard v == schemaVersion || v == "story_doc/2" else { throw StoryDocError.unsupportedSchema(v) }
     }
 
     /// A stable content hash of the SYNCED fields, used to decide dirtiness (current vs last-synced) without
@@ -133,5 +133,133 @@ enum StoryDocCodec {
 
     private static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - story_doc/2 DERIVED AI-state block (R7-F)
+// Carries the reusable AI caches so Device B RESTORES them instead of regenerating (target: 0 Bedrock calls).
+// Inline JSON for now; a future large-blob case externalizes to S3 ai_artifact (the doc then holds a ref).
+// Backward compatible: a story_doc/1 doc simply has no "derived" key and decodes as today.
+extension StoryDocCodec {
+    static let schemaVersion2 = "story_doc/2"
+
+    /// The FULL story_doc/2 the client pushes: base metadata + the derived AI-state block, schema bumped to v2.
+    @MainActor
+    static func encodeFull(story s: StoryModel, context: ModelContext) -> [String: Any] {
+        var doc = encode(story: s)
+        doc["schema_version"] = schemaVersion2
+        doc["derived"] = encodeDerived(story: s, context: context)
+        return doc
+    }
+
+    /// Build the derived block from the Story's local AI caches. Each entry carries its provenance
+    /// (fingerprints + schema/prompt version) so the receiver can reuse it only when compatible.
+    @MainActor
+    static func encodeDerived(story s: StoryModel, context: ModelContext) -> [String: Any] {
+        var derived: [String: Any] = [:]
+        let sid = s.id
+        func first<T: PersistentModel>(_ type: T.Type, _ pred: Predicate<T>) -> T? {
+            var d = FetchDescriptor<T>(predicate: pred); d.fetchLimit = 1
+            return (try? context.fetch(d))?.first
+        }
+        if let g = first(StoryGuideModel.self, #Predicate { $0.storyId == sid }) {
+            derived["guide"] = ["json": g.guideJSON, "schema_version": g.schemaVersion,
+                                "prompt_version": g.promptVersion, "model_id": g.modelId as Any]
+        }
+        if let c = first(StoryCoverageModel.self, #Predicate { $0.storyId == sid }) {
+            derived["coverage"] = ["json": c.coverageJSON, "schema_version": c.schemaVersion,
+                                   "prompt_version": c.promptVersion,
+                                   "source_understanding_fingerprint": c.sourceUnderstandingIdsFingerprint,
+                                   "creative_intent_fingerprint": c.creativeIntentFingerprint,
+                                   "guide_fingerprint": c.storyGuideFingerprint,
+                                   "pending_count": c.pendingCount]
+        }
+        if let m = first(StoryMusicDirectionModel.self, #Predicate { $0.storyId == sid }) {
+            derived["music_direction"] = ["json": m.directionJSON, "user_authored": m.userAuthored,
+                                          "fingerprint": m.fingerprint]
+        }
+        if let p = first(MusicPlanCacheModel.self, #Predicate { $0.storyId == sid }) {
+            derived["music_plan"] = ["json": p.planJSON, "input_fingerprint": p.inputFingerprint,
+                                     "prompt_version": p.promptVersion]
+        }
+        if let d = first(DurationRecCacheModel.self, #Predicate { $0.storyId == sid }) {
+            derived["duration_rec"] = ["json": d.recommendationJSON, "input_fingerprint": d.inputFingerprint,
+                                       "prompt_version": d.promptVersion]
+        }
+        // Per-output EXACT edit plans (preserve the validated plan verbatim — never re-plan for playback).
+        let outputPlans: [[String: Any]] = s.generatedOutputs.compactMap { o in
+            guard let pj = o.editPlanJSON, !pj.isEmpty else { return nil }
+            return ["output_id": o.id.uuidString, "edit_plan_json": pj,
+                    "source_fingerprint": o.sourceFingerprint]
+        }
+        if !outputPlans.isEmpty { derived["output_edit_plans"] = outputPlans }
+        return derived
+    }
+
+    /// Apply a pulled derived block into local SwiftData caches, REUSE-GATED: only write a cache when the
+    /// device does not already have a compatible one (same fingerprints + schema). Never overwrites a
+    /// user-authored music direction. Returns the count of caches hydrated (for acceptance evidence).
+    @MainActor
+    @discardableResult
+    static func applyDerived(_ doc: [String: Any], storyId: UUID, context: ModelContext) -> Int {
+        guard let derived = doc["derived"] as? [String: Any] else { return 0 }
+        var n = 0
+        func upsert<T: PersistentModel>(_ type: T.Type, _ pred: Predicate<T>,
+                                        make: () -> T, update: (T) -> Void) {
+            var d = FetchDescriptor<T>(predicate: pred); d.fetchLimit = 1
+            if let existing = (try? context.fetch(d))?.first { update(existing) }
+            else { context.insert(make()); n += 1 }
+        }
+        let sid = storyId
+        if let g = derived["guide"] as? [String: Any], let json = g["json"] as? String {
+            upsert(StoryGuideModel.self, #Predicate { $0.storyId == sid },
+                   make: { StoryGuideModel(storyId: sid, guideJSON: json,
+                                           schemaVersion: (g["schema_version"] as? String) ?? "story_guide/1") },
+                   update: { _ in })   // keep local if present (compatible); do not clobber
+        }
+        if let c = derived["coverage"] as? [String: Any], let json = c["json"] as? String {
+            upsert(StoryCoverageModel.self, #Predicate { $0.storyId == sid },
+                   make: { StoryCoverageModel(
+                       storyId: sid, coverageJSON: json,
+                       sourceUnderstandingIdsFingerprint: (c["source_understanding_fingerprint"] as? String) ?? "",
+                       creativeIntentFingerprint: (c["creative_intent_fingerprint"] as? String) ?? "",
+                       pendingCount: (c["pending_count"] as? Int) ?? 0,
+                       storyGuideFingerprint: (c["guide_fingerprint"] as? String) ?? "",
+                       schemaVersion: (c["schema_version"] as? String) ?? "story_coverage/2",
+                       modelId: nil, promptVersion: (c["prompt_version"] as? String) ?? "story_coverage/v2") },
+                   update: { _ in })
+        }
+        if let m = derived["music_direction"] as? [String: Any], let json = m["json"] as? String {
+            upsert(StoryMusicDirectionModel.self, #Predicate { $0.storyId == sid },
+                   make: { StoryMusicDirectionModel(storyId: sid, directionJSON: json,
+                           userAuthored: (m["user_authored"] as? Bool) ?? false,
+                           fingerprint: (m["fingerprint"] as? String) ?? "") },
+                   update: { _ in })   // never clobber a local (possibly user-authored) direction
+        }
+        if let p = derived["music_plan"] as? [String: Any], let json = p["json"] as? String {
+            upsert(MusicPlanCacheModel.self, #Predicate { $0.storyId == sid },
+                   make: { MusicPlanCacheModel(storyId: sid, planJSON: json,
+                           inputFingerprint: (p["input_fingerprint"] as? String) ?? "") },
+                   update: { _ in })
+        }
+        if let dr = derived["duration_rec"] as? [String: Any], let json = dr["json"] as? String {
+            upsert(DurationRecCacheModel.self, #Predicate { $0.storyId == sid },
+                   make: { DurationRecCacheModel(storyId: sid, recommendationJSON: json,
+                           inputFingerprint: (dr["input_fingerprint"] as? String) ?? "") },
+                   update: { _ in })
+        }
+        // Restore exact edit plans onto existing outputs (never re-plan for playback).
+        if let plans = derived["output_edit_plans"] as? [[String: Any]] {
+            for p in plans {
+                guard let oid = (p["output_id"] as? String).flatMap(UUID.init),
+                      let pj = p["edit_plan_json"] as? String else { continue }
+                var d = FetchDescriptor<GeneratedOutputModel>(predicate: #Predicate { $0.id == oid }); d.fetchLimit = 1
+                if let o = (try? context.fetch(d))?.first, (o.editPlanJSON ?? "").isEmpty {
+                    o.editPlanJSON = pj; n += 1
+                }
+            }
+        }
+        try? context.save()
+        return n
     }
 }

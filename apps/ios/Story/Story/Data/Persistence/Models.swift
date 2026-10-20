@@ -398,6 +398,13 @@ final class GeneratedOutputModel {
     var title: String
     var durationSeconds: Double
 
+    // R7-D — GENERATED MP4 cloud backup (additive, defaulted). `cloudMediaId` is the media record for the
+    // uploaded rendered MP4 (media_kind:"generated"); `cloudVerifiedAt` is set once the upload verified. On
+    // Device B these let the exact rendered video be RESTORED for playback/sharing via R6 — NEVER re-planned
+    // or re-rendered. nil until the render completes AND its MP4 is backed up (R7-D).
+    var cloudMediaId: String?
+    var cloudVerifiedAt: Date?
+
     // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). INHERITS the parent Story's owner — set equal to
     // `story.ownerAccountId` at creation and by the dev-only backfill. Stored directly (not only via the
     // `story` relationship) so account-scoped cleanup/recovery can filter outputs WITHOUT walking a possibly

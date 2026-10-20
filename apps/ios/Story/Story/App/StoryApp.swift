@@ -157,6 +157,9 @@ struct StoryApp: App {
                         Task { await StorySyncCoordinator.shared.syncAllDirty(
                             context: ctx, activeOwner: owner,
                             token: { [weak auth] in await auth?.validAccessToken() }) }
+                        Task { await UnderstandingSync.shared.push(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
                     }
                 }
         }
@@ -188,6 +191,9 @@ struct StoryApp: App {
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                     Task { await StorySyncCoordinator.shared.syncAllDirty(
+                        context: ctx, activeOwner: owner,
+                        token: { [weak auth] in await auth?.validAccessToken() }) }
+                    Task { await UnderstandingSync.shared.push(
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                 }
