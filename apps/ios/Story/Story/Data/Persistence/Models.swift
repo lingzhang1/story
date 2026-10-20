@@ -71,6 +71,15 @@ final class StoryModel {
     var title: String
     var statusRaw: String
 
+    // R1 — ACCOUNT OWNERSHIP (additive, SwiftData-lightweight-migration-safe: optional + defaulted nil).
+    // The device MIRROR of the server-authoritative owner. A Story is created ONLY after authentication and
+    // stamped with the active account's resolved `story_user_id` at creation (never a client-trusted value for
+    // backend authz). nil ONLY on pre-R1 Stories until the dev-only designated-account backfill stamps them,
+    // or on a Story that somehow predates stamping — treated as unowned and hidden from account-scoped reads.
+    // All Story-derived records (outputs, guide, coverage, links, plans) inherit ownership THROUGH this field
+    // (no owner duplication on children). Never overwritten once set to a non-nil account.
+    var ownerAccountId: String?
+
     // Structured CreativeIntent, flattened for persistence.
     var intentRawText: String
     var intentTheme: String
@@ -219,6 +228,12 @@ final class AssetModel {
     var sourceRaw: String
     var createdAt: Date
 
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). Mirrors the owning Moment's ownership: nil while the
+    // asset's Moment is local-only (shared). Cloud backup / eviction (which this field will gate) are OUT OF
+    // SCOPE for R1 — the field is stored now so the later upload pipeline has a home without a migration.
+    // R1 never sets it to non-nil.
+    var ownerAccountId: String?
+
     // Camera Metadata P0 (Part A) — ALL optional + defaulted = lightweight additive migration (an existing
     // populated store decodes cleanly, matching the 60+ prior additive fields in this file). nil everywhere
     // means "unknown" and is the honest default — location is NEVER fabricated.
@@ -266,6 +281,26 @@ final class MomentModel {
     var caption: String?
     var sourceRaw: String
     var createdAt: Date
+
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). A Moment is LOCAL-ONLY (nil owner) until it is
+    // successfully uploaded and associated with an authenticated account (a FUTURE increment — not R1). A
+    // local-only Moment belongs to the SHARED device-local library and is deliberately visible to EVERY account
+    // on the device (owner Decision 1.A/1.C). Only a `cloud_*` Moment is account-scoped and hidden from other
+    // accounts. R1 never sets this to non-nil (no upload path yet); the field exists so the shared-vs-owned
+    // distinction is representable now and the isolation reads are written against it.
+    var ownerAccountId: String?
+
+    // R1 — MINIMAL cloud lifecycle state (additive, defaulted). The ownership state machine from the
+    // architecture review (local_only→uploading→cloud_verified→local_optimized→downloaded_on_demand). In R1 the
+    // ONLY reachable value is "local_only"; upload/eviction/download are explicitly out of scope. Stored now so
+    // visibility logic can key off it without a later migration. `cloudMediaId` is the server-minted cloud copy
+    // id once uploaded (nil until then).
+    var cloudStateRaw: String = "local_only"
+    var cloudMediaId: String?
+
+    /// True while this Moment lives only in the shared device-local library (no account owns it). In R1 this is
+    /// always true. An account-scoped read includes a Moment iff it is local-only OR owned by the active account.
+    var isLocalOnly: Bool { ownerAccountId == nil && cloudStateRaw == "local_only" }
 
     // Moment OWNS its media: deleting the Moment deletes its asset file. Independent of any Story.
     @Relationship(deleteRule: .cascade)
@@ -343,6 +378,13 @@ final class GeneratedOutputModel {
     var story: StoryModel?
     var title: String
     var durationSeconds: Double
+
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). INHERITS the parent Story's owner — set equal to
+    // `story.ownerAccountId` at creation and by the dev-only backfill. Stored directly (not only via the
+    // `story` relationship) so account-scoped cleanup/recovery can filter outputs WITHOUT walking a possibly
+    // nil `story` link, and so an orphaned output (story deleted) still carries its last known owner. Never
+    // overwritten once non-nil. Rendered video bytes are NOT cloud-backed in beta (see review §5.3).
+    var ownerAccountId: String?
     // LEGACY snapshot of the moment ids this output was planned from (mock path).
     // Kept for back-compat; real outputs mirror this into `sourceMomentIds`.
     var momentIds: [UUID]

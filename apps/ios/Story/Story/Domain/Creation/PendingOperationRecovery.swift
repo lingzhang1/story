@@ -19,16 +19,26 @@ import SwiftData
 @MainActor
 final class PendingOperationRecovery {
     private let context: ModelContext
+    /// R1 — the account whose pending operations may be recovered in THIS pass. A resumable Story owned by a
+    /// DIFFERENT account is skipped, so account B never resumes account A's generation (owner Phase 4.1/4.2).
+    /// nil = signed out: recover nothing (there is no authenticated account to own the resumed render, and the
+    /// paid resume path must not run unauthenticated).
+    private let activeAccountId: String?
 
     // In-flight guard shared across recovery passes in this process: a Story whose resume is running is not
     // resumed again by a second foreground event. Coordinators are retained for the lifetime of their resume.
     private static var inFlight: Set<UUID> = []
     private static var retained: [UUID: StoryCreationCoordinator] = [:]
 
-    init(context: ModelContext) { self.context = context }
+    init(context: ModelContext, activeAccountId: String? = nil) {
+        self.context = context
+        self.activeAccountId = activeAccountId
+    }
 
-    /// Fetch Stories that have a recoverable pending operation, resume each once.
+    /// Fetch Stories that have a recoverable pending operation, resume each once — but ONLY those owned by the
+    /// active account (R1 isolation).
     func recoverAll() {
+        guard activeAccountId != nil else { return }   // signed out → recover nothing
         let desc = FetchDescriptor<PendingOperationModel>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])
         let rows = ((try? context.fetch(desc)) ?? []).filter { $0.isRecoverable && $0.jobId != nil }
         guard !rows.isEmpty else { return }
@@ -41,11 +51,18 @@ final class PendingOperationRecovery {
     }
 
     /// Resume the recoverable operation for one Story. Safe to call repeatedly — the in-flight guard makes a
-    /// second call a no-op until the first resume finishes.
+    /// second call a no-op until the first resume finishes. Refuses a Story not owned by the active account.
     func resume(storyId: UUID) {
         guard !Self.inFlight.contains(storyId) else { return }
         let storyDesc = FetchDescriptor<StoryModel>(predicate: #Predicate { $0.id == storyId })
         guard let story = (try? context.fetch(storyDesc))?.first else { return }
+
+        // R1 ownership guard: never resume another account's Story. A nil-owner Story (pre-R1, pre-backfill) is
+        // also skipped rather than resumed under an arbitrary account.
+        guard let active = activeAccountId, story.ownerAccountId == active else {
+            MediaEngineV1.beacon("editplan-recover: SKIP story=\(storyId.uuidString.prefix(8)) — not owned by active account")
+            return
+        }
 
         let coord = StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         guard coord.hasRecoverablePendingOperation(storyId: storyId) else { return }

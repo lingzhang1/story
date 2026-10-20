@@ -21,7 +21,7 @@ final class GlobalMomentsPersistenceTests: XCTestCase {
                  MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
             configurations: config)
-        repo = StoryRepository(context: ctx)
+        repo = StoryRepository(context: ctx, owner: .account("test-acct-A"))
     }
 
     private func makeStory(_ title: String) -> StoryModel {

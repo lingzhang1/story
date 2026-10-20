@@ -32,6 +32,7 @@ enum LibraryContext {
 struct MomentsLibraryView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(AuthStore.self) private var auth
 
     var libraryContext: LibraryContext = .home
     /// Called after Moments are linked to a Story (.story context) so the caller can refresh.
@@ -46,7 +47,9 @@ struct MomentsLibraryView: View {
     /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
     @State private var alreadyInStory = Set<UUID>()
 
-    private var useCases: StoryUseCases { StoryUseCases(repository: StoryRepository(context: context)) }
+    private var useCases: StoryUseCases {
+        StoryUseCases(repository: StoryRepository(context: context, owner: auth.activeOwner))
+    }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
 
     var body: some View {
@@ -233,7 +236,9 @@ struct MomentsLibraryView: View {
     // MARK: - Actions
 
     private func reload() {
-        moments = (try? useCases.allMoments()) ?? []
+        // R1 account isolation: local-only Moments are shared with every account; owned Moments only with their
+        // owner. allMoments() returns the raw library; filter through the centralized visibility rule.
+        moments = ((try? useCases.allMoments()) ?? []).visible(to: auth.storyUserId)
         if let s = libraryContext.associatedStory {
             alreadyInStory = Set(s.momentLinks.compactMap { $0.moment?.id })
         } else {

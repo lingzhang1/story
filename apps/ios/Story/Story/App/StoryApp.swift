@@ -57,9 +57,9 @@ struct StoryApp: App {
         let auQueue = AssetUnderstandingQueue(context: container.mainContext)
         auQueue.recoverOrphans()
         Task { await auQueue.drain() }
-        // P0 Phase 2: recover unfinished AI edit-plan operations (app killed/backgrounded mid-plan or
-        // mid-render). Resumes polling/rendering from durable PendingOperationModel state — NEVER re-inference.
-        PendingOperationRecovery(context: container.mainContext).recoverAll()
+        // P0 Phase 2 + R1: edit-plan operation recovery is now ACCOUNT-SCOPED and runs AFTER sign-in (in the
+        // auth.state onChange) and on foreground — not here at container init, where no account is resolved yet
+        // (a nil-account recovery is a no-op by design, and must never resume another account's render).
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -77,16 +77,26 @@ struct StoryApp: App {
                     // first-sign-in ADOPTION hook: stamp the resolved account onto the device's LocalIdentity
                     // so existing anonymous Stories/Moments are adopted with ZERO data movement. Never deletes
                     // SwiftData; never reassigns content already owned by a DIFFERENT account.
+                    // R1 — on first sign-in, run the DEV-ONLY designated-account backfill (owner Decision 3):
+                    // stamp pre-R1 nil-owner Stories (and their outputs) to the designated account IFF that
+                    // account is the one signing in. Idempotent, non-destructive, never overwrites an explicit
+                    // owner, DEBUG-only, and never touches local-only Moments (they stay shared). New Stories are
+                    // already stamped at creation; this only migrates legacy pre-ownership Stories.
                     auth.onFirstSignInAdopt = { accountId in
                         let ctx = container.mainContext
-                        guard let ident = (try? ctx.fetch(FetchDescriptor<LocalIdentityModel>()))?.first else { return }
-                        if ident.accountId == nil {
+                        // Keep the device LocalIdentity stamp for provenance (first account that signed in),
+                        // without reassigning if it already belongs to someone — ownership is now per-Story.
+                        if let ident = (try? ctx.fetch(FetchDescriptor<LocalIdentityModel>()))?.first,
+                           ident.accountId == nil {
                             ident.accountId = accountId
                             ident.linkedAt = .now
                             try? ctx.save()
                         }
-                        // If ident.accountId belongs to a DIFFERENT account, we do NOT reassign it — the
-                        // local content stays with its original owner (Phase 5: no cross-account transfer).
+                        let stamped = DevOwnershipBackfill.runIfDesignatedAccount(
+                            signedInAccountId: accountId, context: ctx)
+                        if stamped > 0 {
+                            MediaEngineV1.beacon("R1 dev backfill: stamped \(stamped) pre-R1 Stories to designated account")
+                        }
                     }
                     await auth.restore()
                 }
@@ -97,6 +107,10 @@ struct StoryApp: App {
                     if newState == .signedIn {
                         let q = AssetUnderstandingQueue(context: container.mainContext)
                         Task { await q.drain() }
+                        // R1: edit-plan recovery is account-scoped and runs on sign-in — resumes ONLY the
+                        // now-authenticated account's unfinished operations (never another account's).
+                        PendingOperationRecovery(context: container.mainContext,
+                                                 activeAccountId: auth.storyUserId).recoverAll()
                     }
                 }
         }
@@ -107,10 +121,11 @@ struct StoryApp: App {
             if phase == .active {
                 let q = AssetUnderstandingQueue(context: container.mainContext)
                 Task { await q.drain() }
-                // P0 Phase 2: on every foreground, resume any unfinished edit-plan operation whose poll was
-                // suspended while backgrounded (or whose job completed while we were away). Idempotent +
-                // single-flight — repeated foregrounds never create duplicate polling/rendering.
-                PendingOperationRecovery(context: container.mainContext).recoverAll()
+                // P0 Phase 2 + R1: on every foreground, resume any unfinished edit-plan operation whose poll was
+                // suspended while backgrounded (or whose job completed while we were away). ACCOUNT-SCOPED
+                // (only the signed-in account's Stories), idempotent + single-flight.
+                PendingOperationRecovery(context: container.mainContext,
+                                         activeAccountId: auth.storyUserId).recoverAll()
             }
         }
     }

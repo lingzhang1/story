@@ -30,7 +30,7 @@ final class CaptureUXCorrectionsTests: XCTestCase {
                  MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
             configurations: config)
-        useCases = StoryUseCases(repository: StoryRepository(context: ctx))
+        useCases = StoryUseCases(repository: StoryRepository(context: ctx, owner: .account("test-acct-A")))
     }
 
     private func makeStory(_ title: String) -> StoryModel {

@@ -16,9 +16,16 @@ struct HomeView: View {
     @State private var showStories = false
     @State private var confirmSignOut = false
 
+    // R1 account isolation: the @Query is unscoped (SwiftData predicates can't close over runtime auth state),
+    // so we filter in memory through the CENTRALIZED AccountScope rules. SwiftUI re-renders this view when
+    // `auth.storyUserId` changes, so switching accounts (or signing out) refreshes both the counts and lists
+    // with no stale visibility.
+    private var visibleStories: [StoryModel] { stories.visible(to: auth.storyUserId) }
+    private var visibleMoments: [MomentModel] { moments.visible(to: auth.storyUserId) }
+
     // Active Stories first (most recent first), then completed below.
     private var sortedStories: [StoryModel] {
-        stories.sorted { a, b in
+        visibleStories.sorted { a, b in
             if a.status != b.status { return a.status == .active }
             return a.createdAt > b.createdAt
         }
@@ -56,13 +63,13 @@ struct HomeView: View {
                     // ── Secondary destinations: Moments · Stories
                     HStack(spacing: 12) {
                         NavigationLink { MomentsLibraryView() } label: {
-                            secondaryCard(icon: "photo.on.rectangle", count: moments.count,
+                            secondaryCard(icon: "photo.on.rectangle", count: visibleMoments.count,
                                           title: "Moments", sub: "Your captured memories")
                         }
                         .buttonStyle(.plain)
 
                         Button { showStories = true } label: {
-                            secondaryCard(icon: "film", count: stories.count,
+                            secondaryCard(icon: "film", count: visibleStories.count,
                                           title: "Stories", sub: "Your projects and films")
                         }
                         .buttonStyle(.plain)

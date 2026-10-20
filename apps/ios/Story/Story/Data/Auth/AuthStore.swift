@@ -37,6 +37,13 @@ final class AuthStore: NSObject {
 
     var isSignedIn: Bool { state == .signedIn }
 
+    /// R1 — the active account scope for repositories. `.account(storyUserId)` only when signed in AND the id is
+    /// resolved; otherwise `.anonymous`. Story creation requires `.account`; Moment reads tolerate `.anonymous`.
+    var activeOwner: ActiveOwner {
+        if state == .signedIn, let uid = storyUserId { return .account(uid) }
+        return .anonymous
+    }
+
     // ---- launch restore ------------------------------------------------------------------------------
     func restore() async {
         guard let data = KeychainStore.load(),

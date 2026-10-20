@@ -16,7 +16,7 @@ final class C35FlowTests: XCTestCase {
             for: StoryModel.self, MomentModel.self, AssetModel.self,
                  GeneratedOutputModel.self, LocalIdentityModel.self,
             configurations: config)
-        useCases = StoryUseCases(repository: StoryRepository(context: container.mainContext))
+        useCases = StoryUseCases(repository: StoryRepository(context: container.mainContext, owner: .account("test-acct-A")))
     }
 
     func testCompleteAndReopenStory() throws {

@@ -49,7 +49,10 @@ struct CreativeDirectionView: View {
     ]
 
     private var useCases: StoryUseCases {
-        StoryUseCases(repository: StoryRepository(context: context))
+        // R1: Story creation binds the active account. The Start-a-Story Continue is auth-gated (requireAuthThen)
+        // so by the time resolve() calls createStory, this is `.account(story_user_id)`; an unauthenticated path
+        // is refused by the repository (StoryCreationRequiresAuth) rather than falling back to a `dev` owner.
+        StoryUseCases(repository: StoryRepository(context: context, owner: auth.activeOwner))
     }
 
     var body: some View {

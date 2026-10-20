@@ -24,7 +24,7 @@ final class CaptureAnywherePersistenceTests: XCTestCase {
                  MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
             configurations: config)
-        repo = StoryRepository(context: ctx)
+        repo = StoryRepository(context: ctx, owner: .account("test-acct-A"))
         useCases = StoryUseCases(repository: repo)
     }
 
@@ -104,7 +104,7 @@ final class CaptureAnywherePersistenceTests: XCTestCase {
         do {
             let c1 = try ModelContainer(for: schema, configurations: cfg)
             let ctx1 = c1.mainContext
-            let uc1 = StoryUseCases(repository: StoryRepository(context: ctx1))
+            let uc1 = StoryUseCases(repository: StoryRepository(context: ctx1, owner: .account("test-acct-A")))
             let story = StoryModel(title: "S", intentRawText: "t", intentTheme: "th",
                                    intentTone: "to", intentSummary: "su")
             ctx1.insert(story)

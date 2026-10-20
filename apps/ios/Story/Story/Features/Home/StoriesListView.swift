@@ -6,10 +6,13 @@ import SwiftData
 // existing StoryHomeView unchanged. Extracted from the old HomeView
 // active-Story layout so Home itself stays the two-primary / two-secondary hub.
 struct StoriesListView: View {
+    @Environment(AuthStore.self) private var auth
     @Query private var stories: [StoryModel]
 
+    // R1 account isolation: filter to the active account's Stories (centralized rule). Re-renders on sign-in /
+    // account switch, so a different account never sees the previous account's Stories here.
     private var sortedStories: [StoryModel] {
-        stories.sorted { a, b in
+        stories.visible(to: auth.storyUserId).sorted { a, b in
             if a.status != b.status { return a.status == .active }
             return a.createdAt > b.createdAt
         }

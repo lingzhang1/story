@@ -25,7 +25,7 @@ final class StoryFoundationTests: XCTestCase {
                  GeneratedOutputModel.self, LocalIdentityModel.self,
             configurations: config
         )
-        repo = StoryRepository(context: container.mainContext)
+        repo = StoryRepository(context: container.mainContext, owner: .account("test-acct-A"))
         useCases = StoryUseCases(repository: repo)
     }
 
