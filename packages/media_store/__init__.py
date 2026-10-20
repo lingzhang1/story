@@ -125,7 +125,14 @@ class MediaStore:
     def _s3_c(self):
         if self._s3 is None:
             import boto3
-            self._s3 = boto3.client("s3", region_name=self.cfg.region)
+            from botocore.config import Config
+            # Presigned PUT/upload_part URLs are consumed by a client that STREAMS the body (iOS URLSession /
+            # urllib), so the presign must use UNSIGNED-PAYLOAD SigV4 — otherwise S3 computes a body-hash the
+            # streaming client did not sign and returns SignatureDoesNotMatch (403). Applies to both the
+            # single-PUT and multipart part URLs.
+            self._s3 = boto3.client("s3", region_name=self.cfg.region,
+                                    config=Config(signature_version="s3v4",
+                                                  s3={"payload_signing_enabled": False}))
         return self._s3
 
     # --- read -----------------------------------------------------------------------------------------
