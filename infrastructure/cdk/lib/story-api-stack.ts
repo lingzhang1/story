@@ -186,6 +186,18 @@ export class StoryApiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // R7-E — account-level Moment Understanding (SHARED across Stories; keyed by moment_id). Composite key
+    // (story_user_id HASH, moment_id RANGE) -> a Query lists one account's AU; a wrong owner finds nothing.
+    // Lets Device B RESTORE understanding instead of re-running Asset Understanding (Bedrock). PAY_PER_REQUEST,
+    // RETAIN, no TTL (durable). Pure add, separate from the stories + media tables.
+    const understandingTable = new dynamodb.Table(this, "MomentUnderstandingTable", {
+      tableName: `story-${environment}-understanding`,
+      partitionKey: { name: "story_user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "moment_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // Worker Lambda — DOCKER-FREE zip asset (the sandbox cannot run Docker). scripts/build_worker_asset.sh
     // pre-stages app/ + packages/ + contracts/ + prompts/ + the Linux cp312 pydantic wheels into
     // infrastructure/cdk/.worker-asset (boto3 is in the Lambda runtime). The planner resolves prompts at
@@ -253,6 +265,7 @@ export class StoryApiStack extends cdk.Stack {
     // (no deletion this increment) and NO bucket-level admin. Scoped to the media/* prefix.
     mediaTable.grantReadWriteData(instanceRole);
     storiesTable.grantReadWriteData(instanceRole); // R7: account-owned Story documents RW
+    understandingTable.grantReadWriteData(instanceRole); // R7-E: account-level Moment Understanding RW
     instanceRole.addToPolicy(new iam.PolicyStatement({
       sid: "MediaObjectAccess",
       effect: iam.Effect.ALLOW,
@@ -310,6 +323,7 @@ export class StoryApiStack extends cdk.Stack {
               { name: "STORY_MEDIA_TABLE", value: mediaTable.tableName },
               { name: "STORY_MEDIA_BUCKET", value: mediaBucket.bucketName },
               { name: "STORY_STORIES_TABLE", value: storiesTable.tableName }, // R7
+              { name: "STORY_UNDERSTANDING_TABLE", value: understandingTable.tableName }, // R7-E
               // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },
@@ -558,6 +572,7 @@ export class StoryApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, "Environment", { value: environment });
     new cdk.CfnOutput(this, "EditPlanJobsTableName", { value: jobsTable.tableName });
     new cdk.CfnOutput(this, "StoryDocumentsTableName", { value: storiesTable.tableName });
+    new cdk.CfnOutput(this, "MomentUnderstandingTableName", { value: understandingTable.tableName });
     new cdk.CfnOutput(this, "EditPlanJobsQueueUrl", { value: jobsQueue.queueUrl });
     new cdk.CfnOutput(this, "EditPlanStagingBucketName", { value: stagingBucket.bucketName });
     new cdk.CfnOutput(this, "EditPlanWorkerName", { value: worker.functionName });

@@ -196,3 +196,56 @@ def test_oversized_document_413(ctx):
     r = client.put("/v1/stories/s1", headers=_auth("userA"),
                    json={"base_revision": 0, "mutation_id": "m1", "doc": big})
     assert r.status_code == 413 and r.json()["detail"]["error"] == "story_document_too_large"
+
+
+# --- R7-E understanding API -------------------------------------------------
+import understanding_store as _ustore
+
+class FakeUnderstandingDDB:
+    def __init__(self): self.items = {}
+    @staticmethod
+    def _k(key): return (key["story_user_id"]["S"], key["moment_id"]["S"])
+    def put_item(self, TableName, Item): self.items[(Item["story_user_id"]["S"], Item["moment_id"]["S"])] = Item
+    def get_item(self, TableName, Key):
+        it = self.items.get(self._k(Key)); return {"Item": it} if it else {}
+    def batch_get_item(self, RequestItems):
+        table = list(RequestItems.keys())[0]
+        got = [self.items[self._k(k)] for k in RequestItems[table]["Keys"] if self._k(k) in self.items]
+        return {"Responses": {table: got}}
+
+@pytest.fixture
+def uctx(monkeypatch):
+    monkeypatch.setenv("STORY_ENVIRONMENT", "development")
+    monkeypatch.setenv("STORY_REQUIRE_AUTH", "1")
+    app = create_app()
+    app.state._jwt_verifier_override = FakeVerifier()
+    app.state._identity_store_override = FakeIdentityStore()
+    app.state._understanding_store_override = _ustore.UnderstandingStore(
+        cfg=_ustore.UnderstandingStoreConfig(table="t", region=REGION), ddb=FakeUnderstandingDDB())
+    return TestClient(app)
+
+def _put_u(mid, sha="sha", js='{"ok":1}'):
+    return {"moment_id": mid, "understanding_json": js, "schema_version": "mu/1",
+            "prompt_version": "p", "frame_policy": "f", "content_sha256": sha}
+
+def test_understanding_requires_auth(uctx):
+    assert uctx.put("/v1/understanding", json={"records": [_put_u("m1")]}).status_code == 401
+    assert uctx.post("/v1/understanding/batch-get", json={"moment_ids": ["m1"]}).status_code == 401
+
+def test_understanding_roundtrip_and_isolation(uctx):
+    r = uctx.put("/v1/understanding", headers=_auth("uA"), json={"records": [_put_u("m1", "shaA"), _put_u("m2", "shaB")]})
+    assert r.status_code == 200 and len(r.json()["written"]) == 2
+    g = uctx.post("/v1/understanding/batch-get", headers=_auth("uA"), json={"moment_ids": ["m1", "m2"]})
+    recs = g.json()["understanding"]
+    assert {x["moment_id"] for x in recs} == {"m1", "m2"}
+    assert recs[0]["content_sha256"] in {"shaA", "shaB"}   # provenance carried for reuse gating
+    # Account B sees none of A's understanding.
+    gb = uctx.post("/v1/understanding/batch-get", headers=_auth("uB"), json={"moment_ids": ["m1", "m2"]})
+    assert gb.json()["understanding"] == []
+
+def test_understanding_oversized_413(uctx):
+    big = "x" * (_ustore.MAX_UNDERSTANDING_BYTES + 10)
+    r = uctx.put("/v1/understanding", headers=_auth("uA"),
+                 json={"records": [{"moment_id": "m1", "understanding_json": big, "schema_version": "mu/1",
+                                    "prompt_version": "p", "frame_policy": "f", "content_sha256": "s"}]})
+    assert r.status_code == 413 and r.json()["detail"]["error"] == "understanding_too_large"
