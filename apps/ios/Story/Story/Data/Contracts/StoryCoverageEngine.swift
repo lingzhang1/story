@@ -23,7 +23,6 @@ final class StoryCoverageEngine {
     private let context: ModelContext
     private let service: StoryCoverageV2Computing
     private let schemaVersion = "story_coverage/2"
-    private var recomputing = false
 
     init(context: ModelContext, service: StoryCoverageV2Computing = StoryCoverageV2Service()) {
         self.context = context
@@ -61,26 +60,47 @@ final class StoryCoverageEngine {
 
     /// Recompute Coverage/2 IF stale (or forced). Requires the persisted Guide (DTO + fingerprint).
     /// Returns the coverage in effect after the call. NO model call when zero completed MU exists.
+    ///
+    /// P0: routed through the PROCESS-WIDE CoverageRecomputeGate so view recreation / a burst of AU completions
+    /// coalesce to AT MOST ONE active compute per Story (+ at most one pending replacement at the latest
+    /// fingerprint). A same-fingerprint request reuses the in-flight/cached work instead of enqueuing a new
+    /// Bedrock job — this is the storm fix.
     @discardableResult
     func recomputeIfNeeded(for story: StoryModel,
                            guide: StoryGuideDTO,
                            guideFingerprint: String,
                            force: Bool = false) async -> StoryCoverageV2DTO? {
-        if recomputing { return cachedCoverage(for: story.id) }
-
         let inputs = currentInputs(for: story)
         // Zero completed AU (incl. pending-only): the Guide supplies the product content; do NOT call
         // Mapper/Judge merely to invent Coverage. Keep any prior cache; otherwise nil.
-        if inputs.completedMUValues.isEmpty {
-            return cachedCoverage(for: story.id)
-        }
+        if inputs.completedMUValues.isEmpty { return cachedCoverage(for: story.id) }
         if !force && !isStale(for: story, guideFingerprint: guideFingerprint) {
             return cachedCoverage(for: story.id)
         }
+        // The fingerprint that identifies THIS requested computation (inputs + guide). Same fingerprint => same
+        // work; the gate coalesces duplicates and suppresses obsolete results.
+        let fp = Self.sha256("\(inputs.sourceFingerprint)#\(inputs.intentFingerprint)#\(guideFingerprint)")
+        let storyId = story.id
+        return await CoverageRecomputeGate.shared.run(storyId: storyId, fingerprint: fp) { [weak self] in
+            guard let self else { return nil }
+            return await self.performCompute(for: story, guide: guide, guideFingerprint: guideFingerprint,
+                                             expectedFingerprint: fp)
+        }
+    }
 
-        recomputing = true
-        defer { recomputing = false }
+    /// DEBOUNCED entry for AU-triggered recomputes: a burst of completions schedules a single trailing compute
+    /// (~800ms) instead of one per completion. Safe to call on every AU completion / view refresh.
+    func scheduleRecompute(for story: StoryModel, guide: StoryGuideDTO, guideFingerprint: String) {
+        CoverageRecomputeGate.shared.debounce(storyId: story.id) { [weak self] in
+            _ = await self?.recomputeIfNeeded(for: story, guide: guide, guideFingerprint: guideFingerprint)
+        }
+    }
 
+    /// The actual Bedrock compute + cache, guarded against OBSOLETE overwrite: if the inputs changed while the
+    /// request was in flight (the fingerprint no longer matches), the stale result is DISCARDED (never
+    /// overwrites current coverage) and nil is returned so the gate runs the pending-latest replacement.
+    private func performCompute(for story: StoryModel, guide: StoryGuideDTO, guideFingerprint: String,
+                                expectedFingerprint: String) async -> StoryCoverageV2DTO? {
         let intentDTO = CreativeIntentContractDTO(from: story)
         let intentValue: JSONValue = {
             guard let d = try? StoryContractCoding.encoder().encode(intentDTO) else { return .object([:]) }
@@ -92,15 +112,19 @@ final class StoryCoverageEngine {
         }()
         var scope: [String: JSONValue] = [:]
         if let dur = story.intentTargetDurationSeconds { scope["target_duration_seconds"] = .number(dur) }
-
+        let inputsAtStart = currentInputs(for: story)
         let request = StoryCoverageV2RequestDTO(
             storyId: story.id, storyGuide: guideValue, storyGuideVersion: guide.schemaVersion,
             creativeIntent: intentValue, scope: .object(scope),
-            momentUnderstandings: inputs.completedMUValues, pendingCount: inputs.pendingCount)
-
+            momentUnderstandings: inputsAtStart.completedMUValues, pendingCount: inputsAtStart.pendingCount)
         do {
             let dto = try await service.compute(request)
-            cache(dto, for: story.id, inputs: inputs, guideFingerprint: guideFingerprint)
+            // OBSOLETE-SKIP: inputs moved on during the call -> do NOT overwrite current coverage with a stale
+            // result. The gate's pending-latest pass will recompute at the new fingerprint.
+            let now = currentInputs(for: story)
+            let nowFp = Self.sha256("\(now.sourceFingerprint)#\(now.intentFingerprint)#\(guideFingerprint)")
+            guard nowFp == expectedFingerprint else { return nil }
+            cache(dto, for: story.id, inputs: now, guideFingerprint: guideFingerprint)
             return dto
         } catch {
             return cachedCoverage(for: story.id)   // KEEP LAST VALID — never fabricate
