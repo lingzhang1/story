@@ -10,6 +10,12 @@ does NOT upload bytes (the client PUTs directly to S3 via presigned URLs — ori
 Runner), does NOT evict local originals, and does NOT delete cloud media (reference-safe deletion is a later
 increment).
 
+UPLOAD STRATEGY (honest, owner clarification): a SINGLE presigned PUT of the whole file. Interruption recovery
+is WHOLE-FILE: an interrupted PUT leaves the record `uploading`, and the client re-initiates (idempotent — same
+record) and re-PUTs the entire file. PART-LEVEL resumable multipart transfer (continue from the last uploaded
+part) is NOT implemented here — it is deferred to R4. Do not read `AbortIncompleteMultipartUpload` on the bucket
+as proof of part-level resume; it is only a cost-hygiene backstop for any future multipart.
+
 Identity: a media record is keyed by (story_user_id, cloud_media_id). `cloud_media_id` is deterministic —
 uuid5(owner + content_sha256) — so a re-initiate of the SAME content by the SAME owner maps to the SAME record
 (idempotent) and never duplicates bytes. Account-scoped S3 keys: media/{story_user_id}/{cloud_media_id}/original.
@@ -40,7 +46,8 @@ TERMINAL_STATES = {STATE_CLOUD_VERIFIED, STATE_UPLOAD_FAILED}
 # upload record only, used by the abort/cleanup sweep, not the verified original.
 UNFINISHED_UPLOAD_TTL_SECONDS = 7 * 24 * 3600
 
-# Presigned URL expiry (bounded; owner Phase 3). Short for download, longer for a large multipart upload.
+# Presigned URL expiry (bounded; owner Phase 3). Short for download, longer for a whole-file upload PUT (R4 will
+# add part-level multipart; this increment is a single presigned PUT with whole-file retry).
 DOWNLOAD_URL_TTL_SECONDS = 15 * 60
 UPLOAD_URL_TTL_SECONDS = 60 * 60
 

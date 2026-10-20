@@ -228,7 +228,8 @@ def test_08_duplicate_completion_idempotent(ctx):
     assert r1.json()["state"] == r2.json()["state"] == "cloud_verified"
 
 
-# 9 multipart interruption + resume (re-initiate recovers same record; still completable after upload)
+# 9 interruption + whole-file retry (re-initiate recovers same record; still completable after re-upload).
+#   NOTE: this is WHOLE-FILE retry, not part-level multipart resume (that is R4).
 def test_09_interruption_resume(ctx):
     client, s3, _ = ctx
     cmid = _initiate(client, "alice").json()["cloud_media_id"]
