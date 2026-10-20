@@ -60,7 +60,6 @@ struct MomentsLibraryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                header
                 if moments.isEmpty {
                     emptyState
                 } else {
@@ -69,7 +68,7 @@ struct MomentsLibraryView: View {
                             tile(m)
                         }
                     }
-                    .padding(.top, 18)
+                    .padding(.top, 8)
                     Text(hintText)
                         .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
                         .padding(.top, 14)
@@ -79,6 +78,13 @@ struct MomentsLibraryView: View {
             .padding(.horizontal, 20)
         }
         .storyBackground()
+        // Pin the header (title + Auto Backup + Select) so the actions stay reachable while scrolling the grid.
+        .safeAreaInset(edge: .top) {
+            header
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                .background(.ultraThinMaterial)
+        }
         .swipeBackToDismiss(dismiss)
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom) { if selecting && !selected.isEmpty { selectionBar } }
