@@ -20,6 +20,7 @@ final class MediaUploadQueueTests: XCTestCase {
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
                  MyMusicAssetModel.self, PendingOperationModel.self,
                  MusicPlanCacheModel.self, DurationRecCacheModel.self, MediaUploadJobModel.self,
+                 AutoBackupSettingModel.self,
             configurations: config)
     }
 
@@ -40,8 +41,10 @@ final class MediaUploadQueueTests: XCTestCase {
 
     private func queue(active: @escaping () -> String?,
                        token: @escaping (String) async -> String? = { _ in "tok" },
-                       service: MediaUploading) -> MediaUploadQueue {
-        MediaUploadQueue(context: ctx, service: service, activeOwner: active, tokenForOwner: token)
+                       service: MediaUploading,
+                       networkAllows: @escaping (String) -> Bool = { _ in true }) -> MediaUploadQueue {
+        MediaUploadQueue(context: ctx, service: service, activeOwner: active,
+                         tokenForOwner: token, networkAllows: networkAllows)
     }
 
     // MARK: - enroll = local reservation (not cloud ownership)
@@ -139,6 +142,73 @@ final class MediaUploadQueueTests: XCTestCase {
         q.cancel(job: job)
         XCTAssertEqual(job.state, .cancelled)
         XCTAssertNil(m.ownerAccountId, "cancel releases the unverified reservation back to shared local-only")
+    }
+
+    // MARK: - R4-A.1 Auto Backup
+
+    func testAutoEnroll_offByDefault_noEnrollment() throws {
+        let m = try makeLocalMoment()
+        let q = queue(active: { "A" }, service: FakeService())
+        XCTAssertNil(q.autoEnrollIfEnabled(moment: m), "Auto Backup is OFF by default")
+        XCTAssertNil(m.ownerAccountId)
+        XCTAssertEqual((try ctx.fetch(FetchDescriptor<MediaUploadJobModel>())).count, 0)
+    }
+
+    func testAutoEnroll_onEnrollsNewMoment() throws {
+        AutoBackupStore(context: ctx).setEnabled(true, for: "A")
+        let m = try makeLocalMoment()
+        let q = queue(active: { "A" }, service: FakeService())
+        XCTAssertNotNil(q.autoEnrollIfEnabled(moment: m), "Auto Backup ON -> new Moment auto-enrolled")
+        XCTAssertEqual(m.ownerAccountId, "A")
+    }
+
+    func testAutoEnroll_signedOut_noEnrollment() throws {
+        AutoBackupStore(context: ctx).setEnabled(true, for: "A")
+        let m = try makeLocalMoment()
+        let q = queue(active: { nil }, service: FakeService())
+        XCTAssertNil(q.autoEnrollIfEnabled(moment: m))
+    }
+
+    func testWiFiOnlyGate_holdsUploadOnDisallowedNetwork() async throws {
+        AutoBackupStore(context: ctx).setEnabled(true, for: "A")   // Wi-Fi only (default)
+        let m = try makeLocalMoment()
+        let svc = FakeService()
+        // networkAllows == false simulates being on cellular with Wi-Fi-only preference.
+        let q = queue(active: { "A" }, service: svc, networkAllows: { _ in false })
+        _ = q.enroll(moment: m)
+        await q.drain()
+        let job = try ctx.fetch(FetchDescriptor<MediaUploadJobModel>()).first!
+        XCTAssertEqual(job.state, .pending, "held until an allowed network")
+        XCTAssertEqual(svc.initiateCount, 0, "no upload on a disallowed network")
+        XCTAssertEqual(m.cloudStateRaw, "local_only")
+    }
+
+    func testWiFiGate_allowsWhenPermitted() async throws {
+        AutoBackupStore(context: ctx).setEnabled(true, for: "A")
+        let m = try makeLocalMoment()
+        let q = queue(active: { "A" }, service: FakeService(), networkAllows: { _ in true })
+        _ = q.enroll(moment: m)
+        await q.drain()
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MediaUploadJobModel>()).first!.state, .verified)
+    }
+
+    func testAutoBackupPreference_isAccountScoped() throws {
+        let s = AutoBackupStore(context: ctx)
+        s.setEnabled(true, for: "A")
+        XCTAssertTrue(s.isEnabled(for: "A"))
+        XCTAssertFalse(s.isEnabled(for: "B"), "preference is per-account, not device-global")
+        s.setAllowCellular(true, for: "A")
+        XCTAssertTrue(s.allowCellular(for: "A"))
+        XCTAssertFalse(s.allowCellular(for: "B"))
+    }
+
+    func testAutoEnroll_doesNotClaimAnotherAccountsMoment() throws {
+        AutoBackupStore(context: ctx).setEnabled(true, for: "A")
+        let m = try makeLocalMoment()
+        m.ownerAccountId = "B"; try ctx.save()   // already B's
+        let q = queue(active: { "A" }, service: FakeService())
+        XCTAssertNil(q.autoEnrollIfEnabled(moment: m), "never claims an existing cloud/other-account Moment")
+        XCTAssertEqual(m.ownerAccountId, "B")
     }
 }
 

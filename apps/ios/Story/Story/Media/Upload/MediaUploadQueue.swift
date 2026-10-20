@@ -16,6 +16,11 @@ import SwiftData
 // hashing + upload happen in drain().
 @MainActor
 final class MediaUploadQueue {
+    /// R4-A.1 — set once by StoryApp to a closure bound to the live AuthStore + container context. Capture/
+    /// import sites (which don't hold AuthStore) call this fire-and-forget AFTER persisting a new Moment; it
+    /// auto-enrolls + drains ONLY when the active account has Auto Backup ON. Default no-op (safe before setup).
+    nonisolated(unsafe) static var sharedAutoEnroll: (MomentModel) -> Void = { _ in }
+
     private let context: ModelContext
     private let service: MediaUploading
     /// Returns a VALID access token for a SPECIFIC owner, or nil if that owner is not the active signed-in
@@ -23,6 +28,10 @@ final class MediaUploadQueue {
     private let tokenForOwner: (String) async -> String?
     /// The currently-active canonical account id (nil = signed out). Used to scope scheduling.
     private let activeOwner: () -> String?
+    /// Whether the CURRENT network path permits an upload for `owner` (consults that account's cellular pref +
+    /// reachability). Default wires AutoBackupStore + NetworkReachability; injectable for tests. A nil return
+    /// from the default means "hold" (e.g. Wi-Fi-only and currently on cellular) — the job stays PENDING.
+    private let networkAllows: (String) -> Bool
 
     private let baseBackoff: TimeInterval = 5
     private let maxBackoff: TimeInterval = 600
@@ -31,11 +40,16 @@ final class MediaUploadQueue {
     init(context: ModelContext,
          service: MediaUploading = MediaUploadService(),
          activeOwner: @escaping () -> String?,
-         tokenForOwner: @escaping (String) async -> String?) {
+         tokenForOwner: @escaping (String) async -> String?,
+         networkAllows: ((String) -> Bool)? = nil) {
         self.context = context
         self.service = service
         self.activeOwner = activeOwner
         self.tokenForOwner = tokenForOwner
+        self.networkAllows = networkAllows ?? { owner in
+            let allowCellular = AutoBackupStore(context: context).allowCellular(for: owner)
+            return NetworkReachability.shared.uploadAllowed(allowCellular: allowCellular)
+        }
     }
 
     // MARK: - Enroll (explicit; reserves the Moment to the active account)
@@ -70,6 +84,17 @@ final class MediaUploadQueue {
         context.insert(job)
         try? context.save()
         return job
+    }
+
+    /// R4-A.1 — auto-enroll a NEWLY captured/imported Moment IFF the active account has Auto Backup ON (req 6).
+    /// A no-op when signed out or the preference is OFF (default). Reuses `enroll` (same reservation guards), so
+    /// it never claims a Moment already owned by another account and never blocks capture. Call AFTER the Moment
+    /// is persisted, fire-and-forget. Returns the job if enrolled.
+    @discardableResult
+    func autoEnrollIfEnabled(moment: MomentModel) -> MediaUploadJobModel? {
+        guard let owner = activeOwner() else { return nil }
+        guard AutoBackupStore(context: context).isEnabled(for: owner) else { return nil }
+        return enroll(moment: moment)
     }
 
     // MARK: - Launch recovery
@@ -113,6 +138,9 @@ final class MediaUploadQueue {
         let owner = job.ownerAccountId
         // Rule 9: get a token for THIS job's owner; nil if that owner is not the active account -> defer.
         guard let token = await tokenForOwner(owner) else { return }
+        // R4-A.1 Wi-Fi gate: if the current path is not permitted for this account (e.g. Wi-Fi-only and on
+        // cellular), HOLD — leave the job PENDING, burn no retry. A later drain (Wi-Fi/foreground) picks it up.
+        guard networkAllows(owner) else { return }
 
         let url = MediaStore.shared.absoluteURL(for: job.relativeMediaPath)
         guard MediaStore.shared.fileExists(relativePath: job.relativeMediaPath) else {

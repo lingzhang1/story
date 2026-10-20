@@ -44,6 +44,8 @@ struct MomentsLibraryView: View {
     @State private var selected = Set<UUID>()
     @State private var pendingDelete = false
     @State private var confirmBackup = false   // R4-A: first-use cloud-backup disclosure
+    @State private var showBackupSettings = false   // R4-A.1: Auto Backup settings sheet
+    @State private var uploadJobState: [UUID: MediaUploadJobModel.State] = [:]   // R4-A.1: momentId -> upload state (badges)
     @State private var setupSelection: MomentSelection?   // Phase 3: selected → Start-a-Story setup
     /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
     @State private var alreadyInStory = Set<UUID>()
@@ -100,21 +102,41 @@ struct MomentsLibraryView: View {
             Text("The original video is uploaded privately to your YoTale account so it's safe if you lose this phone. It stays on this device too — nothing is deleted. Only you can access it; it won't appear for another account on this phone.")
         }
         .onAppear(perform: reload)
+        .sheet(isPresented: $showBackupSettings) {
+            AutoBackupSettingsView(onBackUpExisting: { backUpAllExistingLocalOnly() })
+                .environment(auth)
+        }
     }
 
-    /// R4-A: enroll the selected local-only Moments for cloud backup under the active account, then kick the
-    /// queue. Non-blocking; originals are preserved. Already-owned/other-account Moments are skipped by enroll.
-    private func backUpSelection() {
-        let picked = moments.filter { selected.contains($0.id) }
-        let queue = MediaUploadQueue(
+    /// R4-A.1: build an upload queue bound to the live AuthStore (owner-scoped token; Wi-Fi/cellular gate from
+    /// the account's preference — the default networkAllows wiring).
+    private func makeQueue() -> MediaUploadQueue {
+        MediaUploadQueue(
             context: context,
             activeOwner: { [weak auth] in auth?.storyUserId },
             tokenForOwner: { [weak auth] owner in
                 guard let auth, auth.storyUserId == owner else { return nil }
                 return await auth.validAccessToken()
             })
+    }
+
+    /// R4-A: enroll the selected local-only Moments for cloud backup under the active account, then kick the
+    /// queue. Non-blocking; originals are preserved. Already-owned/other-account Moments are skipped by enroll.
+    private func backUpSelection() {
+        let picked = moments.filter { selected.contains($0.id) }
+        let queue = makeQueue()
         for m in picked { queue.enroll(moment: m) }
         selected.removeAll(); selecting = false
+        Task { await queue.drain(); reload() }
+    }
+
+    /// R4-A.1 Part 3: back up ALL existing local-only Moments visible to the active account (the explicit
+    /// "back up existing too" choice). enroll() skips any Moment already owned by another account, so this
+    /// never claims content it shouldn't. Non-blocking; originals preserved.
+    private func backUpAllExistingLocalOnly() {
+        let queue = makeQueue()
+        let localOnly = moments.filter { $0.isLocalOnly }
+        for m in localOnly { queue.enroll(moment: m) }
         Task { await queue.drain(); reload() }
     }
 
@@ -132,6 +154,14 @@ struct MomentsLibraryView: View {
                     .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
             }
             Spacer()
+            // R4-A.1: Auto Backup settings entry (home library + signed in).
+            if auth.isSignedIn, libraryContext == .home {
+                Button { showBackupSettings = true } label: {
+                    Image(systemName: "icloud").font(.system(size: 18))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
+                        .frame(width: 40, height: 40).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Auto Backup settings")
+            }
             if !moments.isEmpty && libraryContext.allowsSelection {
                 Button(selecting ? "Done" : "Select") {
                     withAnimation { selecting.toggle(); if !selecting { selected.removeAll() } }
@@ -218,50 +248,89 @@ struct MomentsLibraryView: View {
                             .padding(5)
                     }
                 }
+                .overlay(alignment: .bottomLeading) { backupBadge(for: m) }
+        }
+    }
+
+    /// R4-A.1 Part 4 — an UNOBTRUSIVE per-tile backup-state chip (icon only, no intrusive banner). Derived
+    /// from the Moment's cloud state + any live upload job for the active account.
+    @ViewBuilder
+    private func backupBadge(for m: MomentModel) -> some View {
+        if let (icon, tint) = backupBadgeStyle(for: m) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+                .padding(4)
+                .background(StoryTheme.ink.opacity(0.55), in: Circle())
+                .padding(5)
+        }
+    }
+
+    /// (sfSymbol, tint) for the Moment's backup state, or nil for a plain local-only Moment (no clutter).
+    private func backupBadgeStyle(for m: MomentModel) -> (String, Color)? {
+        if m.cloudStateRaw == "cloud_verified" { return ("checkmark.icloud.fill", StoryTheme.gold) }
+        switch uploadJobState[m.id] {
+        case .running:  return ("arrow.up.circle", StoryTheme.cream.opacity(0.9))   // Uploading
+        case .pending:  return ("clock", StoryTheme.cream.opacity(0.7))             // Waiting (Wi-Fi/queued)
+        case .failed:   return ("exclamationmark.icloud", .red.opacity(0.9))        // Backup failed
+        default:        return nil                                                  // Saved on this iPhone (plain)
         }
     }
 
     // MARK: - Selection bar (context-specific primary action)
 
     private var selectionBar: some View {
-        HStack(spacing: 12) {
+        Group {
             switch libraryContext {
-            case .home:
-                // Compact secondary actions (icon-only, fixed width) so three controls fit without crowding;
-                // Create Story stays the full-width primary.
-                Button(role: .destructive) { pendingDelete = true } label: {
-                    Image(systemName: "trash").font(.system(size: 17, weight: .medium))
-                        .frame(width: 52, height: 46)
-                        .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.2), lineWidth: 1.5))
-                }.buttonStyle(.plain).foregroundStyle(StoryTheme.cream.opacity(0.75))
-                    .accessibilityLabel("Delete \(selected.count) moments")
-                // R4-A: explicit, user-controlled cloud backup (signed-in only). Icon + count; first use shows
-                // a disclosure. Never auto-enrolls; capture is never blocked.
-                if auth.isSignedIn {
-                    Button { confirmBackup = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "icloud.and.arrow.up").font(.system(size: 16, weight: .medium))
-                            Text("\(selected.count)").font(StoryTheme.body(14))
-                        }
-                        .frame(minWidth: 64).frame(height: 46).padding(.horizontal, 8)
-                        .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.6), lineWidth: 1.5))
-                    }.buttonStyle(.plain).foregroundStyle(StoryTheme.gold)
-                        .accessibilityLabel("Back up \(selected.count) moments")
-                }
-                Button { createStoryFromSelection() } label: {
-                    Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).frame(height: 46)
-                        .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
-                }.buttonStyle(.plain)
+            case .home:      homeSelectionBar
             case .story:
                 Button { addSelectionToStory() } label: {
                     Text("Add to Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
                         .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
                 }.buttonStyle(.plain)
+                .padding(.horizontal, 20).padding(.vertical, 10)
+                .background(.ultraThinMaterial)
             case .recentBrowse:
                 EmptyView()
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 10)
+    }
+
+    // R4-A.1 — clear action hierarchy (owner mockup): a header count, Create Story as the full-width PRIMARY
+    // on its own row, then a secondary row with Back Up (left) and a low-prominence destructive Delete (right).
+    // Lives in a safe-area inset (no grid overlap); wraps cleanly on small screens.
+    private var homeSelectionBar: some View {
+        VStack(spacing: 12) {
+            Text("\(selected.count) Moment\(selected.count == 1 ? "" : "s") selected")
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { createStoryFromSelection() } label: {
+                Label("Create Story (\(selected.count))", systemImage: "film")
+                    .font(StoryTheme.display(16))
+                    .frame(maxWidth: .infinity).frame(height: 50)
+                    .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
+            }.buttonStyle(.plain)
+
+            HStack {
+                // Secondary: Back Up (signed-in only).
+                if auth.isSignedIn {
+                    Button { confirmBackup = true } label: {
+                        Label("Back Up (\(selected.count))", systemImage: "icloud.and.arrow.up")
+                            .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.gold)
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel("Back up \(selected.count) moments")
+                }
+                Spacer()
+                // Destructive, low prominence (text + icon, no fill).
+                Button(role: .destructive) { pendingDelete = true } label: {
+                    Label("Delete", systemImage: "trash")
+                        .font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream.opacity(0.6))
+                }.buttonStyle(.plain)
+                    .accessibilityLabel("Delete \(selected.count) moments")
+            }
+        }
+        .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
         .background(.ultraThinMaterial)
     }
 
@@ -284,6 +353,14 @@ struct MomentsLibraryView: View {
             alreadyInStory = Set(s.momentLinks.compactMap { $0.moment?.id })
         } else {
             alreadyInStory = []
+        }
+        // R4-A.1: load this account's upload-job states for the per-tile badges.
+        if let owner = auth.storyUserId {
+            let jobs = (try? context.fetch(FetchDescriptor<MediaUploadJobModel>(
+                predicate: #Predicate { $0.ownerAccountId == owner }))) ?? []
+            uploadJobState = Dictionary(jobs.map { ($0.momentId, $0.state) }, uniquingKeysWith: { a, _ in a })
+        } else {
+            uploadJobState = [:]
         }
     }
 

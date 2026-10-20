@@ -24,7 +24,8 @@ struct StoryApp: App {
             PendingOperationModel.self,
             MusicPlanCacheModel.self,
             DurationRecCacheModel.self,
-            MediaUploadJobModel.self   // R4-A: persistent cloud-upload queue
+            MediaUploadJobModel.self,  // R4-A: persistent cloud-upload queue
+            AutoBackupSettingModel.self   // R4-A.1: account-scoped Auto Backup preference
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -74,6 +75,15 @@ struct StoryApp: App {
                     // only when this returns true. In dev optional-auth a restored/real session reports true;
                     // signed out, AU jobs stay PENDING and resume on sign-in (no model call meanwhile).
                     AssetUnderstandingQueue.sharedIsAuthed = { [weak auth] in auth?.isSignedIn ?? false }
+                    // R4-A.1 — the capture/import sites call this after persisting a new Moment; it auto-enrolls
+                    // + drains ONLY when the active account has Auto Backup ON (no-op otherwise). Bound here to
+                    // the live AuthStore so capture code needn't hold it.
+                    MediaUploadQueue.sharedAutoEnroll = { moment in
+                        let q = makeUploadQueue()
+                        if q.autoEnrollIfEnabled(moment: moment) != nil {
+                            Task { await q.drain() }
+                        }
+                    }
                     // Restore a prior session (silent refresh if the access token expired) and install the
                     // first-sign-in ADOPTION hook: stamp the resolved account onto the device's LocalIdentity
                     // so existing anonymous Stories/Moments are adopted with ZERO data movement. Never deletes

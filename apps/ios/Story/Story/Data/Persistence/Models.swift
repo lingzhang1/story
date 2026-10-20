@@ -1076,3 +1076,28 @@ final class MediaUploadJobModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// R4-A.1 — Auto Backup preference, ACCOUNT-SCOPED (owner: not a device-global toggle). One row per
+// canonical story_user_id (upsert). Default OFF (a missing row = disabled). `enabled` gates automatic
+// enrollment of NEW captures/imports under that account; `allowCellular` opts into cellular uploads
+// (default false = Wi-Fi only). `existingChoiceMade` records that the one-time "back up existing vs only new"
+// decision was answered, so we never silently claim the shared local library and never re-ask.
+@Model
+final class AutoBackupSettingModel {
+    @Attribute(.unique) var accountId: String   // canonical story_user_id this preference belongs to
+    var enabled: Bool = false
+    var allowCellular: Bool = false             // default: Wi-Fi only
+    var existingChoiceMade: Bool = false        // the Part-3 one-time existing-Moments decision was made
+    var updatedAt: Date = Date.now
+
+    init(accountId: String, enabled: Bool = false, allowCellular: Bool = false,
+         existingChoiceMade: Bool = false, updatedAt: Date = Date.now) {
+        self.accountId = accountId
+        self.enabled = enabled
+        self.allowCellular = allowCellular
+        self.existingChoiceMade = existingChoiceMade
+        self.updatedAt = updatedAt
+    }
+}
