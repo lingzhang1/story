@@ -43,6 +43,9 @@ class _DDB:
         if ConditionExpression and it.get("state", {}).get("S") != ExpressionAttributeValues[":uploading"]["S"]:
             raise Exception("ConditionalCheckFailedException")
         it["state"] = ExpressionAttributeValues[":v"]; it["verified_at"] = ExpressionAttributeValues[":t"]
+        # Reflect the audit columns the real store now persists, so tests can assert them.
+        if ":ck" in ExpressionAttributeValues: it["checksum_sha256"] = ExpressionAttributeValues[":ck"]
+        if ":kind" in ExpressionAttributeValues: it["checksum_kind"] = ExpressionAttributeValues[":kind"]
     def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues):
         o = ExpressionAttributeValues[":o"]["S"]
         return {"Items": [v for (ow, _), v in self.items.items() if ow == o]}
@@ -74,6 +77,9 @@ def test_initiate_then_verify_happy_path():
     s._s3.put(rec["s3_key"], 10, sha)       # device uploaded the correct bytes
     out = s.complete_upload(owner="o1", cloud_media_id=rec["cloud_media_id"])
     assert out["state"] == m.STATE_CLOUD_VERIFIED and out["verified_at"] > 0
+    # R4-B audit: the VERIFIED full-file checksum is persisted, tagged as a whole-file digest.
+    assert out["checksum_sha256"] == m._sha256_hex_to_b64(sha)
+    assert out["checksum_kind"] == "sha256"
 
 
 def test_verify_rejects_bad_checksum_and_size_and_missing():
@@ -188,6 +194,10 @@ def test_multipart_happy_path_verifies_on_composite_and_size():
     s3.put_part(uid, 1, p1, shas[0]); s3.put_part(uid, 2, p2, shas[1])
     out = s.complete_multipart(owner="o1", cloud_media_id=rec["cloud_media_id"])
     assert out["state"] == m.STATE_CLOUD_VERIFIED
+    # R4-B audit: the VERIFIED composite checksum is persisted and tagged so it's NEVER read as a full-file sha.
+    assert out["checksum_sha256"] == m._composite_checksum(shas)
+    assert out["checksum_kind"] == "sha256-composite"
+    assert out["verified_at"] > 0
 
 
 def test_multipart_missing_part_rejected():
