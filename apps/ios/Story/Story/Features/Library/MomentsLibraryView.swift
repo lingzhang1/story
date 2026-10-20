@@ -332,7 +332,11 @@ struct MomentsLibraryView: View {
         case .running:  return ("arrow.up.circle", StoryTheme.cream.opacity(0.9))   // Uploading
         case .pending:  return ("clock", StoryTheme.cream.opacity(0.7))             // Waiting (Wi-Fi/queued)
         case .failed:   return ("exclamationmark.icloud", .red.opacity(0.9))        // Backup failed
-        default:        return nil                                                  // Saved on this iPhone (plain)
+        case .cancelled, .verified, .none:
+            // Not enrolled / no live job -> NOT backed up yet. Show an explicit dim cloud-slash so every
+            // tile states its backup status at a glance (owner: need to see uploaded-or-not for every video).
+            // (`.verified` job with a non-verified cloud state is treated as not-yet-confirmed.)
+            return ("icloud.slash", StoryTheme.cream.opacity(0.45))                 // Not backed up (local only)
         }
     }
 
