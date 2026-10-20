@@ -103,10 +103,11 @@ final class CloudHydrationGate {
         let rows = (try? context.fetch(FetchDescriptor<StorySyncJobModel>(
             predicate: #Predicate { $0.hydrationPending == true }))) ?? []
         for r in rows {
-            hydratingStories.insert(r.storyId)
+            let sid = r.storyId   // capture a plain UUID — a #Predicate cannot reference another model's property
+            hydratingStories.insert(sid)
             // Also hold the Story's Moments so AU does not fire before the understanding restore.
             if let s = (try? context.fetch(FetchDescriptor<StoryModel>(
-                predicate: #Predicate { $0.id == r.storyId })))?.first {
+                predicate: #Predicate { $0.id == sid })))?.first {
                 for m in s.moments { hydratingMoments.insert(m.id) }
             }
         }
