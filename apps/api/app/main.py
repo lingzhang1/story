@@ -76,6 +76,7 @@ import edit_planner as _edit_planner_mod
 import edit_plan_jobs as _jobs
 import media_store as _media  # R2/R3: account-owned cloud media ownership + presigned upload/download
 import story_store as _stories  # R7: account-owned Story document sync (optimistic concurrency)
+import understanding_store as _understanding  # R7-E: account-level Moment Understanding sync
 
 
 def _edit_planner_prompt_version() -> str:
@@ -216,6 +217,28 @@ class StoryOutputBackupRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     cloud_media_id: str = Field(..., min_length=1)
+
+
+class UnderstandingRecord(BaseModel):
+    """One Moment Understanding record for batch PUT (R7-E)."""
+    model_config = ConfigDict(extra="forbid")
+    moment_id: str = Field(..., min_length=1)
+    understanding_json: str = Field(..., min_length=1)
+    schema_version: str = Field(..., min_length=1)
+    prompt_version: str = Field(default="")
+    frame_policy: str = Field(default="")
+    content_sha256: str = Field(default="")   # the Moment's media sha; reuse on B gated on an exact match
+    model_id: str = Field(default="")
+
+
+class UnderstandingPutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    records: list[UnderstandingRecord] = Field(..., min_length=1, max_length=200)
+
+
+class UnderstandingGetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    moment_ids: list[str] = Field(..., min_length=1, max_length=400)
 
 
 class StoryCoverageRequest(BaseModel):
@@ -576,6 +599,40 @@ def create_app() -> FastAPI:
                                 detail={"error": "cloud_media_not_verified", "unverified": unverified})
         return {"story_id": story_id, "output_id": output_id,
                 "cloud_media_id": body.cloud_media_id, "backed_up": True}
+
+    # ========================================================================================================
+    # R7-E — account-level Moment Understanding sync (shared across Stories; keyed by moment_id). require_user,
+    # account-scoped. Lets Device B RESTORE understanding instead of re-running Asset Understanding (Bedrock).
+    # ========================================================================================================
+    def _understanding_store() -> "_understanding.UnderstandingStore":
+        ov = getattr(app.state, "_understanding_store_override", None)
+        return ov if ov is not None else _understanding.UnderstandingStore()
+
+    @app.post("/v1/understanding/batch-get", status_code=200)
+    def understanding_batch_get(body: UnderstandingGetRequest, principal: Principal = Depends(require_user)):
+        """Return the caller's own understanding records for the given moment_ids (account-scoped; a wrong
+        owner finds nothing). POST (not GET) so a large moment_id list travels in the body, not the URL."""
+        recs = _understanding_store().get_many(principal.story_user_id, body.moment_ids)
+        return {"understanding": recs}
+
+    @app.put("/v1/understanding", status_code=200)
+    def understanding_put(body: UnderstandingPutRequest, principal: Principal = Depends(require_user)):
+        """Batch upsert the caller's Moment Understanding. Idempotent; explicit 413 on an oversized record
+        (never truncated — a huge understanding externalizes to S3 ai_artifact at the client, future)."""
+        store = _understanding_store()
+        results = []
+        for r in body.records:
+            try:
+                out = store.put(owner=principal.story_user_id, moment_id=r.moment_id,
+                                understanding_json=r.understanding_json, schema_version=r.schema_version,
+                                prompt_version=r.prompt_version, frame_policy=r.frame_policy,
+                                content_sha256=r.content_sha256, model_id=r.model_id)
+                results.append(out)
+            except _understanding.UnderstandingTooLarge as e:
+                raise HTTPException(status_code=413,
+                                    detail={"error": "understanding_too_large", "moment_id": r.moment_id,
+                                            "size": e.size, "max": _understanding.MAX_UNDERSTANDING_BYTES})
+        return {"written": results}
 
     # ---- R4-B: large-file MULTIPART (all require_user; account-scoped; no bytes via App Runner) -----
     @app.post("/v1/media/multipart/initiate", status_code=200)
