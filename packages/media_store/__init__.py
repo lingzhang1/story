@@ -219,11 +219,16 @@ class MediaStore:
             self._ddb_c().update_item(
                 TableName=self.cfg.table,
                 Key={"story_user_id": {"S": owner}, "cloud_media_id": {"S": cloud_media_id}},
-                UpdateExpression="SET #s = :v, verified_at = :t, updated_at = :t",
+                UpdateExpression=("SET #s = :v, verified_at = :t, updated_at = :t, "
+                                  "checksum_sha256 = :ck, checksum_kind = :kind"),
                 ConditionExpression="#s = :uploading",   # no backward/forward skip; only uploading -> verified
                 ExpressionAttributeNames={"#s": "state"},
                 ExpressionAttributeValues={
                     ":v": {"S": STATE_CLOUD_VERIFIED}, ":t": {"N": str(now)},
+                    # Persist the checksum that was ACTUALLY verified (durable audit). Single-PUT -> the
+                    # full-file sha256, base64. checksum_kind tells a reader this is a whole-file digest,
+                    # so a composite is never mistaken for one.
+                    ":ck": {"S": actual_sha_b64}, ":kind": {"S": "sha256"},
                     ":uploading": {"S": STATE_UPLOADING}})
         except Exception as e:
             if self._is_conditional(e):
@@ -395,11 +400,15 @@ class MediaStore:
             self._ddb_c().update_item(
                 TableName=self.cfg.table,
                 Key={"story_user_id": {"S": owner}, "cloud_media_id": {"S": cloud_media_id}},
-                UpdateExpression="SET #s = :v, verified_at = :t, updated_at = :t",
+                UpdateExpression=("SET #s = :v, verified_at = :t, updated_at = :t, "
+                                  "checksum_sha256 = :ck, checksum_kind = :kind"),
                 ConditionExpression="#s = :uploading",
                 ExpressionAttributeNames={"#s": "state"},
                 ExpressionAttributeValues={
                     ":v": {"S": STATE_CLOUD_VERIFIED}, ":t": {"N": str(now)},
+                    # Persist the COMPOSITE checksum that was verified. checksum_kind marks it 'sha256-composite'
+                    # (base64(sha256(concat(part digests)))-N), so a reader NEVER treats it as a full-file sha256.
+                    ":ck": {"S": actual_composite}, ":kind": {"S": "sha256-composite"},
                     ":uploading": {"S": STATE_UPLOADING}})
         except Exception as e:
             if self._is_conditional(e):
