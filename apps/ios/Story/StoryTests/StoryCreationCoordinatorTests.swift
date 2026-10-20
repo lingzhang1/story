@@ -46,9 +46,10 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     /// the coordinator reaches .completed/.failed without any network. `.transport` throws so the poll surfaces
     /// a transport error (used by the 503/retry test).
     private final class FakeJobClient: EditPlanJobClienting {
-        enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport }
+        enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport, staleThenOk(EditPlanV2) }
         var behavior: Behavior
         private(set) var submitCount = 0
+        private(set) var pollCount = 0
         private(set) var lastRequest: EditPlanRequestDTO?
         init(_ b: Behavior) { behavior = b }
 
@@ -57,13 +58,14 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                     critiqueRevision: Bool) async throws -> String {
             submitCount += 1
             lastRequest = request
-            return "fake-job-\(operationId)"
+            return "fake-job-\(operationId)-\(submitCount)"
         }
 
         func pollUntilTerminal(jobId: String, maxSeconds: Int,
                                shouldCancel: @MainActor () -> Bool,
                                onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState {
             if await shouldCancel() { throw CancellationError() }
+            pollCount += 1
             switch behavior {
             case .ok(let p):
                 return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
@@ -76,6 +78,11 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                         failure: .providerError, failureDetail: "unavailable", diagnostics: nil)
             case .throwTransport:
                 throw EditPlanJobError.transport(URLError(.timedOut))
+            case .staleThenOk(let p):
+                // First poll (the REUSED stale job) 404s; after the coordinator resubmits, the next poll ok's.
+                if pollCount == 1 { throw EditPlanJobError.badStatus(404) }
+                return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
+                                        failure: nil, failureDetail: nil, diagnostics: nil)
             }
         }
 
@@ -205,6 +212,32 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         // Persisted onto the Story and status unchanged (Create != Complete).
         XCTAssertTrue(s.generatedOutputs.contains { $0.id == output.id })
         XCTAssertEqual(s.status, .active)
+    }
+
+    // A STALE persisted planJobId (server-side job gone -> poll 404) must NOT dead-end: the coordinator clears
+    // the stale handle, resubmits ONE fresh job for the same operation_id, and reaches .completed. Regression
+    // for "Couldn't reach the Edit Planner: unexpected status 404".
+    func test_staleJobId_404_resubmitsAndCompletes() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rc-stale-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let m2 = momentWithFile(s, rel: "media/rc-stale-2.mov", dur: 8); completeAU(m2, useful: [(0, 5)])
+        // Simulate a prior session that left a persisted (now-stale) job handle on the Story.
+        s.planOperationId = "op-stale"; s.planJobId = "stale-job-gone"; try ctx.save()
+
+        let plan = validPlan([m1, m2])
+        let renderer = FakeRenderer(.ok(okResult()))
+        let fake = FakeJobClient(.staleThenOk(plan))
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)), jobClient: fake,
+                                             renderer: renderer, context: ctx)
+        coord.create(for: s)          // reuses the stale planJobId first (reusedExistingJob == true)
+        await awaitSettled(coord)
+
+        guard case .completed = coord.state else {
+            return XCTFail("expected .completed after stale-job recovery, got \(coord.state)")
+        }
+        XCTAssertEqual(fake.submitCount, 1, "exactly one fresh submit after the stale 404 (no duplicate)")
+        XCTAssertGreaterThanOrEqual(fake.pollCount, 2, "first poll 404'd, second poll on the resubmitted job")
+        XCTAssertTrue(renderer.called)
     }
 
     // MARK: - Planner failures (never fabricate a plan)
