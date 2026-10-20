@@ -25,11 +25,13 @@ struct StorageSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Storage") {
+                Section {
                     row("Local originals on iPhone", bytes: summary.localOriginalBytes)
                     row("Backed up to your account", bytes: summary.cloudBackedBytes)
                     row("Reclaimable now", bytes: summary.reclaimableBytes)
                     LabeledContent("Cloud-only Moments", value: "\(summary.evictedCount)")
+                } header: {
+                    Text("Storage")
                 } footer: {
                     Text("Reclaimable space is the size of originals that are safely backed up and not in use. Freeing them keeps a preview on this iPhone and re-downloads the full video when you need it.")
                 }
@@ -65,9 +67,11 @@ struct StorageSettingsView: View {
                 }
 
                 #if DEBUG
-                Section("Developer (acceptance)") {
+                Section {
                     Toggle("Protected eviction (move, don't delete)", isOn: $protectedMode)
                         .tint(StoryTheme.gold)
+                } header: {
+                    Text("Developer (acceptance)")
                 } footer: {
                     Text("DEBUG only. Moves the original to a protected recovery location R6 cannot read, so a failed restore is recoverable. Protected bytes are not counted as freed.")
                 }
