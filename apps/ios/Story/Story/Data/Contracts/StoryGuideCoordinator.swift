@@ -48,6 +48,12 @@ final class StoryGuideCoordinator {
     @discardableResult
     func ensureGuide(for story: StoryModel) async -> StoryGuideDTO? {
         if let existing = guide(for: story.id) { return existing }
+        // Issue 4: do NOT generate a Guide while the Story is hydrating from the cloud — a verified cloud Guide
+        // may be about to be restored (restore first, regenerate only if genuinely missing). The barrier is
+        // seeded from the durable hydrationPending rows, so a view that opens before the pull completes (or
+        // after a relaunch) still holds here instead of racing in a fresh local guide. Returns nil (neutral,
+        // retryable) — the Story stays valid and the view re-queries once hydration ends.
+        if CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) { return nil }
         if generating { return nil }
         generating = true
         defer { generating = false }

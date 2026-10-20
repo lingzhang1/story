@@ -33,6 +33,13 @@ struct CreateStoryPreviewView: View {
     @State private var resumePreresolvedMusic: StoryCreationCoordinator.MusicSelection?
     @State private var showResuming = false
     @State private var recoveryChecked = false
+    /// Issue 3: true once onAppear has kicked the flow. Guards the idle-dismiss so the very first frame (before
+    /// the flow starts) does not pop the host prematurely.
+    @State private var flowEverStarted = false
+    /// Issue 3: set ONLY on a genuine user back-out (cancel the music picker / the duration sheet) so the host
+    /// pops to Story Home. Distinct from a picker->Creating transition (which briefly has nothing presented but
+    /// must NOT dismiss). Prevents the stuck "Preparing" spinner AND a spurious dismissal mid-handoff.
+    @State private var userBackedOut = false
     /// Creative Revision Foundation: the parent output a "Create a new version" (Explore) is derived FROM.
     /// Set by handleRecreate; threaded into StoryCreatingView so the coordinator re-plans version-aware. nil
     /// for a first/original create.
@@ -66,6 +73,10 @@ struct CreateStoryPreviewView: View {
         showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection || recommendingDuration || durationRec != nil
     }
 
+    /// Issue 3: whether ANY step of the create flow is currently presented/in-flight. When this goes false
+    /// after the flow started, the host dismisses to Story Home (never rests on a spinner).
+    private var isFlowActive: Bool { isCreateFlowActive }
+
     /// Entry from the Create button. On FIRST entry, if a good persisted output already exists, open it
     /// directly (reopen shortcut); otherwise begin the create+picker flow.
     private func startCreate() {
@@ -90,10 +101,10 @@ struct CreateStoryPreviewView: View {
     /// -first, no mandatory picker) so the user accepts/overrides before anything downstream runs.
     private func beginCreateFlow() {
         recreateSource = nil                        // original create — not an Explore version
-        if story.intentTargetDurationSeconds != nil {
-            beginMusicFlow()                        // explicit duration precedence — skip the duration step
-            return
-        }
+        // Issue 1: ALWAYS present Customize before music, even when the Story already has a target. The sheet
+        // prefills the existing duration (custom vs recommended), sound, and creative direction, so the user
+        // can review and adjust a stale/infeasible length instead of being dead-ended by a bypassed sheet.
+        // Explicit-custom provenance is preserved by seeding the Custom row from the saved exact target.
         promptDuration()
     }
 
@@ -199,7 +210,8 @@ struct CreateStoryPreviewView: View {
         musicRecommendation = nil
         switch choice {
         case .cancel:
-            return   // back out — no creation started
+            userBackedOut = true   // back out of the picker -> return to Story Home (never a stuck spinner)
+            return
         case .noMusic:
             chosenMusic = nil
             DispatchQueue.main.async { showCreating = true }
@@ -287,10 +299,11 @@ struct CreateStoryPreviewView: View {
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
-        // Pure flow host — NEVER the old "Here's what I'm working with" grid. This screen is reached only when
-        // a create is actually needed (StoryHomeView routes an existing result straight to the Result screen),
-        // and onAppear immediately starts the flow (duration -> Customize -> music -> Creating). We show only a
-        // minimal preparing state behind those sheets so there is no redundant resting page.
+        // Issue 3 — EXPLICIT navigation states, never a perpetual placeholder spinner. This host presents the
+        // create flow (duration -> Customize -> music -> Creating) over a minimal backdrop. The backdrop shows
+        // a brief "Preparing…" ONLY while a step is genuinely in flight; once the flow collapses to nothing
+        // (the user backed out of the first step or the music picker before Creating started), we POP back to
+        // Story Home rather than resting on an indefinite spinner. An active Creating/Result cover is NOT idle.
         VStack(spacing: 16) {
             HStack(spacing: 12) {
                 Button { dismiss() } label: {
@@ -301,15 +314,23 @@ struct CreateStoryPreviewView: View {
             }
             .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
             Spacer()
-            ProgressView().tint(StoryTheme.gold)
-            Text("Preparing your Story…")
-                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            if isFlowActive {
+                ProgressView().tint(StoryTheme.gold)
+                Text("Preparing your Story…")
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
+        // Explicit back-out (music picker cancel / duration cancel) pops the host to Story Home instead of
+        // resting on a spinner. Driven by an explicit flag so a picker->Creating handoff (which briefly has
+        // nothing presented) never triggers a spurious dismissal.
+        .onChange(of: userBackedOut) { _, backed in
+            if backed { DispatchQueue.main.async { dismiss() } }
+        }
         .onAppear {
             guard !recoveryChecked else { return }
             recoveryChecked = true
@@ -319,6 +340,7 @@ struct CreateStoryPreviewView: View {
             // Version from a parent (Explore + Customize), else a fresh original create.
             // P0 Phase 4: creating a video runs paid AI (duration rec, music recommend, edit-plan) — require
             // sign-in first, then start the flow (resumes once; no duplicate create).
+            flowEverStarted = true
             if let parent = forceNewVersionFrom {
                 MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
                 cloudGate.run { handleRecreate(from: parent) }
@@ -337,7 +359,14 @@ struct CreateStoryPreviewView: View {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
                               onRequestRecreate: { src in handleRecreate(from: src) },
-                              onCompleted: { out in showCreating = false; reopenOutput = out })
+                              onCompleted: { out in showCreating = false; reopenOutput = out },
+                              onAdjustInstructions: {
+                                  // Issue 2: proven directive conflict — drop the Creating cover and re-open
+                                  // the Customize editor so the user can adjust the (preserved) instruction.
+                                  // Never a plain retry of the identical failing request.
+                                  showCreating = false
+                                  DispatchQueue.main.async { promptDuration() }
+                              })
         }
         .fullScreenCover(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
@@ -367,10 +396,14 @@ struct CreateStoryPreviewView: View {
                 // clip to the front. opening/ending survive via the typed creativeDirectionText above, not chips.
                 initialReferenceChipIds: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)
                     .map { $0.mustInclude } ?? [],
+                // Issue 1: prefill the Story's existing length so re-opening Customize shows the prior choice
+                // (explicit custom seconds or the editorial mode) instead of silently resetting.
+                initialExplicitTargetSeconds: story.intentTargetDurationSeconds,
+                initialEditorialMode: story.editorialMode,
                 onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
                     acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
                                     directives: directives, soft: soft, chipIds: chipIds, music: music) },
-                onCancel: { durationRec = nil })
+                onCancel: { durationRec = nil; userBackedOut = true })
                 .presentationDetents([.large])
                 // Force a FRESH view identity each time the sheet opens. CustomizeYourStoryView seeds its
                 // `creativeDirection` @State once from initialCreativeDirection; .sheet(item:) alone can reuse
@@ -381,7 +414,7 @@ struct CreateStoryPreviewView: View {
                 .id(rec.id)
         }
         .alert("Keep shooting", isPresented: $durationNoMaterial) {
-            Button("OK", role: .cancel) { durationNoMaterial = false }
+            Button("OK", role: .cancel) { durationNoMaterial = false; userBackedOut = true }
         } message: {
             Text("There isn't enough usable footage yet to build a Story. Capture a few more Moments and try again.")
         }

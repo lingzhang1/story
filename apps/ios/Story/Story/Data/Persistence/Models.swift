@@ -1235,6 +1235,16 @@ final class StorySyncJobModel {
     var lastError: String?
     var updatedAt: Date = Date.now
 
+    // R7-F issue-4 — DURABLE hydration barrier. When a pull observes a cloud revision this device has not yet
+    // fully hydrated (clean local record), it marks the Story hydrationPending=true and records
+    // cloudRevisionSeen. The CloudHydrationGate seeds its in-memory barrier from these rows at first access, so
+    // a SwiftUI view recreation or an app relaunch that races ahead of the pull STILL holds AU/Guide/Coverage/
+    // Music generation until the derived block + understandings are restored. Cleared only when hydration of
+    // that revision completes (results adopted) or the dependency is classified missing/incompatible. Defaulted
+    // so pre-existing rows migrate cleanly (false => not pending, treated as already hydrated).
+    var hydrationPending: Bool = false
+    var cloudRevisionSeen: Int = 0
+
     static func makeKey(ownerAccountId: String, storyId: UUID) -> String {
         "\(ownerAccountId)#\(storyId.uuidString)"
     }

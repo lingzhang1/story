@@ -138,26 +138,57 @@ final class StorySyncCoordinator {
                 continue
             }
             // CLEAN local record -> adopt the server version.
+            // Issue 4: mark hydration PENDING (durable) + begin the gate BEFORE the network GET, so a view that
+            // opens while this pull is in flight (or a relaunch mid-pull) holds AU/Guide/Coverage/Music until
+            // the restore lands. The flag is seeded into CloudHydrationGate.seedFromDurable on the view side.
+            job.hydrationPending = true
+            job.cloudRevisionSeen = e.revision
+            try? context.save()
+            // Seed the in-memory barrier for this Story + its already-known local Moments immediately.
+            CloudHydrationGate.shared.beginStory(sid, moments: currentMomentIds(sid, context: context))
             do {
                 let srv = try await service.get(accessToken: accessToken, storyId: e.storyId)
-                guard j_ownerStable(owner: owner, storyId: sid, context: context) else { continue }  // account switch guard
+                guard j_ownerStable(owner: owner, storyId: sid, context: context) else {
+                    CloudHydrationGate.shared.endStory(sid, moments: currentMomentIds(sid, context: context))
+                    clearHydrationPending(owner: owner, storyId: sid, context: context)
+                    continue
+                }  // account switch guard (rule 11)
                 // R7-F: hold AU/Guide/Coverage/Music inference for this Story + its moments until hydration
                 // completes (restore first, regenerate only if genuinely missing).
                 let momentIds: [UUID] = ((srv.doc["moment_refs"] as? [[String: Any]]) ?? [])
                     .compactMap { ($0["moment_id"] as? String).flatMap(UUID.init) }
                 CloudHydrationGate.shared.beginStory(sid, moments: momentIds)
                 try apply(doc: srv.doc, deleted: srv.deleted, owner: owner, storyId: sid, context: context)
-                StoryDocCodec.applyDerived(srv.doc, storyId: sid, context: context)  // R7-F: restore Guide/Coverage/Music/plans
+                // Restore derived AI caches (Guide/Coverage/Music/plans), PREFERRING the cloud copy over a
+                // provisional local one generated during the race (issue 4 §8). A user-authored music direction
+                // and genuinely dirty records are never clobbered (enforced inside applyDerived + the dirty
+                // guard above).
+                StoryDocCodec.applyDerived(srv.doc, storyId: sid, context: context, preferCloud: true)
                 // Restore Moment Understanding from the account-level store (so AU is not re-run on B).
                 _ = await UnderstandingSync.shared.restore(momentIds: momentIds, context: context,
                                                            activeOwner: owner, token: token)
-                CloudHydrationGate.shared.endStory(sid, moments: momentIds)
                 job.baseRevision = srv.revision
                 job.lastSyncedHash = StoryDocCodec.contentHash(srv.doc)
                 job.dirty = false; job.updatedAt = .now
+                // Hydration of this revision COMPLETE — clear the durable barrier and release the gate.
+                job.hydrationPending = false
                 try? context.save()
-            } catch StoryDocError.unsupportedSchema { continue }   // explicit skip; never best-effort decode
-            catch { continue }
+                CloudHydrationGate.shared.endStory(sid, moments: momentIds)
+            } catch StoryDocError.unsupportedSchema {
+                // Explicit skip; never best-effort decode. Release the barrier (do NOT leave it pending forever,
+                // which would permanently block regeneration — issue 4 §12).
+                CloudHydrationGate.shared.endStory(sid, moments: currentMomentIds(sid, context: context))
+                clearHydrationPending(owner: owner, storyId: sid, context: context)
+                continue
+            }
+            catch {
+                // Offline / transport failure: hydration did NOT complete. Release the in-memory gate so the
+                // app is usable, but LEAVE hydrationPending durable so the NEXT pull retries the restore before
+                // any regeneration — a hydration timeout must not auto-trigger expensive inference (§12). The
+                // view-side seeder re-holds from the durable flag on the next appearance.
+                CloudHydrationGate.shared.endStory(sid, moments: currentMomentIds(sid, context: context))
+                continue
+            }
         }
     }
 
@@ -223,6 +254,19 @@ final class StorySyncCoordinator {
 
     private func fetchStory(_ id: UUID, context: ModelContext) -> StoryModel? {
         (try? context.fetch(FetchDescriptor<StoryModel>(predicate: #Predicate { $0.id == id })))?.first
+    }
+
+    /// The Story's currently-known local Moment ids (used to hold/release the hydration gate when the server
+    /// moment_refs are not yet available — e.g. before the GET, or on an error path).
+    private func currentMomentIds(_ storyId: UUID, context: ModelContext) -> [UUID] {
+        guard let s = fetchStory(storyId, context: context) else { return [] }
+        return s.moments.map { $0.id }
+    }
+
+    /// Clear the durable hydration-pending flag for a Story (hydration finished or classified unresolvable).
+    private func clearHydrationPending(owner: String, storyId: UUID, context: ModelContext) {
+        guard let job = fetchJob(owner: owner, storyId: storyId, context: context) else { return }
+        if job.hydrationPending { job.hydrationPending = false; try? context.save() }
     }
 
     /// The Story must still be owned by `owner` (account-switch guard for the clean-apply path).

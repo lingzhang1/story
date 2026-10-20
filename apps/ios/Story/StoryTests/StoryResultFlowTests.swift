@@ -177,4 +177,66 @@ final class StoryResultFlowTests: XCTestCase {
         XCTAssertTrue(url.path.hasSuffix(rel))                       // Save/Share build the activity URL from this
         XCTAssertTrue(url.isFileURL)
     }
+
+    // MARK: - Issue 1: Customize prefill seeds (an existing target must prefill, never silently reset)
+
+    func test_customizeSeedLength_explicitModeWins() {
+        // An existing editorial mode is honored (preserves the user's prior choice).
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "custom", hasRecommendedPoint: true), .custom)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "highlights", hasRecommendedPoint: true), .highlights)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "full", hasRecommendedPoint: false), .full)
+    }
+
+    func test_customizeSeedLength_fallbackWhenNoMode() {
+        // No prior mode -> Full when a recommendation exists, else Custom.
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: nil, hasRecommendedPoint: true), .full)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "", hasRecommendedPoint: false), .custom)
+    }
+
+    func test_customizeSeedSeconds_explicitTargetWins() {
+        // The user's prior EXPLICIT target wins (provenance preserved), even over a recommendation.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: 45, recommendedPoint: 30,
+                                                                bandLo: 10, bandHi: 60), 45)
+        // Absent an explicit target -> recommended point.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: nil, recommendedPoint: 30,
+                                                                bandLo: 10, bandHi: 60), 30)
+        // Absent both -> band midpoint.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: nil, recommendedPoint: nil,
+                                                                bandLo: 10, bandHi: 30), 20)
+    }
+
+    // MARK: - Issue 2: deterministic failure recovery (no plain-retry loop on a proven directive conflict)
+
+    func test_failureRecovery_directiveConflict_routesToAdjust_notRetry() {
+        // A PROVEN directive conflict must route to Adjust Instructions (no identical-request retry loop).
+        XCTAssertEqual(FailureRecovery.from(.directivesUnsatisfiable("too many excludes")), .adjustInstructions)
+    }
+
+    func test_failureRecovery_invalidPlanOutput_isTechnical_notUserError() {
+        // invalid_after_repair WITHOUT directives -> honest technical failure (bounded retry), not user error.
+        XCTAssertEqual(FailureRecovery.from(.invalidPlanOutput("planner")), .technical)
+    }
+
+    func test_failureRecovery_insufficientMaterial_offersDurationChoice() {
+        XCTAssertEqual(FailureRecovery.from(.insufficientMaterial(achievable: 100, requested: 240, suggested: 90)),
+                       .shorterStory(suggestedSeconds: 90))
+        XCTAssertEqual(FailureRecovery.from(.insufficientMaterial(achievable: 3, requested: 240, suggested: nil)),
+                       .keepShooting)
+    }
+
+    func test_failureRecovery_technicalErrors_offerRetry() {
+        XCTAssertEqual(FailureRecovery.from(.planUnavailable), .technical)
+        XCTAssertEqual(FailureRecovery.from(.renderFailed("x")), .technical)
+        XCTAssertEqual(FailureRecovery.from(.planTransport("x")), .technical)
+    }
+
+    // Issue 2: the two invalid_after_repair messages are distinct — directive conflict blames the instruction,
+    // the no-directive technical failure explicitly does NOT.
+    func test_invalidOutput_message_doesNotBlameUser() {
+        let dir = StoryCreationError.directivesUnsatisfiable("").errorDescription ?? ""
+        let tech = StoryCreationError.invalidPlanOutput("").errorDescription ?? ""
+        XCTAssertTrue(dir.lowercased().contains("instruction"))
+        XCTAssertFalse(tech.lowercased().contains("instruction"))
+        XCTAssertNotEqual(dir, tech)
+    }
 }

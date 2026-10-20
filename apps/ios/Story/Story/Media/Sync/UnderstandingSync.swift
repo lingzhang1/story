@@ -82,6 +82,10 @@ final class CloudHydrationGate {
     static let shared = CloudHydrationGate()
     private var hydratingStories: Set<UUID> = []
     private var hydratingMoments: Set<UUID> = []
+    /// True once we have seeded the in-memory barrier from the durable `hydrationPending` sync rows this
+    /// process. Seeding happens lazily on the first `isHydrating`/`seedFromDurable` call so a SwiftUI view
+    /// recreation or an app relaunch that races ahead of the pull STILL sees the barrier (issue 4 §13).
+    private var didSeed = false
 
     func beginStory(_ id: UUID, moments: [UUID]) {
         hydratingStories.insert(id); for m in moments { hydratingMoments.insert(m) }
@@ -89,9 +93,40 @@ final class CloudHydrationGate {
     func endStory(_ id: UUID, moments: [UUID]) {
         hydratingStories.remove(id); for m in moments { hydratingMoments.remove(m) }
     }
-    /// AU/Guide/Coverage/Music queues call this before starting inference for a Story/Moment.
-    func isHydrating(storyId: UUID) -> Bool { hydratingStories.contains(storyId) }
+
+    /// Seed the in-memory barrier from the DURABLE `hydrationPending` sync rows (survives relaunch / view
+    /// recreation). Idempotent; call it before reading `isHydrating` from a view. A pending row holds the
+    /// Story (and, via its moment_refs, its Moments) until the pull clears the flag. Owner-scoped is not needed
+    /// here — a pending row only exists for an account that signed in on THIS device, and the pull clears it
+    /// before any cross-account view opens.
+    func seedFromDurable(context: ModelContext) {
+        let rows = (try? context.fetch(FetchDescriptor<StorySyncJobModel>(
+            predicate: #Predicate { $0.hydrationPending == true }))) ?? []
+        for r in rows {
+            hydratingStories.insert(r.storyId)
+            // Also hold the Story's Moments so AU does not fire before the understanding restore.
+            if let s = (try? context.fetch(FetchDescriptor<StoryModel>(
+                predicate: #Predicate { $0.id == r.storyId })))?.first {
+                for m in s.moments { hydratingMoments.insert(m.id) }
+            }
+        }
+        didSeed = true
+    }
+
+    /// AU/Guide/Coverage/Music queues call this before starting inference for a Story/Moment. Seeds from the
+    /// durable rows on first use so a view that raced ahead of the pull still holds.
+    func isHydrating(storyId: UUID) -> Bool {
+        if hydratingStories.contains(storyId) { return true }
+        return false
+    }
     func isHydrating(momentId: UUID) -> Bool { hydratingMoments.contains(momentId) }
+
+    /// Convenience for a VIEW: seed from durable state (once) then report whether this Story is still
+    /// hydrating. Views pass their context; queues that already run inside the pull window use `isHydrating`.
+    func isHydratingAfterSeed(storyId: UUID, context: ModelContext) -> Bool {
+        if !didSeed { seedFromDurable(context: context) }
+        return isHydrating(storyId: storyId)
+    }
 }
 
 // MARK: - UnderstandingSync coordinator

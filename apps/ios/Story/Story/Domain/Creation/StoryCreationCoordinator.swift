@@ -57,6 +57,10 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     /// instruction fails identically, so the UI must ask the user to loosen/adjust the instruction, never
     /// offer a plain Retry.
     case directivesUnsatisfiable(String)
+    /// invalid_after_repair with NO hard directives in the request — an honest PLANNER/technical failure, not a
+    /// user-instruction conflict. Bounded retry is appropriate (a nondeterministic planner may succeed), and
+    /// the copy must NOT blame the user's instruction. Issue 2.
+    case invalidPlanOutput(String)
     /// The requested edit is not something the renderer can do (color/filters/effects/reframe/stabilize/
     /// overlays — backend `unsupported_operation`). NOT transient: retrying fails identically, so the UI
     /// explains the limitation and never offers a plain Retry. The selected version is kept unchanged.
@@ -78,6 +82,9 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .alreadyCreating: return "A video is already being created for this Story."
         case .directivesUnsatisfiable:
             return "Your instruction couldn't be applied to this footage — it may exclude too much or conflict. Try adjusting it (for example, exclude fewer Moments)."
+        case .invalidPlanOutput:
+            // No user directives were involved — do NOT blame the instruction. Honest technical message.
+            return "I couldn't put together a valid edit this time. This is on my side, not your footage — please try again."
         case .unsupportedOperation(let detail):
             // Prefer the backend's specific capability message; fall back to a clear generic one.
             let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -646,11 +653,20 @@ final class StoryCreationCoordinator {
                 upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: jobId,
                               phase: "plan_ready", jobStatus: "completed", planJSON: planJSON)
             case .failed:
-                // Distinguish the failure classes for honest UX (Phase 3).
+                // Distinguish the failure classes for honest UX (Phase 3). Issue 2: invalid_after_repair is
+                // only a USER directive-conflict when the request actually carried HARD directives
+                // (opening/ending/include/exclude/order). Without them it is an honest PLANNER/technical failure
+                // (bounded retry), never labeled as "your instruction excluded too much".
                 markPendingFailed(story: story, category: final.failure?.rawValue)
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
-                case .invalidAfterRepair: return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                case .invalidAfterRepair:
+                    let hadDirectives = Self.revisionHasHardDirectives(build.request.revisionContext)
+                    if hadDirectives {
+                        return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                    }
+                    // No proven directive conflict -> truthful technical failure (bounded retry allowed).
+                    return finishFailed(.invalidPlanOutput(final.failureDetail ?? ""))
                 case .unsupportedOperation: return finishFailed(.unsupportedOperation(final.failureDetail ?? ""))
                 case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
                 default:                   return finishFailed(.planUnavailable)

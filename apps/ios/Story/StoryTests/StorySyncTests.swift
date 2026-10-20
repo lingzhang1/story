@@ -264,4 +264,100 @@ extension StorySyncTests {
         gate.endStory(sid, moments: [mid])
         XCTAssertFalse(gate.isHydrating(momentId: mid))
     }
+
+    // Issue 4 — applyDerived DEFAULT keeps a local cache (reuse-first); it never clobbers a provisional one
+    // outside hydration.
+    func test_applyDerived_default_keeps_local() throws {
+        let s = try makeStory(owner: "A", title: "KeepLocal")
+        // A local (provisional) guide already present.
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx)   // preferCloud defaults false
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"local\":1}", "default apply must not clobber a present local cache")
+    }
+
+    // Issue 4 §9 — during HYDRATION (preferCloud), a PROVISIONAL local guide is replaced by the verified cloud
+    // copy so Device B adopts A's Guide (the exact cross-device divergence bug).
+    func test_applyDerived_preferCloud_overwrites_provisional() throws {
+        let s = try makeStory(owner: "A", title: "PreferCloud")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx, preferCloud: true)
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"cloud\":1}", "hydration must adopt the verified cloud Guide")
+    }
+
+    // Issue 4 §10 — even under preferCloud, a USER-AUTHORED local music direction is never clobbered.
+    func test_applyDerived_preferCloud_preserves_user_authored_music() throws {
+        let s = try makeStory(owner: "A", title: "UserMusic")
+        ctx.insert(StoryMusicDirectionModel(storyId: s.id, directionJSON: "{\"mine\":1}",
+                                            userAuthored: true, fingerprint: "fp"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["music_direction": ["json": "{\"cloud\":1}", "user_authored": false, "fingerprint": "fp2"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx, preferCloud: true)
+        let m = try ctx.fetch(FetchDescriptor<StoryMusicDirectionModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(m?.directionJSON, "{\"mine\":1}", "a user-authored direction is never overwritten")
+        XCTAssertTrue(m?.userAuthored ?? false)
+    }
+
+    // Issue 4 §13 — the durable hydrationPending flag re-establishes the in-memory barrier after a view
+    // recreation / relaunch (seedFromDurable), so a Story that opens before the pull completes still holds.
+    func test_hydration_gate_seeds_from_durable_pending_row() throws {
+        let gate = CloudHydrationGate.shared
+        let s = try makeStory(owner: "A", title: "Durable")
+        gate.endStory(s.id, moments: [])    // ensure not already in-memory from a prior test
+        let job = StorySyncJobModel(ownerAccountId: "A", storyId: s.id)
+        job.hydrationPending = true
+        ctx.insert(job); try ctx.save()
+        gate.seedFromDurable(context: ctx)
+        XCTAssertTrue(gate.isHydrating(storyId: s.id), "a durable hydrationPending row must re-hold the barrier")
+        // Clean up in-memory state for other tests.
+        gate.endStory(s.id, moments: [])
+    }
+
+    // Issue 4 §12 — a Device-B clean pull marks hydrationPending durable, adopts the cloud Guide, and clears
+    // the flag; NO regeneration is triggered (ensureGuide is never called here). Zero-Bedrock restore shape.
+    func test_pull_hydrates_derived_and_clears_pending() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 2,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "B-Restore", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [],
+                  "derived": ["guide": ["json": "{\"fromA\":1}", "schema_version": "story_guide/1"]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        guard let suid = UUID(uuidString: sid) else { return XCTFail() }
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == suid }
+        XCTAssertEqual(g?.guideJSON, "{\"fromA\":1}", "Device B adopts A's cloud Guide on pull")
+        let job = try ctx.fetch(FetchDescriptor<StorySyncJobModel>()).first { $0.storyId == suid }
+        XCTAssertEqual(job?.hydrationPending, false, "hydration flag cleared after a successful restore")
+        XCTAssertFalse(CloudHydrationGate.shared.isHydrating(storyId: suid), "gate released after hydration")
+    }
+
+    // Issue 4 §7 — a DIRTY local record is NOT hydrated/overwritten by the pull (conflict path instead).
+    func test_pull_does_not_hydrate_dirty_local() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let s = try makeStory(owner: "A", title: "Dirty")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })   // rev 1, clean
+        let job = try ctx.fetch(FetchDescriptor<StorySyncJobModel>()).first { $0.storyId == s.id }!
+        job.dirty = true; try ctx.save()
+        // Server advances with a different derived guide.
+        f.rows[s.id.uuidString]?.revision = 2
+        f.rows[s.id.uuidString]?.doc["derived"] = ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"local\":1}", "a dirty record's local derived state is preserved")
+    }
 }

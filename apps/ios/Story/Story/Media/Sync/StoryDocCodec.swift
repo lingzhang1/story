@@ -196,26 +196,35 @@ extension StoryDocCodec {
         return derived
     }
 
-    /// Apply a pulled derived block into local SwiftData caches, REUSE-GATED: only write a cache when the
-    /// device does not already have a compatible one (same fingerprints + schema). Never overwrites a
-    /// user-authored music direction. Returns the count of caches hydrated (for acceptance evidence).
+    /// Apply a pulled derived block into local SwiftData caches. REUSE-GATED by default: only write a cache
+    /// when the device does not already have one. When `preferCloud` is true (called during HYDRATION on a
+    /// clean record), a PROVISIONAL local cache generated during the pull-vs-view race IS overwritten with the
+    /// verified cloud copy (issue 4) — EXCEPT a user-authored music direction, which is never clobbered. A
+    /// genuinely dirty record never reaches here (the caller's dirty guard raises a conflict instead), so
+    /// preferCloud only ever replaces provisional, non-user-authored, non-dirty AI caches. Preserves cloud
+    /// provenance (fingerprints + schema/prompt version). Returns the count of caches hydrated.
     @MainActor
     @discardableResult
-    static func applyDerived(_ doc: [String: Any], storyId: UUID, context: ModelContext) -> Int {
+    static func applyDerived(_ doc: [String: Any], storyId: UUID, context: ModelContext,
+                             preferCloud: Bool = false) -> Int {
         guard let derived = doc["derived"] as? [String: Any] else { return 0 }
         var n = 0
-        func upsert<T: PersistentModel>(_ type: T.Type, _ pred: Predicate<T>,
-                                        make: () -> T, update: (T) -> Void) {
+        // upsert: insert when absent; when present, overwrite via `overwrite` ONLY when preferCloud (hydration)
+        // AND `allowOverwrite` is true for this cache kind. Otherwise keep the local copy (reuse-first).
+        func upsert<T: PersistentModel>(_ type: T.Type, _ pred: Predicate<T>, allowOverwrite: Bool = true,
+                                        make: () -> T, overwrite: (T) -> Void) {
             var d = FetchDescriptor<T>(predicate: pred); d.fetchLimit = 1
-            if let existing = (try? context.fetch(d))?.first { update(existing) }
-            else { context.insert(make()); n += 1 }
+            if let existing = (try? context.fetch(d))?.first {
+                if preferCloud && allowOverwrite { overwrite(existing); n += 1 }
+                // else keep local if present (compatible); do not clobber
+            } else { context.insert(make()); n += 1 }
         }
         let sid = storyId
         if let g = derived["guide"] as? [String: Any], let json = g["json"] as? String {
+            let schema = (g["schema_version"] as? String) ?? "story_guide/1"
             upsert(StoryGuideModel.self, #Predicate { $0.storyId == sid },
-                   make: { StoryGuideModel(storyId: sid, guideJSON: json,
-                                           schemaVersion: (g["schema_version"] as? String) ?? "story_guide/1") },
-                   update: { _ in })   // keep local if present (compatible); do not clobber
+                   make: { StoryGuideModel(storyId: sid, guideJSON: json, schemaVersion: schema) },
+                   overwrite: { row in row.guideJSON = json; row.schemaVersion = schema; row.updatedAt = .now })
         }
         if let c = derived["coverage"] as? [String: Any], let json = c["json"] as? String {
             upsert(StoryCoverageModel.self, #Predicate { $0.storyId == sid },
@@ -227,26 +236,42 @@ extension StoryDocCodec {
                        storyGuideFingerprint: (c["guide_fingerprint"] as? String) ?? "",
                        schemaVersion: (c["schema_version"] as? String) ?? "story_coverage/2",
                        modelId: nil, promptVersion: (c["prompt_version"] as? String) ?? "story_coverage/v2") },
-                   update: { _ in })
+                   overwrite: { row in
+                       row.coverageJSON = json
+                       row.sourceUnderstandingIdsFingerprint = (c["source_understanding_fingerprint"] as? String) ?? row.sourceUnderstandingIdsFingerprint
+                       row.creativeIntentFingerprint = (c["creative_intent_fingerprint"] as? String) ?? row.creativeIntentFingerprint
+                       row.storyGuideFingerprint = (c["guide_fingerprint"] as? String) ?? row.storyGuideFingerprint
+                       row.pendingCount = (c["pending_count"] as? Int) ?? row.pendingCount
+                   })
         }
         if let m = derived["music_direction"] as? [String: Any], let json = m["json"] as? String {
+            // Never clobber a LOCAL user-authored direction (even under preferCloud). Overwrite only a
+            // non-user-authored (inferred/provisional) local direction with the cloud copy.
+            let cloudAuthored = (m["user_authored"] as? Bool) ?? false
             upsert(StoryMusicDirectionModel.self, #Predicate { $0.storyId == sid },
                    make: { StoryMusicDirectionModel(storyId: sid, directionJSON: json,
-                           userAuthored: (m["user_authored"] as? Bool) ?? false,
+                           userAuthored: cloudAuthored,
                            fingerprint: (m["fingerprint"] as? String) ?? "") },
-                   update: { _ in })   // never clobber a local (possibly user-authored) direction
+                   overwrite: { row in
+                       guard !row.userAuthored else { return }   // protect the user's own choice
+                       row.directionJSON = json
+                       row.userAuthored = cloudAuthored
+                       row.fingerprint = (m["fingerprint"] as? String) ?? row.fingerprint
+                   })
         }
         if let p = derived["music_plan"] as? [String: Any], let json = p["json"] as? String {
             upsert(MusicPlanCacheModel.self, #Predicate { $0.storyId == sid },
                    make: { MusicPlanCacheModel(storyId: sid, planJSON: json,
                            inputFingerprint: (p["input_fingerprint"] as? String) ?? "") },
-                   update: { _ in })
+                   overwrite: { row in row.planJSON = json
+                       row.inputFingerprint = (p["input_fingerprint"] as? String) ?? row.inputFingerprint })
         }
         if let dr = derived["duration_rec"] as? [String: Any], let json = dr["json"] as? String {
             upsert(DurationRecCacheModel.self, #Predicate { $0.storyId == sid },
                    make: { DurationRecCacheModel(storyId: sid, recommendationJSON: json,
                            inputFingerprint: (dr["input_fingerprint"] as? String) ?? "") },
-                   update: { _ in })
+                   overwrite: { row in row.recommendationJSON = json
+                       row.inputFingerprint = (dr["input_fingerprint"] as? String) ?? row.inputFingerprint })
         }
         // Restore exact edit plans onto existing outputs (never re-plan for playback).
         if let plans = derived["output_edit_plans"] as? [[String: Any]] {

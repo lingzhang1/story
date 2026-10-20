@@ -72,7 +72,11 @@ final class StoryCoverageEngine {
                            force: Bool = false) async -> StoryCoverageV2DTO? {
         let inputs = currentInputs(for: story)
         // R7-F: hold while the Story is hydrating from the cloud — a restore may supply a reusable Coverage.
-        if CloudHydrationGate.shared.isHydrating(storyId: story.id) { return cachedCoverage(for: story.id) }
+        // Seed from the durable hydrationPending rows so a view that opens before the pull completes (or after
+        // a relaunch) still holds (issue 4 §3, §13).
+        if CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
+            return cachedCoverage(for: story.id)
+        }
         // Zero completed AU (incl. pending-only): the Guide supplies the product content; do NOT call
         // Mapper/Judge merely to invent Coverage. Keep any prior cache; otherwise nil.
         if inputs.completedMUValues.isEmpty { return cachedCoverage(for: story.id) }

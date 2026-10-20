@@ -23,6 +23,12 @@ struct CustomizeYourStoryView: View {
     let initialCreativeDirection: String
     /// Draft reference chips to repopulate (stable ids; display numbers re-derived from `numbering`).
     let initialReferenceChipIds: [UUID]
+    /// Issue 1 — the Story's EXISTING target length (seconds) and editorial mode, when one was already chosen.
+    /// Used to PREFILL the length selection so re-opening Customize shows the user's prior choice instead of
+    /// silently resetting to the recommendation. An explicit "custom" mode seeds the exact-seconds Custom row
+    /// (provenance preserved); "highlights"/"full" re-selects that editorial row. nil => seed from `rec`.
+    let initialExplicitTargetSeconds: Double?
+    let initialEditorialMode: String?
     /// Returns chosen duration (seconds), sound, length wire, editing approach, resolved HARD directives (nil
     /// when none), the SOFT creative-direction text, the chip ids, and the parsed MUSIC intent — so the caller
     /// persists the draft, forwards directives + soft_direction to the edit planner, and routes an explicit
@@ -32,6 +38,25 @@ struct CustomizeYourStoryView: View {
 
     enum LengthChoice: Hashable { case highlights, full, custom
         var wire: String { switch self { case .highlights: return "highlights"; case .full: return "full"; case .custom: return "custom" } }
+    }
+
+    /// PURE prefill decision for the length row (issue 1), extracted so it is unit-testable without a SwiftUI
+    /// host. An existing editorial mode wins (preserve the user's prior choice / explicit-custom provenance);
+    /// otherwise Full when a recommended point exists, else Custom.
+    static func seedLength(editorialMode: String?, hasRecommendedPoint: Bool) -> LengthChoice {
+        switch (editorialMode ?? "").lowercased() {
+        case "custom":     return .custom
+        case "highlights": return .highlights
+        case "full":       return .full
+        default:           return hasRecommendedPoint ? .full : .custom
+        }
+    }
+
+    /// PURE prefill decision for the exact Custom seconds: the user's prior EXPLICIT target wins (preserve
+    /// provenance), else the recommended point, else the feasible-band midpoint.
+    static func seedCustomSeconds(explicitTarget: Double?, recommendedPoint: Double?,
+                                  bandLo: Double?, bandHi: Double?) -> Double {
+        (explicitTarget ?? recommendedPoint ?? ((bandLo ?? 10) + (bandHi ?? 30)) / 2).rounded()
     }
 
     @State private var length: LengthChoice
@@ -57,23 +82,31 @@ struct CustomizeYourStoryView: View {
          numbering: StoryMomentNumbering = StoryMomentNumbering(ordered: []),
          momentForId: @escaping (UUID) -> MomentModel? = { _ in nil },
          initialCreativeDirection: String = "", initialReferenceChipIds: [UUID] = [],
+         initialExplicitTargetSeconds: Double? = nil, initialEditorialMode: String? = nil,
          onCreate: @escaping (Double, SoundPreference, String, EditingApproach, ResolvedDirectives?, String, [UUID], ParsedMusicIntent) -> Void,
          onCancel: @escaping () -> Void) {
         self.rec = rec; self.inferredSound = inferredSound; self.initialExplicitSound = initialExplicitSound
         self.initialEditingApproach = initialEditingApproach; self.visualFirstAvailable = visualFirstAvailable
         self.numbering = numbering; self.momentForId = momentForId
         self.initialCreativeDirection = initialCreativeDirection; self.initialReferenceChipIds = initialReferenceChipIds
+        self.initialExplicitTargetSeconds = initialExplicitTargetSeconds
+        self.initialEditorialMode = initialEditorialMode
         self.onCreate = onCreate; self.onCancel = onCancel
-        // Default length: Full Story when a recommended point exists, else Custom.
-        _length = State(initialValue: rec.recommendedPointSeconds != nil ? .full : .custom)
+        // Default length: prefer the Story's EXISTING editorial mode when re-opening (issue 1); else Full Story
+        // when a recommended point exists, else Custom. A prior exact "custom" target seeds the Custom row so
+        // the user's explicit length is shown (not silently reset to the recommendation).
+        _length = State(initialValue: Self.seedLength(editorialMode: initialEditorialMode,
+                                                      hasRecommendedPoint: rec.recommendedPointSeconds != nil))
         // Default sound: the user's explicit choice if any, else the inferred recommendation, else balanced.
         _sound = State(initialValue: initialExplicitSound ?? inferredSound ?? .balanced)
         // Default approach: the Story's current approach (defaults to .storytelling). If Visual-first is not
         // available, force storytelling so a hidden section can never leave a non-honorable selection.
         _approach = State(initialValue: visualFirstAvailable ? initialEditingApproach : .storytelling)
-        let seed = rec.recommendedPointSeconds
-            ?? ((rec.evidence.feasibleBandSeconds.first ?? 10) + (rec.evidence.feasibleBandSeconds.last ?? 30)) / 2
-        _customSeconds = State(initialValue: seed.rounded())
+        // Seed the exact-seconds Custom field: the user's prior EXPLICIT target wins (preserve provenance),
+        // else the recommended point, else the feasible-band midpoint.
+        _customSeconds = State(initialValue: Self.seedCustomSeconds(
+            explicitTarget: initialExplicitTargetSeconds, recommendedPoint: rec.recommendedPointSeconds,
+            bandLo: rec.evidence.feasibleBandSeconds.first, bandHi: rec.evidence.feasibleBandSeconds.last))
         // Seed Creative Direction draft (survives navigation / failed generation). Chips re-derive their display
         // number from the current numbering snapshot; an id no longer present is dropped (surfaced on Create).
         _creativeDirection = State(initialValue: initialCreativeDirection)
