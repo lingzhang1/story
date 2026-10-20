@@ -283,3 +283,39 @@ def test_15_lease_fencing_contract_unchanged():
     assert _jobs.job_id_for("u1\x1fabc") != _jobs.job_id_for("u2\x1fabc")
     assert _jobs.LEASE_SECONDS == 900
     assert "completed" in _jobs.TERMINAL and "cancelled" in _jobs.TERMINAL
+
+
+# R1.1 — GET /v1/me canonical identity endpoint
+def test_me_returns_canonical_story_user_id(client):
+    tok = _token(KEY_A, "kidA", sub="whoami-sub")
+    r = client.get("/v1/me", headers=_auth(tok))
+    assert r.status_code == 200
+    body = r.json()
+    assert "story_user_id" in body and body["story_user_id"]
+    # The canonical id is the atomic cognito_sub -> story_user_id resolution, NOT the sub itself.
+    assert body["story_user_id"] != "whoami-sub"
+
+
+def test_me_requires_auth_no_legacy_fallback(client):
+    # No token: /v1/me uses require_user, so it is 401 even in dev optional-auth (never the legacy dev principal).
+    assert client.get("/v1/me").status_code == 401
+    # Invalid (expired) token: 401, never a downgrade.
+    assert client.get("/v1/me", headers=_auth(_token(KEY_A, "kidA", exp_delta=-10))).status_code == 401
+
+
+def test_me_id_matches_job_ownership_identity(client):
+    # The id from /v1/me is the SAME canonical identity used to own async jobs — one identifier end to end.
+    tok = _token(KEY_A, "kidA", sub="consistent-sub")
+    me_id = client.get("/v1/me", headers=_auth(tok)).json()["story_user_id"]
+    jid = _submit(client, tok, op="me-consistency").json()["job_id"]
+    store: FakeJobStore = client.app.state._job_store_override
+    assert store.items[jid]["owner"] == me_id
+
+
+def test_me_two_subs_get_distinct_ids(client):
+    a = client.get("/v1/me", headers=_auth(_token(KEY_A, "kidA", sub="sub-alpha"))).json()["story_user_id"]
+    b = client.get("/v1/me", headers=_auth(_token(KEY_A, "kidA", sub="sub-beta"))).json()["story_user_id"]
+    assert a != b
+    # Stable: same sub resolves to the same canonical id on a repeat call.
+    a2 = client.get("/v1/me", headers=_auth(_token(KEY_A, "kidA", sub="sub-alpha"))).json()["story_user_id"]
+    assert a == a2
