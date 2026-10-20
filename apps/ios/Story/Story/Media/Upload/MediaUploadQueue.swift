@@ -153,22 +153,15 @@ final class MediaUploadQueue {
         let generationAtStart = job.claimGeneration
 
         do {
-            // Compute sha256 + size off the capture path (here, in the drain, never at capture).
-            let sha: String
-            if let existing = job.contentSha256 { sha = existing }
-            else { sha = try MediaUploadService.sha256Hex(fileURL: url) }
             let size = job.sizeBytes ?? MediaUploadService.fileSize(url)
-            job.contentSha256 = sha; job.sizeBytes = size
-
-            let init0 = try await service.initiate(
-                accessToken: token, sha256: sha, size: size,
-                deviceAssetId: job.assetId.uuidString, sourceMomentId: job.momentId.uuidString)
-            job.cloudMediaId = init0.cloudMediaId; try? context.save()
-
-            try await service.putToS3(uploadURL: init0.uploadURL, fileURL: url, sha256Hex: sha)
-            job.progress = 1.0
-
-            try await service.complete(accessToken: token, cloudMediaId: init0.cloudMediaId)
+            job.sizeBytes = size
+            // R4-B: large files use true S3 multipart (part-level resume); small files keep the single PUT.
+            let multipartThreshold = 16 * 1024 * 1024
+            if size > multipartThreshold {
+                try await uploadMultipart(job: job, token: token, url: url)
+            } else {
+                try await uploadSingle(job: job, token: token, url: url)
+            }
 
             // Phase-4 ownership transition — ONLY after server cloud_verified, and ONLY if this is still the
             // current claim for an unchanged owner (rule 10: a stale callback cannot overwrite a newer state).
@@ -189,6 +182,63 @@ final class MediaUploadQueue {
             job.updatedAt = .now
             try? context.save()
         }
+    }
+
+    /// Small-file path (R4-A): one presigned PUT of the whole file, then server verify. sha256 computed here.
+    private func uploadSingle(job: MediaUploadJobModel, token: String, url: URL) async throws {
+        let sha: String
+        if let existing = job.contentSha256 { sha = existing }
+        else { sha = try MediaUploadService.sha256Hex(fileURL: url) }
+        job.contentSha256 = sha
+        let init0 = try await service.initiate(
+            accessToken: token, sha256: sha, size: job.sizeBytes ?? 0,
+            deviceAssetId: job.assetId.uuidString, sourceMomentId: job.momentId.uuidString)
+        job.cloudMediaId = init0.cloudMediaId; try? context.save()
+        try await service.putToS3(uploadURL: init0.uploadURL, fileURL: url, sha256Hex: sha)
+        job.progress = 1.0
+        try await service.complete(accessToken: token, cloudMediaId: init0.cloudMediaId)
+        job.state = .verified; job.lastError = nil; job.updatedAt = .now
+    }
+
+    /// Large-file path (R4-B): true S3 multipart with part-level resume. Builds the part plan (streamed), (re)
+    /// initiates the MPU (idempotent — recovers the same upload_id), RECONCILES already-uploaded parts with S3
+    /// and re-uploads ONLY the missing ones (resume after interruption), refreshes presigned part URLs, then
+    /// completes + verifies server-side. Never loads the whole file into memory; never deletes the original.
+    private func uploadMultipart(job: MediaUploadJobModel, token: String, url: URL) async throws {
+        let partSize = 8 * 1024 * 1024
+        let plan = try MediaUploadService.makeMultipartPlan(fileURL: url, partSize: partSize)
+        job.contentSha256 = plan.fileSha256Hex; job.sizeBytes = plan.size; try? context.save()
+
+        let init0 = try await service.initiateMultipart(
+            accessToken: token, plan: plan,
+            deviceAssetId: job.assetId.uuidString, sourceMomentId: job.momentId.uuidString)
+        job.cloudMediaId = init0.cloudMediaId; try? context.save()
+
+        // Reconcile: which parts does S3 already have? Re-upload only the missing ones (resume).
+        let already = try await service.uploadedPartNumbers(accessToken: token, cloudMediaId: init0.cloudMediaId)
+        let allParts = Array(1...plan.partCount)
+        let missing = allParts.filter { !already.contains($0) }
+
+        if !missing.isEmpty {
+            let urls = try await service.presignParts(
+                accessToken: token, cloudMediaId: init0.cloudMediaId, partNumbers: missing)
+            for pn in missing {
+                guard let partURL = urls[pn] else { throw MediaUploadError.decoding }
+                let offset = (pn - 1) * partSize
+                let length = min(partSize, plan.size - offset)
+                try await service.putPart(uploadURL: partURL, fileURL: url, offset: offset,
+                                          length: length, partShaB64: plan.partShasB64[pn - 1])
+                // Advisory progress across all parts (reused + newly uploaded).
+                let done = plan.partCount - missing.count + (missing.firstIndex(of: pn)! + 1)
+                job.progress = Double(done) / Double(plan.partCount)
+                try? context.save()
+            }
+        } else {
+            job.progress = 1.0
+        }
+
+        try await service.completeMultipart(accessToken: token, cloudMediaId: init0.cloudMediaId)
+        job.state = .verified; job.lastError = nil; job.updatedAt = .now
     }
 
     /// Write cloud-state onto the Moment + Asset, guarded by owner-match + current generation. If the Moment's

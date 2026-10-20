@@ -39,6 +39,26 @@ final class MediaUploadQueueTests: XCTestCase {
         return moment
     }
 
+    /// A Moment backed by a file larger than the multipart threshold (>16 MiB), so the queue takes the
+    /// multipart path. Writes `bytes` of real data (sparse-ish) to a temp media file.
+    private func makeLargeMoment(bytes: Int) throws -> MomentModel {
+        MediaStore.shared.ensureMediaDirectory()
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        let url = MediaStore.shared.absoluteURL(for: rel)
+        // Write in 1 MiB chunks so we don't hold 'bytes' in memory.
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let h = try FileHandle(forWritingTo: url)
+        let chunk = Data(repeating: 0x41, count: 1 << 20)
+        var written = 0
+        while written < bytes { let n = min(chunk.count, bytes - written); h.write(chunk.prefix(n)); written += n }
+        try? h.close()
+        tmpFiles.append(url)
+        let asset = AssetModel(relativePath: rel, durationSeconds: 60, source: .directed)
+        let moment = MomentModel(source: .directed, asset: asset)
+        ctx.insert(asset); ctx.insert(moment); try ctx.save()
+        return moment
+    }
+
     private func queue(active: @escaping () -> String?,
                        token: @escaping (String) async -> String? = { _ in "tok" },
                        service: MediaUploading,
@@ -210,6 +230,46 @@ final class MediaUploadQueueTests: XCTestCase {
         XCTAssertNil(q.autoEnrollIfEnabled(moment: m), "never claims an existing cloud/other-account Moment")
         XCTAssertEqual(m.ownerAccountId, "B")
     }
+
+    // MARK: - R4-B multipart
+
+    func testLargeFile_takesMultipartPath_andVerifies() async throws {
+        let m = try makeLargeMoment(bytes: 20 * 1024 * 1024)   // > 16 MiB threshold -> multipart
+        let svc = RecordingMultipartService()
+        let q = queue(active: { "A" }, service: svc)
+        _ = q.enroll(moment: m)
+        await q.drain()
+        let job = try ctx.fetch(FetchDescriptor<MediaUploadJobModel>()).first!
+        XCTAssertEqual(job.state, .verified)
+        XCTAssertEqual(svc.initiateMPCount, 1, "multipart path used (not single PUT)")
+        XCTAssertTrue(svc.completedMP)
+        // 20 MiB / 8 MiB parts = 3 parts, all uploaded (none pre-existing).
+        XCTAssertEqual(Set(svc.putParts), [1, 2, 3])
+        XCTAssertEqual(m.cloudStateRaw, "cloud_verified")
+    }
+
+    func testMultipart_resume_reusesAlreadyUploadedParts() async throws {
+        let m = try makeLargeMoment(bytes: 20 * 1024 * 1024)   // 3 parts
+        let svc = RecordingMultipartService()
+        svc.alreadyUploaded = [1, 2]   // S3 already has parts 1 & 2 (interruption) -> only part 3 re-uploaded
+        let q = queue(active: { "A" }, service: svc)
+        _ = q.enroll(moment: m)
+        await q.drain()
+        XCTAssertEqual(svc.putParts, [3], "only the missing part is re-uploaded (part-level resume)")
+        XCTAssertTrue(svc.completedMP)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MediaUploadJobModel>()).first!.state, .verified)
+    }
+
+    func testSmallFile_stillUsesSinglePut() async throws {
+        let m = try makeLocalMoment()   // tiny -> single PUT, multipart never touched
+        let svc = RecordingMultipartService()
+        let q = queue(active: { "A" }, service: svc)
+        _ = q.enroll(moment: m)
+        await q.drain()
+        XCTAssertEqual(svc.initiateMPCount, 0, "small file must NOT use multipart")
+        XCTAssertFalse(svc.completedMP)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MediaUploadJobModel>()).first!.state, .verified)
+    }
 }
 
 // MARK: - Fakes
@@ -224,6 +284,17 @@ private final class FakeService: MediaUploading {
     }
     func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {}
     func complete(accessToken: String, cloudMediaId: String) async throws {}
+    // multipart (small-file fake: not exercised, provide trivial impls)
+    func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
+                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+        MultipartInitiateResult(cloudMediaId: "cmid-mp", uploadId: "u1", partCount: plan.partCount, created: true)
+    }
+    func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] {
+        Dictionary(uniqueKeysWithValues: partNumbers.map { ($0, URL(string: "https://s3.example/p\($0)")!) })
+    }
+    func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {}
+    func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
 }
 
 private final class FailingService: MediaUploading {
@@ -235,4 +306,44 @@ private final class FailingService: MediaUploading {
         throw MediaUploadError.s3PutFailed(500)
     }
     func complete(accessToken: String, cloudMediaId: String) async throws {}
+    func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
+                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+        MultipartInitiateResult(cloudMediaId: "cmid", uploadId: "u1", partCount: plan.partCount, created: true)
+    }
+    func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] { [:] }
+    func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+        throw MediaUploadError.s3PutFailed(500)
+    }
+    func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
+}
+
+/// Records multipart calls + simulates resume: `alreadyUploaded` is returned by uploadedPartNumbers so the
+/// queue re-uploads only the rest.
+private final class RecordingMultipartService: MediaUploading {
+    var alreadyUploaded: Set<Int> = []
+    private(set) var putParts: [Int] = []        // which parts the queue actually PUT
+    private(set) var initiateMPCount = 0
+    private(set) var completedMP = false
+    // single-file path unused here
+    func initiate(accessToken: String, sha256: String, size: Int, deviceAssetId: String,
+                  sourceMomentId: String) async throws -> MediaInitiateResult {
+        MediaInitiateResult(cloudMediaId: "x", uploadURL: URL(string: "https://s3.example/put")!, created: true)
+    }
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {}
+    func complete(accessToken: String, cloudMediaId: String) async throws {}
+    func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
+                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+        initiateMPCount += 1
+        return MultipartInitiateResult(cloudMediaId: "cmid-mp", uploadId: "u1",
+                                       partCount: plan.partCount, created: true)
+    }
+    func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] {
+        Dictionary(uniqueKeysWithValues: partNumbers.map { ($0, URL(string: "https://s3.example/p\($0)")!) })
+    }
+    func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { alreadyUploaded }
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+        putParts.append((offset / (8 * 1024 * 1024)) + 1)
+    }
+    func completeMultipart(accessToken: String, cloudMediaId: String) async throws { completedMP = true }
 }
