@@ -183,3 +183,26 @@ final class StorySyncTests: XCTestCase {
         for s in stories { XCTAssertEqual(s.ownerAccountId, "B") }
     }
 }
+
+// R7-C fix: a restored (already-understood) Moment must NOT be re-enqueued for Asset Understanding.
+extension StorySyncTests {
+    func test_au_not_reenqueued_when_understanding_exists() throws {
+        // A Moment with a real file + an EXISTING completed understanding.
+        MediaStore.shared.ensureMediaDirectory()
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        try Data("vid".utf8).write(to: MediaStore.shared.absoluteURL(for: rel))
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        let m = MomentModel(source: .directed, asset: asset)
+        ctx.insert(asset); ctx.insert(m)
+        let mu = MomentUnderstandingModel(momentId: m.id, schemaVersion: "moment_understanding/1",
+                                          framePolicy: "f", promptVersion: "p", modelId: nil, nFrames: nil,
+                                          understandingJSON: "{}")
+        ctx.insert(mu); try ctx.save()
+        let q = AssetUnderstandingQueue(context: ctx)
+        q.enqueue(momentId: m.id, relativeMediaPath: rel, sourceCaptureId: nil, captureContext: nil)
+        // No new AU job created (already understood).
+        let jobs = try ctx.fetch(FetchDescriptor<AssetUnderstandingJobModel>()).filter { $0.momentId == m.id }
+        XCTAssertTrue(jobs.isEmpty, "a Moment with a completed understanding must not be re-enqueued")
+        try? FileManager.default.removeItem(at: MediaStore.shared.absoluteURL(for: rel))
+    }
+}

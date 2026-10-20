@@ -71,6 +71,10 @@ final class AssetUnderstandingQueue {
         captureContext: [String: Any]?
     ) {
         if existingJob(for: momentId) != nil { return }
+        // R7-C fix: a Moment that ALREADY has a completed understanding must NOT be re-analyzed — this is the
+        // case after an R6 restore (the downloaded original is byte-identical, SHA256-verified, to what was
+        // understood before). Re-enqueuing here is what flooded the queue with duplicate AU + coverage work.
+        if hasCompletedUnderstanding(momentId: momentId) { return }
         var ctxJSON: String?
         if let captureContext,
            let d = try? JSONSerialization.data(withJSONObject: captureContext) {
@@ -213,6 +217,17 @@ final class AssetUnderstandingQueue {
                 predicate: #Predicate { $0.momentId == momentId }
             )
         ))?.first
+    }
+
+    /// True if a completed MomentUnderstanding already exists for this Moment — used to avoid re-analyzing a
+    /// Moment whose original was merely RESTORED (R6). A restored original is the SAME verified bytes, so its
+    /// understanding is still valid; re-running AU (and the coverage it invalidates) is pure waste.
+    private func hasCompletedUnderstanding(momentId: UUID) -> Bool {
+        ((try? context.fetch(
+            FetchDescriptor<MomentUnderstandingModel>(
+                predicate: #Predicate { $0.momentId == momentId }
+            )
+        ))?.first) != nil
     }
 
     private func nextEligibleJob() -> AssetUnderstandingJobModel? {

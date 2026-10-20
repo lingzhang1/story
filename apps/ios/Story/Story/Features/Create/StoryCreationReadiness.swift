@@ -77,18 +77,27 @@ enum StoryCreationReadiness: Equatable {
         let total = story.moments.count
         guard total > 0 else { return .noMoments }
 
-        // (a) resolvable local media — the exact resolver EditPlanRequestBuilder uses.
-        let media = MomentResolver.resolve(moments: story.moments)
-        let fileIds = Set(media.map { $0.momentId })
+        // (a) media AVAILABLE-OR-RESTORABLE. A Moment counts as having usable media when its original is on
+        // disk NOW, OR it is cloud-backed and restorable via R6 (localAvailability == .evicted AND
+        // cloudStateRaw == "cloud_verified"). An evicted-but-verified Moment is NOT "gone" — Create restores it
+        // on demand (restoreThenEvaluate), so it must not grey out the button (owner bug: backed-up != gone).
+        var mediaIds = Set<UUID>()
+        for m in story.moments {
+            guard let asset = m.asset else { continue }
+            let onDisk = MediaStore.shared.fileExists(relativePath: asset.relativePath)
+            let restorable = (asset.localAvailability == .evicted || m.cloudMediaId != nil)
+                && m.cloudStateRaw == "cloud_verified"
+            if onDisk || restorable { mediaIds.insert(m.id) }
+        }
 
         // (b) completed MomentUnderstanding for THIS Story's moments — same fetch EditPlanRequestBuilder does.
         let momentIds = Set(story.moments.map { $0.id })
         let allMUs = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []
         let auIds = Set(allMUs.map { $0.momentId }).intersection(momentIds)
 
-        // A Moment is READY iff it has BOTH a file AND a completed AU (same Moment id).
-        let usable = fileIds.intersection(auIds).count
-        return classify(usable: usable, withFile: fileIds.count, total: total)
+        // A Moment is READY iff it has usable media (local or restorable) AND a completed AU.
+        let usable = mediaIds.intersection(auIds).count
+        return classify(usable: usable, withFile: mediaIds.count, total: total)
     }
 
     /// R6 — restore cloud-only Moments FIRST, then evaluate. Before planning, any Moment whose local original
