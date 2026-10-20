@@ -37,11 +37,9 @@ struct ReviseStorySheet: View {
     @State private var cloudGate = CloudAuthGateModel()
     @State private var retryable = false
 
-    private var numbering: StoryMomentNumbering {
-        // Build from the planner-USABLE Moments (local file + completed AU), matching the request payload, so a
-        // "Moment N" reference never points at a cloud-only/un-analyzed Moment the planner can't place (R7 fix).
-        StoryMomentNumbering(ordered: EditPlanRequestBuilder.usableNumberedMoments(for: story, context: modelContext))
-    }
+    // Number ALL linked Moments by stable StoryMomentLink order (cloud-only included) so "Moment N" is the same
+    // Moment on every device; local availability is a per-item badge, never a filter (owner P0).
+    private var numbering: StoryMomentNumbering { StoryMomentNumbering(story: story.moments) }
 
     var body: some View {
         NavigationStack {

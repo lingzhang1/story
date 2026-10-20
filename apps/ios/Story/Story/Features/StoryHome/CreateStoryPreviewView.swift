@@ -14,6 +14,7 @@ import AVKit
 struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
     @State private var cloudGate = CloudAuthGateModel()
+    @Environment(AuthStore.self) private var auth
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
     /// When set, this host launches a CREATE ANOTHER VERSION from that parent (Explore + Customize), not a
@@ -192,6 +193,13 @@ struct CreateStoryPreviewView: View {
     private func beginMusicFlow() {
         resolvingMusic = true
         Task {
+            // Phase 3 (cloud-only references): restore ON DEMAND any Moment the user REFERENCED in a directive
+            // whose original bytes are not on this device yet (cloud-only shell after R7 sync), BEFORE planning
+            // — so the referenced Moment is in the planner's moments[] instead of being dropped (which made the
+            // opening/include directive unsatisfiable -> invalid_after_repair). Bounded to the referenced ids
+            // (never a bulk download). A failure does NOT abort or change the Moment set — the user's selections
+            // are preserved and the planner is told honestly about what it has.
+            await restoreReferencedCloudOnlyMoments()
             let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
             await MainActor.run {
                 resolvingMusic = false
@@ -201,6 +209,28 @@ struct CreateStoryPreviewView: View {
                     chosenMusic = nil; showCreating = true   // provider unavailable -> honest no-music
                 }
             }
+        }
+    }
+
+    /// Restore (R6) only the cloud-only Moments this Story's PERSISTED directives reference, on demand, before
+    /// planning. Reuses MediaResolver.ensureLocal (size + SHA256 verified, atomic install, account-scoped). A
+    /// Moment that cannot be restored stays cloud-only and is simply not in the payload — the reference is not
+    /// discarded and the user's other selections are untouched.
+    private func restoreReferencedCloudOnlyMoments() async {
+        guard let dirs = ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON) else { return }
+        var ids = Set(dirs.mustInclude + dirs.exclude)
+        if let o = dirs.opening { ids.insert(o) }
+        if let e = dirs.ending { ids.insert(e) }
+        for pair in dirs.orderAfter + dirs.orderAdjacent { ids.formUnion(pair) }
+        guard !ids.isEmpty else { return }
+        let owner = auth.storyUserId
+        for m in story.moments where ids.contains(m.id) {
+            guard let rel = m.asset?.relativePath else { continue }
+            if MediaStore.shared.fileExists(relativePath: rel) { continue }   // already local
+            guard m.cloudMediaId != nil else { continue }                     // not backed up — nothing to restore
+            _ = try? await MediaResolver.shared.ensureLocal(
+                moment: m, context: context, activeOwner: owner,
+                token: { [weak auth] in await auth?.validAccessToken() })
         }
     }
 
@@ -386,7 +416,7 @@ struct CreateStoryPreviewView: View {
                 initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
                 initialEditingApproach: story.effectiveEditingApproach,
                 visualFirstAvailable: StoryMultimodalPlanning.enabled,
-                numbering: StoryMomentNumbering(ordered: EditPlanRequestBuilder.usableNumberedMoments(for: story, context: context)),
+                numbering: StoryMomentNumbering(story: story.moments),
                 momentForId: { id in story.moments.first { $0.id == id } },
                 initialCreativeDirection: story.creativeDirectionText ?? "",
                 // Seed ONLY must_include as visual chips. Chips are an INCLUDE-only control

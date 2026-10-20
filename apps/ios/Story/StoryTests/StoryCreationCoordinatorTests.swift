@@ -463,8 +463,8 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     }
 
     // R7 regression: "Moment N" numbering for Customize/Revise must come from the PLANNER-USABLE set (local
-    // file + completed AU) — a cloud-only shell or an un-analyzed Moment must NOT occupy a number, or "Start
-    // with Moment N" would reference a Moment the planner never receives -> invalid_after_repair.
+    // The PLANNER PAYLOAD set (usableNumberedMoments) is local-file + completed-AU only — a cloud-only shell or
+    // an un-analyzed Moment is not in moments[]. (This is the planner input filter, NOT the picker numbering.)
     func test_usableNumbering_excludesCloudOnlyAndNoAUMoments() {
         let s = newStory()
         let m1 = momentWithFile(s, rel: "media/num-1.mov", dur: 6); completeAU(m1, useful: [(0, 4)])  // usable
@@ -479,12 +479,30 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         try? ctx.save()
 
         let usable = EditPlanRequestBuilder.usableNumberedMoments(for: s, context: ctx)
-        XCTAssertEqual(usable.map { $0.id }, [m1.id], "only the Moment with BOTH a local file AND completed AU is numbered")
-        let numbering = StoryMomentNumbering(ordered: usable)
-        XCTAssertEqual(numbering.count, 1)
+        XCTAssertEqual(usable.map { $0.id }, [m1.id], "planner payload = only Moments with BOTH a local file AND completed AU")
+        _ = m2
+    }
+
+    // Owner P0: the PICKER / "Moment N" numbering must include EVERY linked Moment — cloud-only included — by
+    // stable StoryMomentLink order, with a localAvailable flag for the badge (never hidden, never renumbered by
+    // availability). This is what makes "Moment N" the same Moment on every device.
+    func test_pickerNumbering_includesAllLinkedMomentsWithAvailabilityFlag() {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/all-1.mov", dur: 6); completeAU(m1, useful: [(0, 4)])  // local
+        // Cloud-only shell (no local bytes) — must STILL be numbered.
+        let shellAsset = AssetModel(relativePath: "media/all-cloud.mov", durationSeconds: 6, source: .directed)
+        shellAsset.localAvailability = .evicted
+        let m2 = MomentModel(source: .directed, asset: shellAsset)
+        ctx.insert(shellAsset); ctx.insert(m2)
+        if let lnk = s.attach(m2) { ctx.insert(lnk) }
+        try? ctx.save()
+
+        let numbering = StoryMomentNumbering(story: s.moments)
+        XCTAssertEqual(numbering.count, 2, "ALL linked Moments are numbered, cloud-only included")
         XCTAssertEqual(numbering.id(forNumber: 1), m1.id)
-        XCTAssertNil(numbering.id(forNumber: 2), "no number maps to the no-AU or cloud-only Moment")
-        _ = m2   // referenced to keep the binding
+        XCTAssertEqual(numbering.id(forNumber: 2), m2.id, "cloud-only Moment keeps its stable number")
+        XCTAssertEqual(numbering.items.first { $0.id == m1.id }?.localAvailable, true)
+        XCTAssertEqual(numbering.items.first { $0.id == m2.id }?.localAvailable, false, "cloud-only -> cloud badge")
     }
 
     // MARK: - Music-ready seam
