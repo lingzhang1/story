@@ -175,3 +175,24 @@ def test_output_backup_refuses_unverified_asset(ctx):
     r2 = client.post("/v1/stories/s1/outputs/o1/backup", headers=_auth("userA"),
                      json={"cloud_media_id": "cm-x"})
     assert r2.status_code == 200 and r2.json()["backed_up"] is True
+
+
+def test_reused_mutation_id_different_payload_rejected(ctx):
+    client, _, _ = ctx
+    client.put("/v1/stories/s1", headers=_auth("userA"),
+               json={"base_revision": 0, "mutation_id": "m1", "doc": {"t": 1}})
+    client.put("/v1/stories/s1", headers=_auth("userA"),
+               json={"base_revision": 1, "mutation_id": "m2", "doc": {"t": 2}})  # rev 2
+    # Same mutation_id m2, CHANGED payload, stale base -> 409 mutation_id_payload_mismatch (Phase-1 #4).
+    r = client.put("/v1/stories/s1", headers=_auth("userA"),
+                   json={"base_revision": 1, "mutation_id": "m2", "doc": {"t": 999}})
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "mutation_id_payload_mismatch"
+
+
+def test_oversized_document_413(ctx):
+    client, _, _ = ctx
+    import story_store as _s
+    big = {"blob": "x" * (_s.MAX_DOC_BYTES + 100)}
+    r = client.put("/v1/stories/s1", headers=_auth("userA"),
+                   json={"base_revision": 0, "mutation_id": "m1", "doc": big})
+    assert r.status_code == 413 and r.json()["detail"]["error"] == "story_document_too_large"

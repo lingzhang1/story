@@ -22,6 +22,7 @@ media store, that each belongs to THIS account AND is cloud_verified before mark
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -30,9 +31,27 @@ from typing import Optional
 
 STORY_DOC_SCHEMA = "story_doc/1"
 
+# Phase-1 #5: bound the Story document. DynamoDB's hard item limit is 400 KB; we fail EXPLICITLY well under it
+# (a doc at/over this limit must externalize large edit-plan snapshots to S3 — design §C2 — not be truncated).
+MAX_DOC_BYTES = 350_000
+
 
 class StoryNotFound(Exception):
     """No Story document for (owner, story_id) — surfaced as 404 so another account's doc is invisible."""
+
+
+class StoryDocumentTooLarge(Exception):
+    """The serialized Story document exceeds MAX_DOC_BYTES. Explicit failure — never silently truncated."""
+
+    def __init__(self, size: int):
+        super().__init__(f"story document {size} bytes exceeds {MAX_DOC_BYTES}")
+        self.size = size
+
+
+class StoryMutationConflict(Exception):
+    """The SAME mutation_id was reused with a DIFFERENT payload (Phase-1 #4). A lost-response retry MUST carry
+    an identical payload; a different payload under a reused id is a client bug, not an idempotent retry, and
+    is rejected rather than returning a false success."""
 
 
 class StoryConflict(Exception):
@@ -53,6 +72,13 @@ class StoryStoreConfig:
 
 def _now() -> int:
     return int(time.time())
+
+
+def _mutation_digest(*, base_revision: int, doc_json: str, deleted: bool, incomplete_deps: bool) -> str:
+    """Stable sha256 over the mutation's effective payload, so a reused mutation_id with a DIFFERENT payload is
+    detected (Phase-1 #4). Canonical: base_revision + flags + the already-canonicalized doc JSON."""
+    canon = f"{base_revision}\x1f{int(bool(deleted))}\x1f{int(bool(incomplete_deps))}\x1f{doc_json}"
+    return hashlib.sha256(canon.encode('utf-8')).hexdigest()
 
 
 class StoryStore:
@@ -114,12 +140,21 @@ class StoryStore:
         Returns {story_id, revision, updated_at, deleted, incomplete_deps}."""
         now = _now()
         new_rev = base_revision + 1
+        doc_json = json.dumps(doc, separators=(",", ":"))
+        # Phase-1 #5: explicit size failure (never truncate). Guard the serialized doc BEFORE any write.
+        if len(doc_json.encode("utf-8")) > MAX_DOC_BYTES:
+            raise StoryDocumentTooLarge(len(doc_json.encode("utf-8")))
+        # Phase-1 #4: bind mutation_id to the EXACT payload. A lost-response retry carries the identical payload
+        # and so the identical digest; a reused id with a changed payload must NOT be treated as idempotent.
+        mutation_digest = _mutation_digest(base_revision=base_revision, doc_json=doc_json,
+                                           deleted=deleted, incomplete_deps=incomplete_deps)
         item = {
             "story_user_id": {"S": owner}, "story_id": {"S": story_id},
             "revision": {"N": str(new_rev)}, "last_mutation_id": {"S": mutation_id},
+            "last_mutation_digest": {"S": mutation_digest},
             "deleted": {"BOOL": bool(deleted)}, "incomplete_deps": {"BOOL": bool(incomplete_deps)},
             "updated_at": {"N": str(now)},
-            "doc": {"S": json.dumps(doc, separators=(",", ":"))},
+            "doc": {"S": doc_json},
         }
         try:
             if base_revision <= 0:
@@ -139,7 +174,10 @@ class StoryStore:
             # Condition failed — resolve retry-vs-conflict from the CURRENT item.
             cur = self.get(owner, story_id)
             if cur is not None and cur.get("last_mutation_id") == mutation_id:
-                return self._summary(cur)                 # C5: idempotent — this exact write already committed
+                # Same id. ONLY idempotent if the payload digest also matches (Phase-1 #4).
+                if cur.get("last_mutation_digest") == mutation_digest:
+                    return self._summary(cur)             # C5: this exact write already committed
+                raise StoryMutationConflict()             # reused id, different payload -> reject (no false success)
             raise StoryConflict(cur or {})                # C1/C5: genuine concurrent modification
         return {"story_id": story_id, "revision": new_rev, "updated_at": now,
                 "deleted": bool(deleted), "incomplete_deps": bool(incomplete_deps)}
@@ -173,6 +211,7 @@ class StoryStore:
             "story_id": item["story_id"]["S"],
             "revision": int(item.get("revision", {}).get("N", "0")),
             "last_mutation_id": item.get("last_mutation_id", {}).get("S", ""),
+            "last_mutation_digest": item.get("last_mutation_digest", {}).get("S", ""),
             "deleted": item.get("deleted", {}).get("BOOL", False),
             "incomplete_deps": item.get("incomplete_deps", {}).get("BOOL", False),
             "updated_at": int(item.get("updated_at", {}).get("N", "0")),

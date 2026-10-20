@@ -548,6 +548,15 @@ def create_app() -> FastAPI:
             out = store.put(owner=owner, story_id=story_id, base_revision=body.base_revision,
                             mutation_id=body.mutation_id, doc=body.doc, deleted=body.deleted,
                             incomplete_deps=not all_ok)
+        except _stories.StoryDocumentTooLarge as e:
+            # Phase-1 #5: explicit failure, never truncate. 413 so the client externalizes large plans (C2).
+            raise HTTPException(status_code=413,
+                                detail={"error": "story_document_too_large", "size": e.size,
+                                        "max": _stories.MAX_DOC_BYTES})
+        except _stories.StoryMutationConflict:
+            # Phase-1 #4: same mutation_id reused with a DIFFERENT payload — reject, never a false success.
+            raise HTTPException(status_code=409,
+                                detail={"error": "mutation_id_payload_mismatch"})
         except _stories.StoryConflict as c:
             # 409: the client is stale and a DIFFERENT mutation won. Return the server state for Keep Both /
             # Use Cloud Version (never a silent overwrite).

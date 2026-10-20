@@ -112,3 +112,21 @@ def test_soft_delete_syncs_as_tombstone():
     out = st.put(owner="A", story_id="s1", base_revision=1, mutation_id="m2", doc={}, deleted=True)
     assert out["deleted"] is True
     assert st.get("A", "s1")["deleted"] is True
+
+
+def test_same_mutation_id_different_payload_is_rejected():
+    # Phase-1 #4: a reused mutation_id with a CHANGED payload must NOT return a false idempotent success.
+    st = _store()
+    st.put(owner="A", story_id="s1", base_revision=0, mutation_id="m1", doc={"t": 1})
+    st.put(owner="A", story_id="s1", base_revision=1, mutation_id="m2", doc={"t": 2})  # rev 2, m2/digest(t:2)
+    # Retry m2 at stale base but with a DIFFERENT doc -> StoryMutationConflict (not success, not StoryConflict).
+    with pytest.raises(s.StoryMutationConflict):
+        st.put(owner="A", story_id="s1", base_revision=1, mutation_id="m2", doc={"t": 999})
+
+
+def test_oversized_document_fails_explicitly():
+    # Phase-1 #5: a doc over MAX_DOC_BYTES raises StoryDocumentTooLarge rather than being truncated/written.
+    st = _store()
+    big = {"blob": "x" * (s.MAX_DOC_BYTES + 100)}
+    with pytest.raises(s.StoryDocumentTooLarge):
+        st.put(owner="A", story_id="s1", base_revision=0, mutation_id="m1", doc=big)
