@@ -15,6 +15,7 @@ struct HomeView: View {
     @State private var showCapture = false
     @State private var showStories = false
     @State private var confirmSignOut = false
+    @State private var showSignIn = false   // Home-header direct sign-in sheet (no gated action required)
 
     // R1 account isolation: the @Query is unscoped (SwiftData predicates can't close over runtime auth state),
     // so we filter in memory through the CENTRALIZED AccountScope rules. SwiftUI re-renders this view when
@@ -94,9 +95,13 @@ struct HomeView: View {
         HStack {
             StoryEyebrow(text: "Story")
             Spacer()
-            // Account affordance — only when signed in. Lets the user (and beta testers) sign out,
-            // which is required to RE-TEST the OTP flow and to verify "logout keeps local content".
-            // AuthStore exposes only storyUserId (never the email), so we show a short id, by design.
+            // Account affordance in the Home header — the ONLY entry point to sign in WITHOUT first triggering a
+            // gated AI action (Start a Story / music search / capture AI). Beta testers can sign in here to see
+            // their account's Stories and to (re-)test the OTP flow.
+            //   • Signed in  -> a menu showing a short id + Sign Out (AuthStore exposes only storyUserId, never
+            //                   the email, by design).
+            //   • Signed out -> a "Sign In" button that presents the shared SignInView as a sheet. No Story is
+            //                   created and no AI is triggered; local content stays visible either way.
             if auth.isSignedIn {
                 Menu {
                     if let uid = auth.storyUserId {
@@ -110,6 +115,13 @@ struct HomeView: View {
                         .font(.system(size: 20))
                         .foregroundStyle(StoryTheme.cream.opacity(0.7))
                 }
+            } else {
+                Button { showSignIn = true } label: {
+                    Label("Sign In", systemImage: "person.crop.circle")
+                        .font(StoryTheme.body(14))
+                        .foregroundStyle(StoryTheme.gold)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.top, 32).padding(.bottom, 22)
@@ -118,6 +130,13 @@ struct HomeView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Your Moments and Stories stay on this device. You'll sign in again to use Story's AI.")
+        }
+        .sheet(isPresented: $showSignIn) {
+            // Direct sign-in from Home: no pending action to resume — dismiss on success or cancel. On success,
+            // AuthStore resolves the canonical story_user_id (R1.1) and the Home lists re-scope to the account.
+            SignInView(auth: auth,
+                       onSignedIn: { showSignIn = false },
+                       onCancel: { showSignIn = false })
         }
     }
 
