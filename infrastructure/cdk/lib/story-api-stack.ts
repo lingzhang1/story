@@ -173,6 +173,19 @@ export class StoryApiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN, // dev: ownership records are durable alongside the originals
     });
 
+    // R7 — account-owned Story documents (metadata sync). Composite key (story_user_id HASH, story_id RANGE):
+    // a Query on the PK lists ONE account's Stories; a wrong owner finds nothing (no cross-account leak).
+    // Server monotonic `revision` + `last_mutation_id` live inside items (optimistic concurrency + idempotency
+    // are app-enforced via conditional writes). NO TTL — Story projects are durable. PAY_PER_REQUEST. RETAIN
+    // (a Story doc is the user's only cloud copy of their project metadata). SEPARATE from the media table.
+    const storiesTable = new dynamodb.Table(this, "StoryDocumentsTable", {
+      tableName: `story-${environment}-stories`,
+      partitionKey: { name: "story_user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "story_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // Worker Lambda — DOCKER-FREE zip asset (the sandbox cannot run Docker). scripts/build_worker_asset.sh
     // pre-stages app/ + packages/ + contracts/ + prompts/ + the Linux cp312 pydantic wheels into
     // infrastructure/cdk/.worker-asset (boto3 is in the Lambda runtime). The planner resolves prompts at
@@ -239,6 +252,7 @@ export class StoryApiStack extends cdk.Stack {
     // verification, AbortMultipartUpload + ListMultipartUploadParts for resumable multipart. NO s3:DeleteObject
     // (no deletion this increment) and NO bucket-level admin. Scoped to the media/* prefix.
     mediaTable.grantReadWriteData(instanceRole);
+    storiesTable.grantReadWriteData(instanceRole); // R7: account-owned Story documents RW
     instanceRole.addToPolicy(new iam.PolicyStatement({
       sid: "MediaObjectAccess",
       effect: iam.Effect.ALLOW,
@@ -295,6 +309,7 @@ export class StoryApiStack extends cdk.Stack {
               // R2/R3 cloud media (private original-media storage).
               { name: "STORY_MEDIA_TABLE", value: mediaTable.tableName },
               { name: "STORY_MEDIA_BUCKET", value: mediaBucket.bucketName },
+              { name: "STORY_STORIES_TABLE", value: storiesTable.tableName }, // R7
               // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },
@@ -542,6 +557,7 @@ export class StoryApiStack extends cdk.Stack {
     }
     new cdk.CfnOutput(this, "Environment", { value: environment });
     new cdk.CfnOutput(this, "EditPlanJobsTableName", { value: jobsTable.tableName });
+    new cdk.CfnOutput(this, "StoryDocumentsTableName", { value: storiesTable.tableName });
     new cdk.CfnOutput(this, "EditPlanJobsQueueUrl", { value: jobsQueue.queueUrl });
     new cdk.CfnOutput(this, "EditPlanStagingBucketName", { value: stagingBucket.bucketName });
     new cdk.CfnOutput(this, "EditPlanWorkerName", { value: worker.functionName });

@@ -75,6 +75,7 @@ from edit_planner import (
 import edit_planner as _edit_planner_mod
 import edit_plan_jobs as _jobs
 import media_store as _media  # R2/R3: account-owned cloud media ownership + presigned upload/download
+import story_store as _stories  # R7: account-owned Story document sync (optimistic concurrency)
 
 
 def _edit_planner_prompt_version() -> str:
@@ -193,6 +194,28 @@ class MediaMultipartInitiateRequest(BaseModel):
 class MediaPresignPartsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     part_numbers: list[int] = Field(..., description="1-based part numbers to presign")
+
+
+class StoryPutRequest(BaseModel):
+    """PUT /v1/stories/{story_id} body (R7). Optimistic concurrency + idempotency: base_revision is the
+    revision the client last observed (0 to create); mutation_id is a stable client-minted key so a
+    lost-response retry is NOT read as a conflict. referenced_cloud_media_ids lists the cloud assets the doc
+    depends on so the server can verify (C3: a cloud_media_id is never authorization)."""
+
+    model_config = ConfigDict(extra="forbid")
+    base_revision: int = Field(..., ge=0)
+    mutation_id: str = Field(..., min_length=1, max_length=200)
+    doc: dict = Field(..., description="story_doc/1 body")
+    deleted: bool = Field(default=False)
+    referenced_cloud_media_ids: list[str] = Field(default_factory=list)
+
+
+class StoryOutputBackupRequest(BaseModel):
+    """POST /v1/stories/{story_id}/outputs/{output_id}/backup — register a completed render's verified
+    cloud_media_id on the output. The server verifies the asset is THIS account's and cloud_verified."""
+
+    model_config = ConfigDict(extra="forbid")
+    cloud_media_id: str = Field(..., min_length=1)
 
 
 class StoryCoverageRequest(BaseModel):
@@ -488,6 +511,62 @@ def create_app() -> FastAPI:
         return {"media": [{k: r.get(k) for k in ("cloud_media_id", "state", "size_bytes",
                                                  "verified_at", "device_asset_id", "source_moment_id")}
                           for r in recs]}
+
+    # ========================================================================================================
+    # R7 — account-owned Story metadata sync (optimistic concurrency + idempotency). All require_user,
+    # account-scoped to principal.story_user_id. A cloud_media_id is NEVER authorization (C3).
+    # ========================================================================================================
+    def _story_store() -> "_stories.StoryStore":
+        ov = getattr(app.state, "_story_store_override", None)
+        if ov is not None:
+            return ov
+        return _stories.StoryStore(media=_media_store())
+
+    @app.get("/v1/stories", status_code=200)
+    def stories_index(principal: Principal = Depends(require_user)):
+        """The caller's Story INDEX (no bodies) — full-account pull on a new device. Query on the owner PK."""
+        return {"stories": _story_store().index(principal.story_user_id)}
+
+    @app.get("/v1/stories/{story_id}", status_code=200)
+    def story_get(story_id: str, principal: Principal = Depends(require_user)):
+        """The caller's full Story document + current revision. 404 if not this account's (no cross-account)."""
+        rec = _story_store().get(principal.story_user_id, story_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        return rec
+
+    @app.put("/v1/stories/{story_id}", status_code=200)
+    def story_put(story_id: str, body: StoryPutRequest, principal: Principal = Depends(require_user)):
+        """Create (base_revision 0) or update (base_revision == current) with optimistic concurrency +
+        mutation_id idempotency. C3: verify every referenced cloud asset is THIS account's AND cloud_verified
+        before accepting; unverified refs mark the doc incomplete_deps rather than falsely reporting complete.
+        On a genuine concurrent modification -> 409 with the server's current {revision, doc}."""
+        store = _story_store()
+        owner = principal.story_user_id
+        all_ok, _unverified = store.verify_dependencies(owner, body.referenced_cloud_media_ids)
+        try:
+            out = store.put(owner=owner, story_id=story_id, base_revision=body.base_revision,
+                            mutation_id=body.mutation_id, doc=body.doc, deleted=body.deleted,
+                            incomplete_deps=not all_ok)
+        except _stories.StoryConflict as c:
+            # 409: the client is stale and a DIFFERENT mutation won. Return the server state for Keep Both /
+            # Use Cloud Version (never a silent overwrite).
+            raise HTTPException(status_code=409, detail={"conflict": True, "current": c.current})
+        return out
+
+    @app.post("/v1/stories/{story_id}/outputs/{output_id}/backup", status_code=200)
+    def story_output_backup(story_id: str, output_id: str, body: StoryOutputBackupRequest,
+                            principal: Principal = Depends(require_user)):
+        """Register a completed render's cloud_media_id on an output. Refuses an asset that is not THIS
+        account's or not cloud_verified (decision 2 #5/#8/#9; C3). The client then syncs the doc carrying the
+        reference; this endpoint only validates + acknowledges the backup."""
+        owner = principal.story_user_id
+        all_ok, unverified = _story_store().verify_dependencies(owner, [body.cloud_media_id])
+        if not all_ok:
+            raise HTTPException(status_code=409,
+                                detail={"error": "cloud_media_not_verified", "unverified": unverified})
+        return {"story_id": story_id, "output_id": output_id,
+                "cloud_media_id": body.cloud_media_id, "backed_up": True}
 
     # ---- R4-B: large-file MULTIPART (all require_user; account-scoped; no bytes via App Runner) -----
     @app.post("/v1/media/multipart/initiate", status_code=200)
