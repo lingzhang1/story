@@ -43,8 +43,11 @@ struct StorageSettingsView: View {
                         #if DEBUG
                         opt.protectedMode = protectedMode
                         #endif
-                        lastFreed = opt.freeUpSpace(moments: moments())
-                        refresh()
+                        let ms = moments()
+                        Task {
+                            lastFreed = await opt.freeUpSpace(moments: ms)
+                            refresh()
+                        }
                     } label: {
                         Label("Free Up Space", systemImage: "internaldrive")
                     }

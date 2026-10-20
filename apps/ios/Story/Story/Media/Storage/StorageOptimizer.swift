@@ -75,26 +75,33 @@ struct StorageOptimizer {
 
     // MARK: - Manual Free Up Space
 
-    /// Evict every eligible Moment for the active account. Returns actual bytes freed (protected bytes in DEBUG
-    /// mode are NOT counted). Crash-safe + idempotent per asset.
+    /// Evict every eligible Moment for the active account, PRESERVING a poster preview for each first (owner #6:
+    /// never blank a tile). Returns actual bytes freed (protected bytes in DEBUG mode are NOT counted).
+    /// Async because it extracts a poster frame before freeing. Crash-safe + idempotent per asset.
     @discardableResult
-    func freeUpSpace(moments: [MomentModel]) -> Int {
+    func freeUpSpace(moments: [MomentModel]) async -> Int {
         var freed = 0
         for m in moments where evictionRefusal(for: m) == nil {
-            freed += evict(moment: m)
+            freed += await evict(moment: m)
         }
         return freed
     }
 
-    /// Evict ONE Moment's original (after re-checking eligibility). Returns bytes freed (0 if refused or if the
-    /// bytes were moved to the protected store in DEBUG mode). Crash-safe: flip availability -> evicted and SAVE
-    /// before removing bytes (#7), so a crash can never leave an `available` record with a missing file.
+    /// Evict ONE Moment's original (after re-checking eligibility). PRESERVES a poster preview FIRST and REFUSES
+    /// to evict if the poster cannot be written (so a cloud-only tile always keeps a visible preview — #6).
+    /// Returns bytes freed (0 if refused or protected-moved in DEBUG). Crash-safe: flip availability -> evicted
+    /// and SAVE before removing bytes (#7).
     @discardableResult
-    func evict(moment: MomentModel) -> Int {
+    func evict(moment: MomentModel) async -> Int {
         guard evictionRefusal(for: moment) == nil, let asset = moment.asset else { return 0 }
         let rel = asset.relativePath
         let url = MediaStore.shared.absoluteURL(for: rel)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0 ?? 0
+
+        // #6: persist a poster preview from the ORIGINAL before we free it. If this fails, DO NOT evict — the
+        // user must never be left with a black tile they can't preview.
+        let previewOK = await MediaPreviewStore.shared.ensurePreview(momentId: moment.id, originalURL: url)
+        guard previewOK else { return 0 }
 
         // Crash-safe ordering: record the intended state FIRST, then remove bytes. (#7)
         asset.localAvailability = .evicted

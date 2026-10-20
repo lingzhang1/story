@@ -38,6 +38,11 @@ final class StorageOptimizerTests: XCTestCase {
         m.cloudMediaId = "cm-\(UUID().uuidString.prefix(8))"
         m.cloudStateRaw = "cloud_verified"
         ctx.insert(asset); ctx.insert(m); try ctx.save()
+        // Seed a preview so eviction (which requires a poster) is not blocked by poster extraction on
+        // these non-video fixture bytes.
+        let pURL = MediaPreviewStore.shared.previewURL(momentId: m.id)
+        try? FileManager.default.createDirectory(at: pURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data([0xFF,0xD8,0xFF]).write(to: pURL); tmp.append(pURL)
         return m
     }
 
@@ -45,11 +50,11 @@ final class StorageOptimizerTests: XCTestCase {
         StorageOptimizer(context: ctx, activeOwner: owner, isInActiveUse: inUse)
     }
 
-    func test_evicts_verified_owned_available_and_frees_real_bytes() throws {
+    func test_evicts_verified_owned_available_and_frees_real_bytes() async throws {
         let m = try makeVerified(owner: "A", bytes: 8192)
         let o = opt("A")
         XCTAssertNil(o.evictionRefusal(for: m))
-        let freed = o.evict(moment: m)
+        let freed = await o.evict(moment: m)
         XCTAssertEqual(freed, 8192)
         XCTAssertEqual(m.asset?.localAvailability, .evicted)
         XCTAssertFalse(MediaStore.shared.fileExists(relativePath: m.asset!.relativePath))  // bytes gone
@@ -103,12 +108,12 @@ final class StorageOptimizerTests: XCTestCase {
         XCTAssertEqual(opt("A").evictionRefusal(for: m), .sharedFile)
     }
 
-    func test_free_up_space_sums_only_eligible() throws {
+    func test_free_up_space_sums_only_eligible() async throws {
         let a = try makeVerified(owner: "A", bytes: 1000)
         let b = try makeVerified(owner: "A", bytes: 2000)
         b.asset?.keepDownloaded = true                 // b is protected -> not freed
         try ctx.save()
-        let freed = opt("A").freeUpSpace(moments: [a, b])
+        let freed = await opt("A").freeUpSpace(moments: [a, b])
         XCTAssertEqual(freed, 1000)
         XCTAssertEqual(a.asset?.localAvailability, .evicted)
         XCTAssertEqual(b.asset?.localAvailability, .available)
@@ -126,11 +131,11 @@ final class StorageOptimizerTests: XCTestCase {
         XCTAssertEqual(s.availableCount, 2)
     }
 
-    func test_evict_is_idempotent() throws {
+    func test_evict_is_idempotent() async throws {
         let m = try makeVerified(owner: "A", bytes: 500)
         let o = opt("A")
-        XCTAssertEqual(o.evict(moment: m), 500)
-        XCTAssertEqual(o.evict(moment: m), 0)               // already evicted -> no-op
+        let e1 = await o.evict(moment: m); XCTAssertEqual(e1, 500)
+        let e2 = await o.evict(moment: m); XCTAssertEqual(e2, 0)               // already evicted -> no-op
         XCTAssertEqual(o.evictionRefusal(for: m), .alreadyEvicted)
     }
 }
