@@ -114,6 +114,12 @@ def test_download_requires_verified():
     rec, _ = s.initiate_upload(owner="o1", content_sha256="a" * 64, size_bytes=10)
     with pytest.raises(m.MediaVerificationError):
         s.presign_download(owner="o1", cloud_media_id=rec["cloud_media_id"])
+    # After verification, download returns the SERVER-AUTHORITATIVE expectation (R6 safeguard #7):
+    # a device without the upload job can still verify size + full-file sha256.
+    s._s3.put(rec["s3_key"], 10, "a" * 64)
+    s.complete_upload(owner="o1", cloud_media_id=rec["cloud_media_id"])
+    d = s.presign_download(owner="o1", cloud_media_id=rec["cloud_media_id"])
+    assert d["size_bytes"] == 10 and d["content_sha256"] == "a" * 64 and d["url"]
 
 
 def test_list_is_owner_scoped():
