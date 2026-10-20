@@ -572,9 +572,12 @@ final class StoryCreationCoordinator {
             // retry a couple of times with a short backoff before giving up, so a brief suspension does not lose
             // a revision whose job is already running server-side.
             let jobId: String
+            let reusedExistingJob: Bool
             if let existing = story.planJobId {
                 jobId = existing   // recovery: a job was already submitted for this attempt
+                reusedExistingJob = true
             } else {
+                reusedExistingJob = false
                 var submitted: String? = nil
                 var lastErr: Error? = nil
                 for attempt in 0..<3 {
@@ -614,24 +617,32 @@ final class StoryCreationCoordinator {
                 + "music=\(pendingMusic?.trackId.prefix(10) ?? "none") op=\(pendingOperationType)")
 
             // Poll to terminal (bounded backoff; transport errors don't end the poll; cancel stops it).
-            let final = try await jobClient.pollUntilTerminal(
-                jobId: jobId, maxSeconds: 900,
-                shouldCancel: { [weak self] in self?.cancelRequested ?? false },
-                onState: { [weak self] st in
-                    story.planJobStatus = st.status.rawValue
-                    self?.updatePendingStatus(story: story, jobStatus: st.status.rawValue)
-                    // Reflect the REAL backend stage in the planning sub-line (honest; backend only distinguishes
-                    // queued vs running — critique happens inside one 'running' invocation and is NOT separately
-                    // observable, so we do not fabricate a 'Refining' stage the server can't report).
-                    self?.planningSubstatus = {
-                        switch st.status {
-                        case .queued:           return "Queued for planning…"
-                        case .running:          return "Planning your Story…"
-                        case .cancelRequested:  return "Cancelling…"
-                        default:                return nil
-                        }
-                    }()
-                })
+            // STALE-JOB RECOVERY: a REUSED persisted job_id can be gone server-side (expired / pruned / a
+            // different container) -> the GET 404s. Rather than dead-ending on "unexpected status 404", clear
+            // the stale handle and submit ONE fresh job for the same operation_id (idempotent), then poll that.
+            var activeJobId = jobId
+            var final: EditPlanJobState
+            do {
+                final = try await pollWithStatusUpdates(jobId: activeJobId, story: story)
+            } catch EditPlanJobError.badStatus(404) where reusedExistingJob {
+                if cancelRequested { return finishCancelled() }
+                MediaEngineV1.beacon("editplan-job: reused job \(activeJobId.prefix(8)) is GONE (404) -> resubmitting fresh for op=\(opId.prefix(8))")
+                story.planJobId = nil; story.planJobStatus = nil; try? context.save()
+                do {
+                    let fresh = try await jobClient.submit(build.request, operationId: opId, owner: "dev",
+                                                           approach: requested, sheets: sheets,
+                                                           creativeBrief: brief, critiqueRevision: critique)
+                    activeJobId = fresh
+                    story.planJobId = fresh; story.planJobStatus = "queued"; try? context.save()
+                    upsertPending(story: story, operationId: opId, jobId: fresh, phase: "planning",
+                                  jobStatus: "queued", fingerprint: Self.fingerprint(
+                                    for: build.includedMedia.map(\.momentId), story: story))
+                    final = try await pollWithStatusUpdates(jobId: activeJobId, story: story)
+                } catch let EditPlanJobError.transport(underlying) {
+                    if cancelRequested || (underlying as NSError).code == NSURLErrorCancelled { return finishCancelled() }
+                    return finishFailed(.planTransport(String(describing: underlying)))
+                }
+            }
 
             switch final.status {
             case .completed:
@@ -650,7 +661,7 @@ final class StoryCreationCoordinator {
                 // Phase 3: durably persist the completed, validated-on-fetch plan at plan_ready BEFORE
                 // rendering, so a force-quit during render resumes from the saved plan (no re-poll/re-inference).
                 let planJSON = (try? StoryContractCoding.encoder().encode(p)).flatMap { String(data: $0, encoding: .utf8) }
-                upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: jobId,
+                upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: activeJobId,
                               phase: "plan_ready", jobStatus: "completed", planJSON: planJSON)
             case .failed:
                 // Distinguish the failure classes for honest UX (Phase 3). Issue 2: invalid_after_repair is
@@ -802,6 +813,26 @@ final class StoryCreationCoordinator {
     }
 
     // MARK: - Deterministic validator (pre-AVFoundation)
+
+    /// Poll one job to terminal, mirroring its status into the Story + pending row + planning sub-line. Shared
+    /// by the initial poll and the stale-job re-submit recovery.
+    private func pollWithStatusUpdates(jobId: String, story: StoryModel) async throws -> EditPlanJobState {
+        try await jobClient.pollUntilTerminal(
+            jobId: jobId, maxSeconds: 900,
+            shouldCancel: { [weak self] in self?.cancelRequested ?? false },
+            onState: { [weak self] st in
+                story.planJobStatus = st.status.rawValue
+                self?.updatePendingStatus(story: story, jobStatus: st.status.rawValue)
+                self?.planningSubstatus = {
+                    switch st.status {
+                    case .queued:           return "Queued for planning…"
+                    case .running:          return "Planning your Story…"
+                    case .cancelRequested:  return "Cancelling…"
+                    default:                return nil
+                    }
+                }()
+            })
+    }
 
     /// Validate a plan WITHOUT AVFoundation. Returns a human reason on the FIRST failure, or nil if valid.
     /// Checks: feasible flag; every referenced Moment resolves to a local file; source ranges valid
