@@ -194,13 +194,33 @@ struct MomentManageTile: View {
 struct MomentPreviewView: View {
     let moment: MomentModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @Environment(AuthStore.self) private var auth
     @State private var player: AVPlayer?
     @State private var image: UIImage?
+    @State private var resolvedURL: URL?         // R6: the on-disk URL once resolved (restored if needed)
+    @State private var restoring = false         // R6: a download is in flight
+    @State private var restoreError: String?
 
     private var isVideo: Bool { (moment.asset?.durationSeconds ?? 0) > 0 }
-    private var mediaURL: URL? {
+    private var localURL: URL? {
         guard let rel = moment.asset?.relativePath, MediaStore.shared.fileExists(relativePath: rel) else { return nil }
         return MediaStore.shared.absoluteURL(for: rel)
+    }
+
+    /// R6: ensure the original is on disk (download+verify+install if cloud-only), then expose its URL.
+    private func resolve() async {
+        if let u = localURL { resolvedURL = u; return }                 // already local
+        guard moment.cloudMediaId != nil else { return }                // not backed up -> stays unavailable
+        restoring = true; restoreError = nil
+        defer { restoring = false }
+        do {
+            resolvedURL = try await MediaResolver.shared.ensureLocal(
+                moment: moment, context: context, activeOwner: auth.storyUserId,
+                token: { await auth.validAccessToken() })
+        } catch {
+            restoreError = (error as? MediaResolveError)?.errorDescription ?? "Couldn't restore this video."
+        }
     }
 
     var body: some View {
@@ -227,6 +247,7 @@ struct MomentPreviewView: View {
         // Swipe-right-to-go-back, like a standard iOS detail screen (shared modifier). Coexists with the
         // player's own scrubber; acts only on a decisive rightward swipe.
         .swipeBackToDismiss(dismiss)
+        .task { await resolve() }
         .onDisappear { player?.pause() }
     }
 
@@ -237,7 +258,7 @@ struct MomentPreviewView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let url = mediaURL {
+        if let url = resolvedURL {
             if isVideo {
                 VideoPlayer(player: player)
                     .ignoresSafeArea()
@@ -253,12 +274,19 @@ struct MomentPreviewView: View {
                     image = UIImage(contentsOfFile: url.path)
                 }
             }
+        } else if restoring {
+            VStack(spacing: 12) {
+                ProgressView().tint(StoryTheme.gold)
+                Text("Downloading your video…")
+                    .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+            }
         } else {
             VStack(spacing: 10) {
-                Text("This media isn't available.")
+                Text(restoreError == nil ? "This media isn't available." : "Couldn't restore this video.")
                     .font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
-                Text("The original file wasn't found on this device.")
+                Text(restoreError ?? "The original file wasn't found on this device.")
                     .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .multilineTextAlignment(.center)
             }
         }
     }

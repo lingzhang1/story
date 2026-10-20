@@ -198,41 +198,35 @@ struct MomentsLibraryView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Button { dismiss() } label: {
                 Text(backGlyph).font(StoryTheme.body(18)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                    .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
+                    .frame(width: 40, height: 44, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(backLabel)
             VStack(alignment: .leading, spacing: 2) {
                 Text(titleText).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                    .lineLimit(1).minimumScaleFactor(0.8)
                 Text(subtitleText)
                     .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
+                    .lineLimit(1)
             }
-            Spacer()
-            // R4-A.1: Auto Backup settings entry (home library + signed in).
-            if auth.isSignedIn, libraryContext.isHome {
-                Button { showBackupSettings = true } label: {
-                    Image(systemName: "icloud").font(.system(size: 18))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
-                        .frame(width: 40, height: 40).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("Auto Backup settings")
-            }
-            // Import existing photos/videos into the GLOBAL Moments library (home). Lets the user bring in a
-            // large iPhone video to exercise the multipart/resume upload path.
+            Spacer(minLength: 8)
+            // Consolidated actions: a single overflow menu keeps the header uncluttered (owner: header was too
+            // crowded with separate cloud / import / storage icons). Home + signed-in gates unchanged.
             if libraryContext.isHome {
-                Button { showImporter = true } label: {
-                    Image(systemName: "square.and.arrow.down").font(.system(size: 18))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
+                Menu {
+                    if auth.isSignedIn {
+                        Button { showBackupSettings = true } label: { Label("Auto Backup", systemImage: "icloud") }
+                    }
+                    Button { showImporter = true } label: { Label("Import Photos or Videos", systemImage: "square.and.arrow.down") }
+                    if auth.isSignedIn {
+                        Button { showStorage = true } label: { Label("Manage Storage", systemImage: "internaldrive") }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.system(size: 19))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.7))
                         .frame(width: 40, height: 40).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("Import photos or videos")
-            }
-            // R5: Storage management (home + signed in) — optimize/free up space.
-            if auth.isSignedIn, libraryContext.isHome {
-                Button { showStorage = true } label: {
-                    Image(systemName: "internaldrive").font(.system(size: 18))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
-                        .frame(width: 40, height: 40).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("Storage settings")
+                }.accessibilityLabel("Library options")
             }
             if !moments.isEmpty && libraryContext.allowsSelection {
                 Button(selecting ? "Done" : "Select") {
