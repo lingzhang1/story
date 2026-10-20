@@ -99,7 +99,7 @@ describe("StoryApiStack (Milestone A)", () => {
     // (main + DLQ), the worker (+ the S3 auto-delete helper), the staging bucket, an SQS event source,
     // and the reconcile rule. API Gateway / Cognito / Fargate remain forbidden (separate tests below).
     // R2/R3 (owner-approved) adds the media ownership table -> 2 DynamoDB tables total.
-    template.resourceCountIs("AWS::DynamoDB::Table", 2);
+    template.resourceCountIs("AWS::DynamoDB::Table", 3);  // jobs + media + R7 stories
     template.resourceCountIs("AWS::SQS::Queue", 2);          // jobs + DLQ
     template.resourceCountIs("AWS::Lambda::EventSourceMapping", 1);
     template.resourceCountIs("AWS::Events::Rule", 1);         // reconcile tick
@@ -169,11 +169,23 @@ describe("StoryApiStack (Milestone A)", () => {
     expect(media.Properties.TimeToLiveSpecification).toBeUndefined();
   });
 
+  test("provisions an R7 stories table with composite key (story_user_id, story_id), no TTL", () => {
+    const tables = template.findResources("AWS::DynamoDB::Table");
+    const st = Object.values(tables).find((t: any) => t.Properties?.TableName === "story-test-stories") as any;
+    expect(st).toBeDefined();
+    expect(st.Properties.KeySchema).toEqual([
+      { AttributeName: "story_user_id", KeyType: "HASH" },
+      { AttributeName: "story_id", KeyType: "RANGE" },
+    ]);
+    expect(st.Properties.TimeToLiveSpecification).toBeUndefined();
+    expect(st.DeletionPolicy).toBe("Retain");
+  });
+
   test("App Runner carries the media table + bucket env", () => {
     const svc = Object.values(template.findResources("AWS::AppRunner::Service"))[0] as any;
     const names = (svc.Properties.SourceConfiguration.ImageRepository.ImageConfiguration
       .RuntimeEnvironmentVariables as Array<{ Name: string }>).map((e) => e.Name);
-    expect(names).toEqual(expect.arrayContaining(["STORY_MEDIA_TABLE", "STORY_MEDIA_BUCKET"]));
+    expect(names).toEqual(expect.arrayContaining(["STORY_MEDIA_TABLE", "STORY_MEDIA_BUCKET", "STORY_STORIES_TABLE"]));
   });
 
   test("instance role media grant is least-privilege: object RW on media/* but NO s3:DeleteObject", () => {
