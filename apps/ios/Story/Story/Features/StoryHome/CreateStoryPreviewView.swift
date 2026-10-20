@@ -386,7 +386,7 @@ struct CreateStoryPreviewView: View {
                 initialExplicitSound: SoundPreference(rawValue: story.soundPreferenceExplicit ?? ""),
                 initialEditingApproach: story.effectiveEditingApproach,
                 visualFirstAvailable: StoryMultimodalPlanning.enabled,
-                numbering: StoryMomentNumbering(story: story.moments),
+                numbering: StoryMomentNumbering(ordered: EditPlanRequestBuilder.usableNumberedMoments(for: story, context: context)),
                 momentForId: { id in story.moments.first { $0.id == id } },
                 initialCreativeDirection: story.creativeDirectionText ?? "",
                 // Seed ONLY must_include as visual chips. Chips are an INCLUDE-only control

@@ -235,6 +235,30 @@ enum EditPlanRequestBuilder {
         }
     }
 
+    /// Issue (R7 regression): the Customize / Revise "Moment N" numbering MUST be built from the SAME usable
+    /// set the planner receives — a Moment is usable iff it has a resolvable LOCAL file AND a completed
+    /// MomentUnderstanding (identical to `build()`'s filter), ordered by createdAt. After R7-C a Story can hold
+    /// cloud-only shells (evicted, no local file) or Moments whose AU has not been restored yet; those are
+    /// dropped from the planner payload but were still counted in a numbering built from ALL `story.moments`,
+    /// so "Start with Moment 14" could reference a Moment the planner never sees -> unsatisfiable opening ->
+    /// invalid_after_repair. Numbering off THIS set keeps "Moment N" 1:1 with what the planner can place.
+    static func usableNumberedMoments(for story: StoryModel, context: ModelContext) -> [NumberedMoment] {
+        let media = MomentResolver.resolve(moments: story.moments)
+        let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
+        let momentIds = Set(story.moments.map { $0.id })
+        let allMUs = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []
+        let muByMoment = Dictionary(uniqueKeysWithValues:
+            allMUs.filter { momentIds.contains($0.momentId) }.map { ($0.momentId, $0) })
+        var out: [NumberedMoment] = []
+        for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let md = mediaById[m.id], muByMoment[m.id] != nil else { continue }  // same drop rule as build()
+            out.append(NumberedMoment(number: 0, id: m.id,
+                                      durationSeconds: md.durationSeconds > 0 ? md.durationSeconds : (m.asset?.durationSeconds ?? 0),
+                                      relativePath: md.relativePath))
+        }
+        return out
+    }
+
     /// Milestone R-d.2 — the SAME moments[] (id/duration_seconds/useful_segments/summary) + CreativeIntent
     /// payload the Edit Planner receives, exposed so the Duration Planner recommends against identical
     /// evidence. Returns nil when there is no usable material (caller shows "keep shooting"). Does NOT invent

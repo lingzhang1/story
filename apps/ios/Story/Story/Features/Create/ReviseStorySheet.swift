@@ -33,10 +33,15 @@ struct ReviseStorySheet: View {
     @State private var isInterpreting = false
     @State private var interpretToken = UUID()
     @Environment(AuthStore.self) private var auth
+    @Environment(\.modelContext) private var modelContext
     @State private var cloudGate = CloudAuthGateModel()
     @State private var retryable = false
 
-    private var numbering: StoryMomentNumbering { StoryMomentNumbering(story: story.moments) }
+    private var numbering: StoryMomentNumbering {
+        // Build from the planner-USABLE Moments (local file + completed AU), matching the request payload, so a
+        // "Moment N" reference never points at a cloud-only/un-analyzed Moment the planner can't place (R7 fix).
+        StoryMomentNumbering(ordered: EditPlanRequestBuilder.usableNumberedMoments(for: story, context: modelContext))
+    }
 
     var body: some View {
         NavigationStack {

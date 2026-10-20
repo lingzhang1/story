@@ -462,6 +462,31 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         XCTAssertTrue(StoryCreationCoordinator.isOutputStale(output: output, story: s))
     }
 
+    // R7 regression: "Moment N" numbering for Customize/Revise must come from the PLANNER-USABLE set (local
+    // file + completed AU) — a cloud-only shell or an un-analyzed Moment must NOT occupy a number, or "Start
+    // with Moment N" would reference a Moment the planner never receives -> invalid_after_repair.
+    func test_usableNumbering_excludesCloudOnlyAndNoAUMoments() {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/num-1.mov", dur: 6); completeAU(m1, useful: [(0, 4)])  // usable
+        let m2 = momentWithFile(s, rel: "media/num-2.mov", dur: 6)                                    // file but NO AU
+        // A cloud-only shell: asset present but NO local file on disk + evicted (R7-C shape).
+        let shellAsset = AssetModel(relativePath: "media/evicted-shell.mov", durationSeconds: 6, source: .directed)
+        shellAsset.localAvailability = .evicted
+        let m3 = MomentModel(source: .directed, asset: shellAsset)
+        ctx.insert(shellAsset); ctx.insert(m3)
+        if let lnk = s.attach(m3) { ctx.insert(lnk) }
+        completeAU(m3, useful: [(0, 4)])   // has AU but no local bytes -> still not usable
+        try? ctx.save()
+
+        let usable = EditPlanRequestBuilder.usableNumberedMoments(for: s, context: ctx)
+        XCTAssertEqual(usable.map { $0.id }, [m1.id], "only the Moment with BOTH a local file AND completed AU is numbered")
+        let numbering = StoryMomentNumbering(ordered: usable)
+        XCTAssertEqual(numbering.count, 1)
+        XCTAssertEqual(numbering.id(forNumber: 1), m1.id)
+        XCTAssertNil(numbering.id(forNumber: 2), "no number maps to the no-AU or cloud-only Moment")
+        _ = m2   // referenced to keep the binding
+    }
+
     // MARK: - Music-ready seam
 
     func test_noMusic_threadsNilSoundtrack() async throws {
