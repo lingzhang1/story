@@ -227,21 +227,29 @@ struct MomentsLibraryView: View {
         HStack(spacing: 12) {
             switch libraryContext {
             case .home:
+                // Compact secondary actions (icon-only, fixed width) so three controls fit without crowding;
+                // Create Story stays the full-width primary.
                 Button(role: .destructive) { pendingDelete = true } label: {
-                    Text("Delete").frame(maxWidth: .infinity).padding(.vertical, 13)
+                    Image(systemName: "trash").font(.system(size: 17, weight: .medium))
+                        .frame(width: 52, height: 46)
                         .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.2), lineWidth: 1.5))
                 }.buttonStyle(.plain).foregroundStyle(StoryTheme.cream.opacity(0.75))
-                // R4-A: explicit, user-controlled cloud backup enrollment (signed-in only). First use shows a
-                // disclosure; enrollment reserves the selected local-only Moments to the active account and
-                // kicks the upload queue. Never auto-enrolls; capture is never blocked.
+                    .accessibilityLabel("Delete \(selected.count) moments")
+                // R4-A: explicit, user-controlled cloud backup (signed-in only). Icon + count; first use shows
+                // a disclosure. Never auto-enrolls; capture is never blocked.
                 if auth.isSignedIn {
                     Button { confirmBackup = true } label: {
-                        Text("Back up (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
-                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.6), lineWidth: 1.5))
+                        HStack(spacing: 5) {
+                            Image(systemName: "icloud.and.arrow.up").font(.system(size: 16, weight: .medium))
+                            Text("\(selected.count)").font(StoryTheme.body(14))
+                        }
+                        .frame(minWidth: 64).frame(height: 46).padding(.horizontal, 8)
+                        .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.6), lineWidth: 1.5))
                     }.buttonStyle(.plain).foregroundStyle(StoryTheme.gold)
+                        .accessibilityLabel("Back up \(selected.count) moments")
                 }
                 Button { createStoryFromSelection() } label: {
-                    Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
+                    Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).frame(height: 46)
                         .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
                 }.buttonStyle(.plain)
             case .story:
