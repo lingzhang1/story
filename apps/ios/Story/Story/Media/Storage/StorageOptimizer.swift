@@ -75,33 +75,40 @@ struct StorageOptimizer {
 
     // MARK: - Manual Free Up Space
 
+    /// The result of a free-up run — enough to message honestly (count + bytes + whether protected-moved).
+    struct EvictionOutcome: Equatable {
+        var evictedCount = 0        // Moments whose original was removed/moved this run
+        var freedBytes = 0          // REAL bytes reclaimed (0 in DEBUG protected mode)
+        var protectedCount = 0      // Moments moved to the protected store (DEBUG) — not counted as freed
+    }
+
     /// Evict every eligible Moment for the active account, PRESERVING a poster preview for each first (owner #6:
-    /// never blank a tile). Returns actual bytes freed (protected bytes in DEBUG mode are NOT counted).
-    /// Async because it extracts a poster frame before freeing. Crash-safe + idempotent per asset.
+    /// never blank a tile). Async because it extracts a poster frame before freeing. Crash-safe + idempotent.
     @discardableResult
-    func freeUpSpace(moments: [MomentModel]) async -> Int {
-        var freed = 0
+    func freeUpSpace(moments: [MomentModel]) async -> EvictionOutcome {
+        var out = EvictionOutcome()
         for m in moments where evictionRefusal(for: m) == nil {
-            freed += await evict(moment: m)
+            let (bytes, evicted, protectedMove) = await evict(moment: m)
+            if evicted { out.evictedCount += 1 }
+            out.freedBytes += bytes
+            if protectedMove { out.protectedCount += 1 }
         }
-        return freed
+        return out
     }
 
     /// Evict ONE Moment's original (after re-checking eligibility). PRESERVES a poster preview FIRST and REFUSES
-    /// to evict if the poster cannot be written (so a cloud-only tile always keeps a visible preview — #6).
-    /// Returns bytes freed (0 if refused or protected-moved in DEBUG). Crash-safe: flip availability -> evicted
-    /// and SAVE before removing bytes (#7).
+    /// to evict if the poster cannot be written (#6). Returns (bytesFreed, didEvict, protectedMove). Crash-safe:
+    /// flip availability -> evicted and SAVE before removing bytes (#7).
     @discardableResult
-    func evict(moment: MomentModel) async -> Int {
-        guard evictionRefusal(for: moment) == nil, let asset = moment.asset else { return 0 }
+    func evict(moment: MomentModel) async -> (bytes: Int, evicted: Bool, protectedMove: Bool) {
+        guard evictionRefusal(for: moment) == nil, let asset = moment.asset else { return (0, false, false) }
         let rel = asset.relativePath
         let url = MediaStore.shared.absoluteURL(for: rel)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0 ?? 0
 
-        // #6: persist a poster preview from the ORIGINAL before we free it. If this fails, DO NOT evict — the
-        // user must never be left with a black tile they can't preview.
+        // #6: persist a poster preview from the ORIGINAL before we free it. If this fails, DO NOT evict.
         let previewOK = await MediaPreviewStore.shared.ensurePreview(momentId: moment.id, originalURL: url)
-        guard previewOK else { return 0 }
+        guard previewOK else { return (0, false, false) }
 
         // Crash-safe ordering: record the intended state FIRST, then remove bytes. (#7)
         asset.localAvailability = .evicted
@@ -110,18 +117,18 @@ struct StorageOptimizer {
         #if DEBUG
         if protectedMode {
             // Phase 4: MOVE the original into a protected recovery dir R6 cannot resolve. Protected bytes are
-            // NOT freed storage — return 0.
+            // NOT freed storage — report protectedMove, 0 freed.
             let protectedURL = StorageOptimizer.protectedRecoveryURL(for: rel)
             try? FileManager.default.createDirectory(
                 at: protectedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: protectedURL)
             try? FileManager.default.moveItem(at: url, to: protectedURL)
-            return 0
+            return (0, true, true)
         }
         #endif
 
         try? FileManager.default.removeItem(at: url)
-        return bytes
+        return (bytes, true, false)
     }
 
     // MARK: - storage summary

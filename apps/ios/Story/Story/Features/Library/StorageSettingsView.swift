@@ -15,7 +15,7 @@ struct StorageSettingsView: View {
 
     @State private var summary = StorageSummary()
     @State private var autoOptimize = false
-    @State private var lastFreed: Int? = nil
+    @State private var lastOutcome: StorageOptimizer.EvictionOutcome? = nil
     #if DEBUG
     @State private var protectedMode = true   // acceptance default: protect, don't delete
     #endif
@@ -45,16 +45,15 @@ struct StorageSettingsView: View {
                         #endif
                         let ms = moments()
                         Task {
-                            lastFreed = await opt.freeUpSpace(moments: ms)
+                            lastOutcome = await opt.freeUpSpace(moments: ms)
                             refresh()
                         }
                     } label: {
                         Label("Free Up Space", systemImage: "internaldrive")
                     }
                     .disabled(account == nil || summary.reclaimableBytes == 0)
-                    if let f = lastFreed {
-                        Text(f > 0 ? "Freed \(ByteCountFormatter.string(fromByteCount: Int64(f), countStyle: .file))."
-                                   : "Nothing to free (or protected in this build).")
+                    if let o = lastOutcome {
+                        Text(outcomeMessage(o))
                             .font(.footnote).foregroundStyle(StoryTheme.cream.opacity(0.6))
                     }
                 } footer: {
@@ -89,6 +88,17 @@ struct StorageSettingsView: View {
 
     @ViewBuilder private func row(_ label: String, bytes: Int) -> some View {
         LabeledContent(label, value: ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+    }
+
+    /// Honest result line: distinguishes a real free, a DEBUG protected move (not counted as freed), and a
+    /// genuine no-op — so protected-mode acceptance no longer reads as "nothing happened".
+    private func outcomeMessage(_ o: StorageOptimizer.EvictionOutcome) -> String {
+        if o.evictedCount == 0 { return "Nothing to free — everything is already optimized." }
+        if o.protectedCount > 0 {
+            return "Protected \(o.protectedCount) moment\(o.protectedCount == 1 ? "" : "s") (moved for testing — not counted as freed)."
+        }
+        let freed = ByteCountFormatter.string(fromByteCount: Int64(o.freedBytes), countStyle: .file)
+        return "Freed \(freed) from \(o.evictedCount) moment\(o.evictedCount == 1 ? "" : "s")."
     }
 
     private func refresh() {

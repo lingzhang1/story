@@ -54,8 +54,9 @@ final class StorageOptimizerTests: XCTestCase {
         let m = try makeVerified(owner: "A", bytes: 8192)
         let o = opt("A")
         XCTAssertNil(o.evictionRefusal(for: m))
-        let freed = await o.evict(moment: m)
-        XCTAssertEqual(freed, 8192)
+        let r = await o.evict(moment: m)
+        XCTAssertEqual(r.bytes, 8192)
+        XCTAssertTrue(r.evicted)
         XCTAssertEqual(m.asset?.localAvailability, .evicted)
         XCTAssertFalse(MediaStore.shared.fileExists(relativePath: m.asset!.relativePath))  // bytes gone
         XCTAssertEqual(m.cloudStateRaw, "cloud_verified")                                  // cloud state UNCHANGED
@@ -113,8 +114,9 @@ final class StorageOptimizerTests: XCTestCase {
         let b = try makeVerified(owner: "A", bytes: 2000)
         b.asset?.keepDownloaded = true                 // b is protected -> not freed
         try ctx.save()
-        let freed = await opt("A").freeUpSpace(moments: [a, b])
-        XCTAssertEqual(freed, 1000)
+        let out = await opt("A").freeUpSpace(moments: [a, b])
+        XCTAssertEqual(out.freedBytes, 1000)
+        XCTAssertEqual(out.evictedCount, 1)
         XCTAssertEqual(a.asset?.localAvailability, .evicted)
         XCTAssertEqual(b.asset?.localAvailability, .available)
     }
@@ -134,8 +136,8 @@ final class StorageOptimizerTests: XCTestCase {
     func test_evict_is_idempotent() async throws {
         let m = try makeVerified(owner: "A", bytes: 500)
         let o = opt("A")
-        let e1 = await o.evict(moment: m); XCTAssertEqual(e1, 500)
-        let e2 = await o.evict(moment: m); XCTAssertEqual(e2, 0)               // already evicted -> no-op
+        let e1 = await o.evict(moment: m); XCTAssertEqual(e1.bytes, 500)
+        let e2 = await o.evict(moment: m); XCTAssertEqual(e2.bytes, 0); XCTAssertFalse(e2.evicted)               // already evicted -> no-op
         XCTAssertEqual(o.evictionRefusal(for: m), .alreadyEvicted)
     }
 }
