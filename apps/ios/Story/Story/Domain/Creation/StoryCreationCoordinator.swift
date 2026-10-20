@@ -349,8 +349,15 @@ final class StoryCreationCoordinator {
         guard !isCreating else { return }
         // Process-global single-flight: refuse if ANOTHER coordinator (a different view, or the app-level
         // recovery driver) is already running/resuming this Story — two concurrent runs would each persist a
-        // GeneratedOutput and duplicate the version. Phase 5.
-        guard Self.claimActive(story.id) else { return }
+        // GeneratedOutput and duplicate the version. Phase 5. If the claim fails we must NOT silently return
+        // into a dead .idle state (the Creating screen would spin on "Getting your moments ready…" forever with
+        // no failure surfaced) — surface a recoverable failure so the user gets Try again.
+        guard Self.claimActive(story.id, by: self) else {
+            state = .failed(message: "A video is already being created for this Story. Please wait a moment and try again.")
+            lastFailure = .alreadyCreating
+            lastStory = story
+            return
+        }
         lastStory = story
         lastOutputFormat = outputFormat
         lastTargetSeconds = targetSeconds
@@ -366,14 +373,25 @@ final class StoryCreationCoordinator {
         }
     }
 
-    // Process-global set of Story ids with an ACTIVE run/resume. Guards against duplicate concurrent
-    // create/resume for the same Story across different coordinator instances (per-view + app recovery driver).
-    private static var activeStories: Set<UUID> = []
-    private static func claimActive(_ id: UUID) -> Bool {
-        if activeStories.contains(id) { return false }
-        activeStories.insert(id); return true
+    // Process-global set of Story ids with an ACTIVE run/resume, each mapped to the OWNING coordinator (weak).
+    // Guards against duplicate concurrent create/resume for the same Story across coordinator instances
+    // (per-view + app recovery driver). Self-healing: a claim whose owner was deallocated, or is no longer
+    // actually creating, is STALE and can be stolen — otherwise a coordinator that died without its run()
+    // `defer` firing (view dismissed, abnormal task teardown) would leak the id and silently brick every future
+    // create for that Story (observed as an eternal "Getting your moments ready…" spinner).
+    private final class ActiveClaim { weak var owner: StoryCreationCoordinator? }
+    private static var activeStories: [UUID: ActiveClaim] = [:]
+    private static func claimActive(_ id: UUID, by owner: StoryCreationCoordinator) -> Bool {
+        if let existing = activeStories[id] {
+            // A live owner that is genuinely still creating holds the claim; refuse.
+            if let o = existing.owner, o !== owner, o.isCreating { return false }
+            // Otherwise the claim is stale (owner gone / finished) — steal it.
+        }
+        let claim = ActiveClaim(); claim.owner = owner
+        activeStories[id] = claim
+        return true
     }
-    private static func releaseActive(_ id: UUID) { activeStories.remove(id) }
+    private static func releaseActive(_ id: UUID) { activeStories.removeValue(forKey: id) }
 
     /// Keep the device awake during an active Create/Revise so a screen sleep cannot suspend the app and tear
     /// down the in-flight planning/render connection (observed as NSURLError -1005). Cleared when the run ends.
@@ -1180,7 +1198,7 @@ extension StoryCreationCoordinator {
         guard let row = fetchPending(storyId: story.id), row.isRecoverable, let jobId = row.jobId else {
             return false
         }
-        guard Self.claimActive(story.id) else { return false }  // another coordinator already resuming/creating
+        guard Self.claimActive(story.id, by: self) else { return false }  // another coordinator already resuming/creating
         // Rehydrate the in-memory operation context from the durable row so persist() keeps lineage/music/type.
         lastStory = story
         lastOutputFormat = row.outputFormat ?? "vertical"
