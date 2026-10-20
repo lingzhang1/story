@@ -48,6 +48,7 @@ struct MomentsLibraryView: View {
     @State private var confirmBackup = false   // R4-A: first-use cloud-backup disclosure
     @State private var showBackupSettings = false   // R4-A.1: Auto Backup settings sheet
     @State private var showImporter = false         // import photos/videos into the global library
+    @State private var showStorage = false          // R5: storage management sheet
     @State private var importBanner: String? = nil  // honest import progress line
     @State private var uploadJobState: [UUID: MediaUploadJobModel.State] = [:]   // R4-A.1: momentId -> upload state (badges)
     @State private var setupSelection: MomentSelection?   // Phase 3: selected → Start-a-Story setup
@@ -114,6 +115,10 @@ struct MomentsLibraryView: View {
         .onAppear(perform: reload)
         .sheet(isPresented: $showBackupSettings) {
             AutoBackupSettingsView(onBackUpExisting: { backUpAllExistingLocalOnly() })
+                .environment(auth)
+        }
+        .sheet(isPresented: $showStorage) {
+            StorageSettingsView(moments: { moments })
                 .environment(auth)
         }
         // Import existing photos/videos into the global library (reuses the frozen StoryPhotosPicker plumbing).
@@ -221,6 +226,14 @@ struct MomentsLibraryView: View {
                         .frame(width: 40, height: 40).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Import photos or videos")
             }
+            // R5: Storage management (home + signed in) — optimize/free up space.
+            if auth.isSignedIn, libraryContext.isHome {
+                Button { showStorage = true } label: {
+                    Image(systemName: "internaldrive").font(.system(size: 18))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
+                        .frame(width: 40, height: 40).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Storage settings")
+            }
             if !moments.isEmpty && libraryContext.allowsSelection {
                 Button(selecting ? "Done" : "Select") {
                     withAnimation { selecting.toggle(); if !selecting { selected.removeAll() } }
@@ -327,6 +340,13 @@ struct MomentsLibraryView: View {
 
     /// (sfSymbol, tint) for the Moment's backup state, or nil for a plain local-only Moment (no clutter).
     private func backupBadgeStyle(for m: MomentModel) -> (String, Color)? {
+        // R5: local-availability is an independent dimension — surface it first so a cloud-only Moment reads
+        // clearly as "backed up, tap to download" rather than just "verified".
+        switch m.asset?.localAvailability {
+        case .restoring: return ("arrow.down.circle", StoryTheme.gold)                  // Downloading original
+        case .evicted:   return ("icloud.and.arrow.down", StoryTheme.gold)              // Cloud-only (tap to restore)
+        default: break                                                                  // available -> fall through
+        }
         if m.cloudStateRaw == "cloud_verified" { return ("checkmark.icloud.fill", StoryTheme.gold) }
         switch uploadJobState[m.id] {
         case .running:  return ("arrow.up.circle", StoryTheme.cream.opacity(0.9))   // Uploading

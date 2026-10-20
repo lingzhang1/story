@@ -93,6 +93,11 @@ final class MediaResolver {
         let job = upsertJob(owner: owner, cloudMediaId: cloudMediaId, momentId: momentId,
                             targetRelativePath: rel, context: context)
         job.state = .running; job.attempts += 1; job.lastError = nil; job.updatedAt = .now
+        // R5: mark the asset `restoring` so a crash mid-download is recoverable (not stuck as `evicted` with a
+        // live job). Returns to `available` on verified install, or back to `evicted` on failure.
+        if let m = fetchMoment(momentId, context: context), m.asset?.localAvailability == .evicted {
+            m.asset?.localAvailability = .restoring
+        }
         try? context.save()
 
         guard let accessToken = await token() else {
@@ -139,14 +144,29 @@ final class MediaResolver {
         if let m = fetchMoment(momentId, context: context) {
             m.cloudMediaId = cloudMediaId          // keep the cloud reference
             m.ownerAccountId = owner
+            // R5/R6: the original bytes are back — local availability returns to `available`. Cloud state is an
+            // INDEPENDENT dimension and stays cloud_verified (a restored original is still verified + owned).
+            m.asset?.localAvailability = .available
         }
         job.state = .verified; job.progress = 1; job.updatedAt = .now
         try? context.save()
         return store.absoluteURL(for: rel)
     }
 
-    // MARK: - reconcile local cloud-state from the server (R6 self-heal)
+    // MARK: - crash recovery (R5)
 
+    /// At launch, reset any asset stuck in `restoring` (the app died mid-download) back to `evicted` so it is
+    /// cleanly restorable again — never stuck. Whole-file retry means the discarded partial (purged separately)
+    /// is simply re-downloaded on next access. Idempotent.
+    func recoverInterruptedRestores(context: ModelContext) {
+        let stuck = (try? context.fetch(FetchDescriptor<AssetModel>(
+            predicate: #Predicate { $0.localAvailabilityRaw == "restoring" }))) ?? []
+        guard !stuck.isEmpty else { return }
+        for a in stuck { a.localAvailability = .evicted }
+        try? context.save()
+    }
+
+    // MARK: - reconcile local cloud-state from the server (R6 self-heal)
     /// Re-stamp local Moments' cloud-state from the SERVER-AUTHORITATIVE /v1/media list. The server knows what
     /// is backed up; a local SwiftData store can lose that knowledge (a schema migration that reset defaults, a
     /// reinstall, or a brand-new device in R7). For each VERIFIED server record whose `source_moment_id` matches
@@ -204,6 +224,10 @@ final class MediaResolver {
 
     private func fail(_ job: MediaDownloadJobModel, _ message: String, _ context: ModelContext) {
         job.state = .failed; job.lastError = message; job.updatedAt = .now
+        // R5: a failed restore returns the asset to `evicted` (cloud-only), never stuck in `restoring`.
+        if let m = fetchMoment(job.momentId, context: context), m.asset?.localAvailability == .restoring {
+            m.asset?.localAvailability = .evicted
+        }
         try? context.save()
     }
 }

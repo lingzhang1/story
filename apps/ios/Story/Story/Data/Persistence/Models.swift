@@ -247,6 +247,25 @@ final class AssetModel {
     var longitude: Double?
     var locationAccuracyMeters: Double?
 
+    // R5 — LOCAL ORIGINAL AVAILABILITY, an INDEPENDENT dimension from cloud state (owner correction): the
+    // Moment's cloudStateRaw keeps only {local_only, uploading, cloud_verified, upload_failed} and NEVER gains
+    // an "optimized/restored" value. Whether the original BYTES are on this device is tracked HERE:
+    //   available  — the original file is present at `relativePath` (the default; also the state after an R6
+    //                restore — a restored original stays cloud_verified, availability flips back to available).
+    //   evicted    — the local original was safely freed (R5 optimization); bytes live only in the cloud,
+    //                restorable on demand via R6. The Moment is STILL cloud_verified and STILL owned.
+    //   restoring  — an R6 download is in flight (persisted so a crash mid-restore is recoverable, not stuck).
+    // Default "available" so every existing row decodes as present (lightweight additive migration).
+    var localAvailabilityRaw: String = "available"
+    enum LocalAvailability: String { case available, evicted, restoring }
+    var localAvailability: LocalAvailability {
+        get { LocalAvailability(rawValue: localAvailabilityRaw) ?? .available }
+        set { localAvailabilityRaw = newValue.rawValue }
+    }
+    // R5 — "Keep Originals on iPhone" opt-out of eviction for THIS asset. When true the optimizer must NEVER
+    // evict it (safety check #5). Default false (eligible for optimization).
+    var keepDownloaded: Bool = false
+
     var source: MomentSource {
         get { MomentSource(rawValue: sourceRaw) ?? .directed }
         set { sourceRaw = newValue.rawValue }
@@ -1155,6 +1174,27 @@ final class MediaDownloadJobModel {
         self.expectedSha256 = expectedSha256
         self.stateRaw = state.rawValue
         self.attempts = attempts
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R5 — "Optimize iPhone Storage" preference, ACCOUNT-SCOPED and DISTINCT from Auto Backup (owner: never
+// confuse the two). Auto Backup (AutoBackupSettingModel) governs UPLOAD of originals to the cloud; this
+// governs whether verified originals may be EVICTED locally to reclaim space. One row per canonical
+// story_user_id (upsert). Default OFF — automatic optimization must not run until the combined R5/R6 device
+// acceptance passes. `autoOptimizeEnabled` gates the (future) automatic policy; Manual Free Up Space does NOT
+// require it. Eviction itself is always subject to the per-asset `keepDownloaded` opt-out and the safety checks.
+@Model
+final class OptimizationSettingModel {
+    @Attribute(.unique) var accountId: String   // canonical story_user_id this preference belongs to
+    var autoOptimizeEnabled: Bool = false        // default OFF — automatic eviction policy (gated until acceptance)
+    var updatedAt: Date = Date.now
+
+    init(accountId: String, autoOptimizeEnabled: Bool = false, updatedAt: Date = Date.now) {
+        self.accountId = accountId
+        self.autoOptimizeEnabled = autoOptimizeEnabled
         self.updatedAt = updatedAt
     }
 }

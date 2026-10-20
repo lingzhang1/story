@@ -26,7 +26,8 @@ struct StoryApp: App {
             DurationRecCacheModel.self,
             MediaUploadJobModel.self,  // R4-A: persistent cloud-upload queue
             AutoBackupSettingModel.self,   // R4-A.1: account-scoped Auto Backup preference
-            MediaDownloadJobModel.self   // R6: persistent cloud-download/restore state
+            MediaDownloadJobModel.self,   // R6: persistent cloud-download/restore state
+            OptimizationSettingModel.self   // R5: account-scoped Optimize-iPhone-Storage preference
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -55,6 +56,7 @@ struct StoryApp: App {
         }
         MediaStore.shared.ensureMediaDirectory()
         MediaStore.shared.purgeDownloadTemps()   // R6: discard partial downloads from a prior run (whole-file retry)
+        MediaResolver.shared.recoverInterruptedRestores(context: container.mainContext)   // R5: unstick restoring assets
         Self.ensureLocalIdentity(container.mainContext)
         // Milestone D §6-7: recover orphaned RUNNING AU jobs (app killed mid-run) to
         // PENDING, then drain opportunistically. Non-blocking.
