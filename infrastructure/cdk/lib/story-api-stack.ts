@@ -144,6 +144,35 @@ export class StoryApiStack extends cdk.Stack {
       autoDeleteObjects: true, // dev
     });
 
+    // ---- R2/R3: PRIVATE ORIGINAL-MEDIA STORAGE (dev only) ------------------------------------------
+    // A SEPARATE bucket from the 24h edit-plan staging bucket: original media is DURABLE (retained), not
+    // transient derived sheets. Private, SSE-S3, TLS-only, no public access. Incomplete multipart uploads are
+    // aborted after 7 days (cost hygiene) but COMPLETED originals are NOT expired. Account-scoped keys
+    // (media/{story_user_id}/{cloud_media_id}/original) are enforced by the app, which only ever presigns a key
+    // under the caller's own prefix.
+    const mediaBucket = new s3.Bucket(this, "MediaBucket", {
+      bucketName: `story-${environment}-media-${this.account}-${this.region}`,
+      encryption: s3.BucketEncryption.S3_MANAGED,      // SSE-S3 (SSE-KMS is a public-release hardening)
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      lifecycleRules: [
+        // Abort incomplete multipart uploads after 7 days; NO expiration on completed originals (retained).
+        { abortIncompleteMultipartUploadAfter: cdk.Duration.days(7) },
+      ],
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // dev: originals are the user's only cloud copy — never auto-delete the bucket
+    });
+
+    // DynamoDB media-ownership table — composite key (story_user_id HASH, cloud_media_id RANGE). A Query on the
+    // PK lists one account's media; a wrong owner finds nothing (no cross-account leak). NO TTL: originals are
+    // durable (unlike the edit-plan jobs table). PAY_PER_REQUEST, mirroring the jobs table.
+    const mediaTable = new dynamodb.Table(this, "MediaOwnershipTable", {
+      tableName: `story-${environment}-media`,
+      partitionKey: { name: "story_user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "cloud_media_id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // dev: ownership records are durable alongside the originals
+    });
+
     // Worker Lambda — DOCKER-FREE zip asset (the sandbox cannot run Docker). scripts/build_worker_asset.sh
     // pre-stages app/ + packages/ + contracts/ + prompts/ + the Linux cp312 pydantic wheels into
     // infrastructure/cdk/.worker-asset (boto3 is in the Lambda runtime). The planner resolves prompts at
@@ -205,6 +234,18 @@ export class StoryApiStack extends cdk.Stack {
     stagingBucket.grantPut(instanceRole);
     jobsQueue.grantSendMessages(instanceRole);
 
+    // R2/R3 media: the App Runner role needs the media table (ownership records) RW and the media bucket for
+    // presigning + verification. Least-privilege: s3:PutObject/GetObject (presign both), GetObject for HeadObject
+    // verification, AbortMultipartUpload + ListMultipartUploadParts for resumable multipart. NO s3:DeleteObject
+    // (no deletion this increment) and NO bucket-level admin. Scoped to the media/* prefix.
+    mediaTable.grantReadWriteData(instanceRole);
+    instanceRole.addToPolicy(new iam.PolicyStatement({
+      sid: "MediaObjectAccess",
+      effect: iam.Effect.ALLOW,
+      actions: ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+      resources: [mediaBucket.arnForObjects("media/*")],
+    }));
+
     // P0 Beta Auth Increment 3: scoped access to the identity tables owned by the SEPARATE story-<env>-auth
     // stack. Referenced by NAME (cross-stack string, not a hard CDK dependency) so the api stack deploys
     // independently; IAM is scoped to exactly these two tables (read + write + transactions for atomic claims).
@@ -251,6 +292,9 @@ export class StoryApiStack extends cdk.Stack {
               { name: "STORY_JOBS_QUEUE_URL", value: jobsQueue.queueUrl },
               { name: "STORY_STAGING_BUCKET", value: stagingBucket.bucketName },
               { name: "STORY_JOBS_API_ENABLED", value: "1" },
+              // R2/R3 cloud media (private original-media storage).
+              { name: "STORY_MEDIA_TABLE", value: mediaTable.tableName },
+              { name: "STORY_MEDIA_BUCKET", value: mediaBucket.bucketName },
               // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },

@@ -74,6 +74,7 @@ from edit_planner import (
 )
 import edit_planner as _edit_planner_mod
 import edit_plan_jobs as _jobs
+import media_store as _media  # R2/R3: account-owned cloud media ownership + presigned upload/download
 
 
 def _edit_planner_prompt_version() -> str:
@@ -161,6 +162,19 @@ MM_CREATIVE_BRIEF = (
     "payoffs, and choose shot durations appropriate to the material. Do not force a conventional "
     "travel-diary structure."
 )
+
+
+class MediaInitiateRequest(BaseModel):
+    """POST /v1/media/initiate body (R2/R3). The device declares the FULL-FILE sha256 (hex) + size of the
+    original it is about to upload; the server mints an account-owned record + a presigned PUT. Ownership is
+    NOT in the body — it derives from the authenticated principal."""
+
+    model_config = ConfigDict(extra="forbid")
+    content_sha256: str = Field(..., description="device-computed full-file sha256 (64-char hex); integrity anchor")
+    size_bytes: int = Field(..., gt=0)
+    content_type: str = Field(default="video/quicktime")
+    device_asset_id: str = Field(default="", description="local AssetModel.id (opaque; client reconciliation)")
+    source_moment_id: str = Field(default="")
 
 
 class StoryCoverageRequest(BaseModel):
@@ -378,6 +392,84 @@ def create_app() -> FastAPI:
         back to `sub`/`dev`. The resolution is the same atomic `cognito_sub -> story_user_id` claim used on
         every protected request, so `/v1/me` and a later protected call always agree."""
         return {"story_user_id": principal.story_user_id}
+
+    # ========================================================================================================
+    # CLOUD MEDIA (R2/R3) — account-owned original-media storage. ALL endpoints use require_user (auth required
+    # even in dev; the legacy `dev` principal can NEVER reach these). Ownership derives from the verified
+    # story_user_id — no client-supplied owner. Bytes go DIRECT to S3 via presigned URLs (never proxied through
+    # App Runner). No deletion / no eviction in this increment. See packages/media_store.
+    # ========================================================================================================
+    def _media_store() -> "_media.MediaStore":
+        ov = getattr(app.state, "_media_store_override", None)
+        return ov if ov is not None else _media.MediaStore()
+
+    @app.post("/v1/media/initiate", status_code=200)
+    def media_initiate(body: MediaInitiateRequest, principal: Principal = Depends(require_user)):
+        """Begin an account-owned upload. Idempotent on (owner, content_sha256): a re-initiate of the same
+        content recovers the same record + a fresh presigned PUT. Returns the cloud_media_id, the presigned
+        upload URL (bounded TTL), and the S3 key. Ownership is the trusted story_user_id."""
+        if len(body.content_sha256.strip()) != 64:
+            raise HTTPException(status_code=422, detail="content_sha256 must be a 64-char hex sha256")
+        if body.size_bytes <= 0:
+            raise HTTPException(status_code=422, detail="size_bytes must be positive")
+        store = _media_store()
+        try:
+            rec, created = store.initiate_upload(
+                owner=principal.story_user_id, content_sha256=body.content_sha256.strip(),
+                size_bytes=body.size_bytes, content_type=body.content_type,
+                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id)
+        except _media.MediaOwnershipConflict as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        presign = store.presign_upload(owner=principal.story_user_id, cloud_media_id=rec["cloud_media_id"])
+        return {"cloud_media_id": rec["cloud_media_id"], "state": rec["state"], "created": created,
+                "upload": presign}
+
+    @app.post("/v1/media/{cloud_media_id}/complete", status_code=200)
+    def media_complete(cloud_media_id: str, principal: Principal = Depends(require_user)):
+        """Durably verify the uploaded object (exists + size + full-file sha256 via S3 ChecksumSHA256) and, only
+        then, mark it cloud_verified. Idempotent. 404 if not the caller's; 422 on a verification failure (record
+        stays `uploading`, recoverable). No client input authorizes verification."""
+        store = _media_store()
+        try:
+            rec = store.complete_upload(owner=principal.story_user_id, cloud_media_id=cloud_media_id)
+        except _media.MediaNotFound:
+            raise HTTPException(status_code=404, detail="media not found")
+        except _media.MediaVerificationError as e:
+            raise HTTPException(status_code=422, detail=f"verification failed: {e}")
+        return {"cloud_media_id": rec["cloud_media_id"], "state": rec["state"],
+                "verified_at": rec.get("verified_at", 0)}
+
+    @app.get("/v1/media/{cloud_media_id}", status_code=200)
+    def media_status(cloud_media_id: str, principal: Principal = Depends(require_user)):
+        """Status/recovery for ONE of the caller's media records. 404 for anything not owned by the caller
+        (another account's media is never revealed)."""
+        rec = _media_store().get(principal.story_user_id, cloud_media_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="media not found")
+        return {k: rec.get(k) for k in
+                ("cloud_media_id", "state", "size_bytes", "content_sha256", "s3_key",
+                 "verified_at", "created_at", "updated_at", "device_asset_id", "source_moment_id")}
+
+    @app.get("/v1/media/{cloud_media_id}/download", status_code=200)
+    def media_download(cloud_media_id: str, principal: Principal = Depends(require_user)):
+        """A short-lived presigned GET for the caller's own VERIFIED object. 404 if not the caller's; 409 if not
+        yet verified. Scoped to an object under the caller's own prefix only."""
+        store = _media_store()
+        try:
+            out = store.presign_download(owner=principal.story_user_id, cloud_media_id=cloud_media_id)
+        except _media.MediaNotFound:
+            raise HTTPException(status_code=404, detail="media not found")
+        except _media.MediaVerificationError:
+            raise HTTPException(status_code=409, detail="media not yet verified")
+        return out
+
+    @app.get("/v1/media", status_code=200)
+    def media_list(principal: Principal = Depends(require_user)):
+        """List the caller's own media records (Query on the owner PK — never a cross-account Scan)."""
+        recs = _media_store().list_for_owner(principal.story_user_id)
+        return {"media": [{k: r.get(k) for k in ("cloud_media_id", "state", "size_bytes",
+                                                 "verified_at", "device_asset_id", "source_moment_id")}
+                          for r in recs]}
 
     @app.post("/v1/creative-intent", response_model=CreativeIntentContract, status_code=200)
     def resolve_creative_intent(
