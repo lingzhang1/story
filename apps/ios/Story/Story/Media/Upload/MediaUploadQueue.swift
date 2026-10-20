@@ -126,7 +126,9 @@ final class MediaUploadQueue {
 
         do {
             // Compute sha256 + size off the capture path (here, in the drain, never at capture).
-            let sha = job.contentSha256 ?? (try MediaUploadService.sha256Hex(fileURL: url))
+            let sha: String
+            if let existing = job.contentSha256 { sha = existing }
+            else { sha = try MediaUploadService.sha256Hex(fileURL: url) }
             let size = job.sizeBytes ?? MediaUploadService.fileSize(url)
             job.contentSha256 = sha; job.sizeBytes = size
 

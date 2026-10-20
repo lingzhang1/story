@@ -64,7 +64,8 @@ struct MediaUploadService: MediaUploading {
     }
 
     static func fileSize(_ url: URL) -> Int {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil ?? 0
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.size] as? Int) ?? 0
     }
 
     // POST /v1/media/initiate

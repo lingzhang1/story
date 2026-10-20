@@ -1040,12 +1040,12 @@ final class MediaUploadJobModel {
     var stateRaw: String = "pending"
     var attempts: Int = 0
     var lastError: String?
-    var nextEligibleAt: Date = .now
+    var nextEligibleAt: Date = Date.now
     var progress: Double = 0            // 0..1 advisory upload progress
     var claimGeneration: Int = 0
 
-    var createdAt: Date = .now
-    var updatedAt: Date = .now
+    var createdAt: Date = Date.now
+    var updatedAt: Date = Date.now
 
     enum State: String { case pending, running, verified, failed, cancelled }
     var state: State {
