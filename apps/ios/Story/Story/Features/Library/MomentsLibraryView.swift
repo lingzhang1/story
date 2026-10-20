@@ -47,6 +47,8 @@ struct MomentsLibraryView: View {
     @State private var pendingDelete = false
     @State private var confirmBackup = false   // R4-A: first-use cloud-backup disclosure
     @State private var showBackupSettings = false   // R4-A.1: Auto Backup settings sheet
+    @State private var showImporter = false         // import photos/videos into the global library
+    @State private var importBanner: String? = nil  // honest import progress line
     @State private var uploadJobState: [UUID: MediaUploadJobModel.State] = [:]   // R4-A.1: momentId -> upload state (badges)
     @State private var setupSelection: MomentSelection?   // Phase 3: selected → Start-a-Story setup
     /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
@@ -114,6 +116,46 @@ struct MomentsLibraryView: View {
             AutoBackupSettingsView(onBackUpExisting: { backUpAllExistingLocalOnly() })
                 .environment(auth)
         }
+        // Import existing photos/videos into the global library (reuses the frozen StoryPhotosPicker plumbing).
+        .photosPickerSheet(
+            isPresented: $showImporter,
+            onProgress: { p in importBanner = p.finished ? nil : StoryImportCopy.line(for: p) },
+            onPicked: { media in importPicked(media) })
+        .overlay(alignment: .top) {
+            if let importBanner {
+                Text(importBanner)
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.ink)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(StoryTheme.gold, in: Capsule())
+                    .padding(.top, 70)
+            }
+        }
+    }
+
+    /// Create standalone global Moments from imported media, enqueue AU, and — if Auto Backup is ON — auto-
+    /// enroll each for cloud upload (so a freshly-imported LARGE video exercises the multipart/resume path).
+    /// Non-blocking; originals are copied into MediaStore by the picker, never deleted.
+    private func importPicked(_ media: [ImportedMedia]) {
+        let auQueue = AssetUnderstandingQueue(context: context)
+        let uploadQueue = makeQueue()
+        var created: [MomentModel] = []
+        for item in media {
+            guard let m = try? useCases.shootStandaloneMoment(
+                relativePath: item.path, durationSeconds: item.duration) else { continue }
+            // Carry recovered capture metadata (never fabricated).
+            if let asset = m.asset {
+                asset.capturedAt = item.capturedAt
+                asset.latitude = item.latitude
+                asset.longitude = item.longitude
+            }
+            created.append(m)
+            auQueue.enqueue(momentId: m.id, relativeMediaPath: item.path,
+                            sourceCaptureId: nil, captureContext: nil)
+        }
+        try? context.save()
+        // Auto-enroll each imported Moment for backup when Auto Backup is on (no-op otherwise).
+        for m in created { uploadQueue.autoEnrollIfEnabled(moment: m) }
+        Task { await auQueue.drain(); await uploadQueue.drain(); reload() }
     }
 
     /// R4-A.1: build an upload queue bound to the live AuthStore (owner-scoped token; Wi-Fi/cellular gate from
@@ -169,6 +211,15 @@ struct MomentsLibraryView: View {
                         .foregroundStyle(StoryTheme.cream.opacity(0.6))
                         .frame(width: 40, height: 40).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Auto Backup settings")
+            }
+            // Import existing photos/videos into the GLOBAL Moments library (home). Lets the user bring in a
+            // large iPhone video to exercise the multipart/resume upload path.
+            if libraryContext.isHome {
+                Button { showImporter = true } label: {
+                    Image(systemName: "square.and.arrow.down").font(.system(size: 18))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6))
+                        .frame(width: 40, height: 40).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Import photos or videos")
             }
             if !moments.isEmpty && libraryContext.allowsSelection {
                 Button(selecting ? "Done" : "Select") {
