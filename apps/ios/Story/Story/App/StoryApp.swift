@@ -27,7 +27,8 @@ struct StoryApp: App {
             MediaUploadJobModel.self,  // R4-A: persistent cloud-upload queue
             AutoBackupSettingModel.self,   // R4-A.1: account-scoped Auto Backup preference
             MediaDownloadJobModel.self,   // R6: persistent cloud-download/restore state
-            OptimizationSettingModel.self   // R5: account-scoped Optimize-iPhone-Storage preference
+            OptimizationSettingModel.self,   // R5: account-scoped Optimize-iPhone-Storage preference
+            StorySyncJobModel.self   // R7-C: persistent Story sync state (dirty/revision/conflict)
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -149,6 +150,13 @@ struct StoryApp: App {
                         Task { await MediaResolver.shared.reconcileCloudState(
                             context: ctx, activeOwner: owner,
                             token: { [weak auth] in await auth?.validAccessToken() }) }
+                        // R7-C: pull account-owned Story docs (clean-apply, dirty preserved, cloud-only shells).
+                        Task { await StorySyncCoordinator.shared.pull(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
+                        Task { await StorySyncCoordinator.shared.syncAllDirty(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
                     }
                 }
         }
@@ -174,6 +182,12 @@ struct StoryApp: App {
                     let ctx = container.mainContext
                     let owner = auth.storyUserId
                     Task { await MediaResolver.shared.reconcileCloudState(
+                        context: ctx, activeOwner: owner,
+                        token: { [weak auth] in await auth?.validAccessToken() }) }
+                    Task { await StorySyncCoordinator.shared.pull(
+                        context: ctx, activeOwner: owner,
+                        token: { [weak auth] in await auth?.validAccessToken() }) }
+                    Task { await StorySyncCoordinator.shared.syncAllDirty(
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                 }

@@ -18,7 +18,7 @@ final class StorageOptimizerTests: XCTestCase {
                  StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
                  MyMusicAssetModel.self, PendingOperationModel.self,
                  MusicPlanCacheModel.self, DurationRecCacheModel.self, MediaUploadJobModel.self,
-                 AutoBackupSettingModel.self, MediaDownloadJobModel.self, OptimizationSettingModel.self,
+                 AutoBackupSettingModel.self, MediaDownloadJobModel.self, OptimizationSettingModel.self, StorySyncJobModel.self,
             configurations: config)
     }
     override func tearDown() { for u in tmp { try? FileManager.default.removeItem(at: u) }; tmp = [] }

@@ -1198,3 +1198,48 @@ final class OptimizationSettingModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// R7-C — persistent Story SYNC state, per (ownerAccountId, storyId). Survives relaunch so pending pushes,
+// dirty drafts and conflicts are never lost. Owner is bound ONCE at creation (never re-derived from the
+// active account inside an async callback — rule 7); a stale callback for account A must not mutate B's row.
+@Model
+final class StorySyncJobModel {
+    @Attribute(.unique) var key: String          // "\(ownerAccountId)#\(storyId)"
+    var ownerAccountId: String                   // canonical story_user_id (immutable binding)
+    var storyId: UUID
+
+    var baseRevision: Int = 0                    // last SERVER revision this device has acknowledged (rule 5)
+    var dirty: Bool = false                      // local edits not yet pushed (rule 2)
+    var lastSyncedHash: String = ""              // story_doc/1 content hash at last successful push (dirty = hash changed)
+    var pendingMutationId: String?               // the mutation_id of an in-flight/last push (idempotent retry)
+    var lastAttemptHash: String = ""             // story_doc hash of the pending attempt (reuse mutation_id iff unchanged)
+    var claimGeneration: Int = 0                 // bumps on owner (re)bind/retry; guards stale async callbacks (rule 9)
+
+    // Conflict (survives restart — C1/C4). When set, a 409 was seen and the user must choose Keep Both / Use
+    // Cloud Version. The server's conflicting doc + revision are preserved so the choice can be applied offline.
+    var inConflict: Bool = false
+    var conflictServerRevision: Int = 0
+    var conflictServerDocJSON: String?           // the server document returned by the 409
+    var conflictLocalDraftJSON: String?          // the local draft preserved at conflict time (never discarded)
+
+    var attempts: Int = 0
+    var lastError: String?
+    var updatedAt: Date = Date.now
+
+    static func makeKey(ownerAccountId: String, storyId: UUID) -> String {
+        "\(ownerAccountId)#\(storyId.uuidString)"
+    }
+
+    init(ownerAccountId: String, storyId: UUID, baseRevision: Int = 0, dirty: Bool = false,
+         lastSyncedHash: String = "", updatedAt: Date = .now) {
+        self.key = Self.makeKey(ownerAccountId: ownerAccountId, storyId: storyId)
+        self.ownerAccountId = ownerAccountId
+        self.storyId = storyId
+        self.baseRevision = baseRevision
+        self.dirty = dirty
+        self.lastSyncedHash = lastSyncedHash
+        self.updatedAt = updatedAt
+    }
+}
