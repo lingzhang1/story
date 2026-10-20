@@ -116,7 +116,7 @@ from app.deps import (
     get_duration_planner_engine,
 )
 from app.store import InMemoryStoryStore
-from app.auth import optional_user, Principal  # P0 Beta Auth Increment 2: trusted-identity dependency
+from app.auth import optional_user, require_user, Principal  # P0 Beta Auth Increment 2: trusted-identity dependency
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -367,6 +367,17 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
+
+    @app.get("/v1/me", status_code=200)
+    def whoami(principal: Principal = Depends(require_user)) -> dict[str, str]:
+        """R1.1 — the ONE canonical account identity. Returns the backend-minted, immutable `story_user_id`
+        the server uses for all ownership/authorization, so the iOS client stops keying ownership on the
+        Cognito `sub` (two different identifiers was the R1.1 bug). ALWAYS requires a valid access token
+        (`require_user`, never the optional/legacy-dev path): an unauthenticated or invalid-token caller gets
+        401, so the client can NEVER resolve a canonical identity from an anonymous session and must not fall
+        back to `sub`/`dev`. The resolution is the same atomic `cognito_sub -> story_user_id` claim used on
+        every protected request, so `/v1/me` and a later protected call always agree."""
+        return {"story_user_id": principal.story_user_id}
 
     @app.post("/v1/creative-intent", response_model=CreativeIntentContract, status_code=200)
     def resolve_creative_intent(

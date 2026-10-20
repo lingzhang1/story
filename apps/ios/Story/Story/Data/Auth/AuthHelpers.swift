@@ -60,7 +60,11 @@ struct AuthTokens: Codable, Equatable {
     var idToken: String
     var refreshToken: String
     var expiresAt: Date         // access-token expiry (for proactive silent refresh)
-    var storyUserId: String?    // resolved from the backend after sign-in
+    var storyUserId: String?    // R1.1: the CANONICAL backend story_user_id (from /v1/me), NOT the Cognito sub
+    /// R1.1 — true once `storyUserId` holds the canonical backend id (resolved via /v1/me). A token blob
+    /// persisted by a PRE-R1.1 build decodes this as false (Codable default), so restore() knows it must
+    /// re-resolve the canonical id rather than trust a possibly-`sub` value. Defaulted for migration safety.
+    var canonicalResolved: Bool = false
 
     var isExpired: Bool { Date() >= expiresAt.addingTimeInterval(-60) }  // 60s skew for proactive refresh
 }

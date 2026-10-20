@@ -82,20 +82,29 @@ struct StoryApp: App {
                     // account is the one signing in. Idempotent, non-destructive, never overwrites an explicit
                     // owner, DEBUG-only, and never touches local-only Moments (they stay shared). New Stories are
                     // already stamped at creation; this only migrates legacy pre-ownership Stories.
-                    auth.onFirstSignInAdopt = { accountId in
+                    auth.onFirstSignInAdopt = { canonicalId, legacySub in
                         let ctx = container.mainContext
-                        // Keep the device LocalIdentity stamp for provenance (first account that signed in),
-                        // without reassigning if it already belongs to someone — ownership is now per-Story.
+                        // Keep the device LocalIdentity stamp for provenance (first canonical account seen).
                         if let ident = (try? ctx.fetch(FetchDescriptor<LocalIdentityModel>()))?.first,
                            ident.accountId == nil {
-                            ident.accountId = accountId
+                            ident.accountId = canonicalId
                             ident.linkedAt = .now
                             try? ctx.save()
                         }
+                        // R1.1 — FIRST re-key this account's R1 Stories from the legacy Cognito sub to the
+                        // canonical id (so sub-stamped Stories stay visible under the canonical identity). Only
+                        // this account's own sub-owned rows are touched.
+                        let rekeyed = DevOwnershipBackfill.rekeySubToCanonical(
+                            legacySub: legacySub, canonicalId: canonicalId, context: ctx)
+                        if rekeyed > 0 {
+                            MediaEngineV1.beacon("R1.1 re-key: sub->canonical for \(rekeyed) Stories")
+                        }
+                        // THEN the dev-only designated-account backfill for any pre-R1 nil-owner Stories,
+                        // recognising the designated account by its sub but stamping the canonical id.
                         let stamped = DevOwnershipBackfill.runIfDesignatedAccount(
-                            signedInAccountId: accountId, context: ctx)
+                            signedInSub: legacySub, canonicalId: canonicalId, context: ctx)
                         if stamped > 0 {
-                            MediaEngineV1.beacon("R1 dev backfill: stamped \(stamped) pre-R1 Stories to designated account")
+                            MediaEngineV1.beacon("R1 dev backfill: stamped \(stamped) pre-R1 Stories to designated account (canonical id)")
                         }
                     }
                     await auth.restore()

@@ -29,17 +29,51 @@ enum DevOwnershipBackfill {
     /// us-east-1_AzfHOEdA5). This is the stable `story_user_id` the app uses on device, NOT the email.
     static let designatedAccountId = "94688428-50c1-7082-95e7-2c5a65a8c9d8"
 
-    /// Run the one-time backfill IF the currently signed-in account is the designated one. Called from the
-    /// first-sign-in hook. Safe to call repeatedly: it only stamps nil-owner Stories.
-    /// Returns the number of Stories newly stamped (0 when nothing to do / not the designated account).
+    /// The designated account's legacy Cognito `sub` (for dearlingzhang@gmail.com in dev pool
+    /// us-east-1_AzfHOEdA5). Used ONLY to RECOGNISE the designated account at sign-in. Ownership is stamped with
+    /// the account's CANONICAL story_user_id (resolved via /v1/me), never this sub and never the email.
+    static let designatedAccountSub = "94688428-50c1-7082-95e7-2c5a65a8c9d8"
+
+    /// Run the one-time backfill IF the signing-in account IS the designated one (recognised by its Cognito
+    /// sub). Stamps nil-owner pre-R1 Stories to the account's CANONICAL id (passed in). Idempotent + DEV-ONLY.
+    /// Returns the number of Stories newly stamped.
     @discardableResult
-    static func runIfDesignatedAccount(signedInAccountId: String?, context: ModelContext) -> Int {
+    static func runIfDesignatedAccount(signedInSub: String?, canonicalId: String, context: ModelContext) -> Int {
         #if DEBUG
-        guard let account = signedInAccountId, account == designatedAccountId else { return 0 }
-        return stampUnownedStories(to: account, context: context)
+        guard let sub = signedInSub, sub == designatedAccountSub, !canonicalId.isEmpty else { return 0 }
+        return stampUnownedStories(to: canonicalId, context: context)
         #else
-        // Production / public-beta: NEVER run. (Parameter unused by design.)
-        _ = (signedInAccountId, context)
+        _ = (signedInSub, canonicalId, context)
+        return 0
+        #endif
+    }
+
+    /// R1.1 — ONE-TIME re-key of this account's R1 Stories from the legacy Cognito `sub` to the CANONICAL
+    /// story_user_id. R1 stamped ownership with the sub; R1.1 makes the canonical id the single identity, so a
+    /// Story stamped with the sub would otherwise become invisible under the canonical id. Re-keys ONLY rows
+    /// owned by THIS account's own `legacySub` (never another account's — owner Decision 6), is idempotent (a
+    /// row already on the canonical id is skipped), non-destructive (only flips the owner field; no delete/move/
+    /// duplicate of records or media), and DEV-ONLY. Also re-keys the Stories' GeneratedOutputs. A no-op when
+    /// sub == canonical (nothing to move) or sub is nil/empty.
+    /// Returns the number of Stories re-keyed.
+    @discardableResult
+    static func rekeySubToCanonical(legacySub: String?, canonicalId: String, context: ModelContext) -> Int {
+        #if DEBUG
+        guard let sub = legacySub, !sub.isEmpty, !canonicalId.isEmpty, sub != canonicalId else { return 0 }
+        let want: String? = sub
+        let owned = (try? context.fetch(FetchDescriptor<StoryModel>(
+            predicate: #Predicate { $0.ownerAccountId == want }))) ?? []
+        guard !owned.isEmpty else { return 0 }
+        for story in owned {
+            story.ownerAccountId = canonicalId
+            for out in story.generatedOutputs where out.ownerAccountId == sub {
+                out.ownerAccountId = canonicalId
+            }
+        }
+        try? context.save()
+        return owned.count
+        #else
+        _ = (legacySub, canonicalId, context)
         return 0
         #endif
     }

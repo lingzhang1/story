@@ -19,18 +19,24 @@ final class AuthStore: NSObject {
 
     private var tokens: AuthTokens? { didSet { AuthStore.shared?.publishToken(tokens?.accessToken) } }
     private let client: CognitoAuthClient
+    /// R1.1 — resolves the canonical backend story_user_id (GET /v1/me). Injectable for tests.
+    private let identity: IdentityService
     private var webAuthSession: ASWebAuthenticationSession?
     private var pkceVerifier: String?
     private var pkceState: String?
 
     /// Hook the app sets so local content can be adopted by the account on first sign-in (Phase 5). Receives
-    /// the resolved story_user_id; implementation lives in the app layer (SwiftData) to keep this layer pure.
-    var onFirstSignInAdopt: ((String) -> Void)?
+    /// Hook the app sets so local content can be adopted/migrated on first sign-in. Receives BOTH the resolved
+    /// CANONICAL story_user_id AND the legacy Cognito `sub` (R1 stamped ownership with the sub), so the app
+    /// layer can re-key existing R1 Stories sub -> canonical. Implementation lives in the app layer (SwiftData)
+    /// to keep this layer pure.
+    var onFirstSignInAdopt: ((_ canonicalId: String, _ legacySub: String?) -> Void)?
 
     static private(set) var shared: AuthStore?
 
-    init(client: CognitoAuthClient = CognitoAuthClient()) {
+    init(client: CognitoAuthClient = CognitoAuthClient(), identity: IdentityService = IdentityService()) {
         self.client = client
+        self.identity = identity
         super.init()
         AuthStore.shared = self
     }
@@ -50,6 +56,23 @@ final class AuthStore: NSObject {
               var t = try? JSONDecoder().decode(AuthTokens.self, from: data) else { return }
         if t.isExpired {
             do { t = try await refreshed(from: t) } catch { signOutLocal(); return }
+        }
+        // R1.1 — a token blob persisted by a PRE-R1.1 build carries the Cognito `sub` (not the canonical
+        // story_user_id) and `canonicalResolved == false`. We MUST NOT restore a session keyed on the sub, so
+        // re-resolve the canonical id via /v1/me and only then restore. If that fails, sign out (no fallback to
+        // the sub). An R1.1 blob (already canonical) restores WITHOUT a network round-trip, so a cold launch
+        // offline keeps a valid session.
+        if !t.canonicalResolved || (t.storyUserId ?? "").isEmpty {
+            do {
+                let canonicalId = try await identity.resolveCanonicalId(accessToken: t.accessToken)
+                t.storyUserId = canonicalId
+                t.canonicalResolved = true
+                persist(t)
+            } catch {
+                signOutLocal()
+                lastError = (error as? LocalizedError)?.errorDescription
+                return
+            }
         }
         tokens = t
         storyUserId = t.storyUserId
@@ -123,6 +146,7 @@ final class AuthStore: NSObject {
     private func refreshed(from t: AuthTokens) async throws -> AuthTokens {
         var fresh = try await client.refresh(refreshToken: t.refreshToken)
         fresh.storyUserId = t.storyUserId
+        fresh.canonicalResolved = t.canonicalResolved   // R1.1: a refresh preserves the resolved canonical id
         return fresh
     }
 
@@ -141,19 +165,32 @@ final class AuthStore: NSObject {
         publishToken(nil)
     }
 
-    // ---- finish sign-in: resolve story_user_id, adopt local content ---------------------------------
+    // ---- finish sign-in: resolve CANONICAL story_user_id, adopt local content ----------------------
     private func finishSignIn(with incoming: AuthTokens) async throws {
         var t = incoming
-        // Resolve the authoritative story_user_id from the backend (verifies the token server-side). Until a
-        // dedicated /v1/me endpoint exists, the unverified `sub` is a display hint only; the backend remains
-        // the authority on every protected request.
-        t.storyUserId = AuthHelpers.unverifiedSub(fromJWT: t.idToken)
+        // R1.1 — resolve the CANONICAL, backend-minted story_user_id via GET /v1/me. This is the ONE identity
+        // all ownership + account-scoped queries use. We NO LONGER key ownership on the Cognito `sub`.
+        // If resolution fails, the sign-in FAILS (clear state, surface the error) — we never fall back to the
+        // sub or the legacy `dev` identity (owner Decision 7), because that would re-introduce two identifiers.
+        let canonicalId: String
+        do {
+            canonicalId = try await identity.resolveCanonicalId(accessToken: t.accessToken)
+        } catch {
+            signOutLocal()
+            lastError = (error as? LocalizedError)?.errorDescription ?? "Couldn't finish signing in. Please try again."
+            throw error
+        }
+        t.storyUserId = canonicalId
+        t.canonicalResolved = true
         tokens = t
-        storyUserId = t.storyUserId
+        storyUserId = canonicalId
         persist(t)
         publishToken(t.accessToken)
         state = .signedIn
-        if let uid = t.storyUserId { onFirstSignInAdopt?(uid) }
+        // R1.1: pass the canonical id AND the legacy Cognito sub so the app can re-key R1 Stories stamped with
+        // the sub. The sub is read from the id token (display/migration hint only — authz uses the canonical id).
+        let legacySub = AuthHelpers.unverifiedSub(fromJWT: t.idToken)
+        onFirstSignInAdopt?(canonicalId, legacySub)
     }
 
     private func persist(_ t: AuthTokens) {
