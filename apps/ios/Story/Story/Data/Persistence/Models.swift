@@ -993,3 +993,86 @@ final class DurationRecCacheModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// R4 — MediaUploadJob: the persistent, account-scoped cloud-upload queue state (R4-A).
+//
+// State machine (persisted, survives app termination):
+//     enroll ─▶ PENDING ─(eligible, owner active)─▶ RUNNING ─success─▶ VERIFIED
+//                 ▲                                     │
+//                 └──── failure / interruption ─────────┘  (+ bounded backoff)
+//                 └──── FAILED (retries exhausted; recoverable by explicit retry)
+//
+// CROSS-ACCOUNT SAFETY (owner's immutable-owner rule — the heart of R4):
+//   • `ownerAccountId` is the CANONICAL story_user_id of the account that ENROLLED the upload. Set ONCE at
+//     enrollment; NEVER re-derived from the currently-active account inside an async callback.
+//   • The queue only SCHEDULES jobs whose ownerAccountId == the active account. A switch to B stops scheduling
+//     A's jobs; an already-running A transfer may finish, and its verified completion is written against A's
+//     job only (never B's Moments/Assets).
+//   • `momentId`/`assetId` are LOCAL targets; `operationId` is the stable idempotency key; `cloudMediaId` is
+//     filled once the server assigns it. A completion mutates the Moment/Asset ONLY when the job's owner still
+//     matches the record's reservation AND `claimGeneration` is current (a stale callback cannot overwrite a
+//     newer transition — rule 10).
+//
+// RESERVATION (shared local-only Moment): enrolling sets MomentModel.ownerAccountId to the enrolling account
+// (local RESERVATION — not cloud ownership) so A and B cannot both claim the same local-only Moment. Cloud
+// ownership (cloudStateRaw -> cloud_verified) happens ONLY after the server verifies. A failed/cancelled upload
+// before verification RELEASES the reservation back to shared local-only (safe retry/release policy).
+@Model
+final class MediaUploadJobModel {
+    @Attribute(.unique) var id: UUID
+
+    // IMMUTABLE identity binding (set once at enrollment; never re-derived in a callback).
+    var ownerAccountId: String          // canonical story_user_id of the enrolling account
+    var momentId: UUID
+    var assetId: UUID
+    var operationId: String             // stable upload idempotency key
+    var relativeMediaPath: String       // resolve via MediaStore; original is NEVER deleted by the queue
+
+    // Server-assigned once initiate succeeds (nil until then).
+    var cloudMediaId: String?
+    var contentSha256: String?          // full-file sha256 (hex), computed off the capture path
+    var sizeBytes: Int?
+
+    // Lifecycle. stateRaw: pending|running|verified|failed|cancelled. `claimGeneration` bumps on each owner
+    // (re)reservation/retry so a stale async completion for an older generation is ignored (rule 10).
+    var stateRaw: String = "pending"
+    var attempts: Int = 0
+    var lastError: String?
+    var nextEligibleAt: Date = .now
+    var progress: Double = 0            // 0..1 advisory upload progress
+    var claimGeneration: Int = 0
+
+    var createdAt: Date = .now
+    var updatedAt: Date = .now
+
+    enum State: String { case pending, running, verified, failed, cancelled }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+
+    /// Terminal for the AUTOMATIC drain (verified or cancelled). `failed` is recoverable by explicit retry.
+    var isAutoTerminal: Bool { state == .verified || state == .cancelled }
+
+    init(id: UUID = UUID(), ownerAccountId: String, momentId: UUID, assetId: UUID,
+         operationId: String, relativeMediaPath: String, cloudMediaId: String? = nil,
+         contentSha256: String? = nil, sizeBytes: Int? = nil, state: State = .pending,
+         attempts: Int = 0, claimGeneration: Int = 0, createdAt: Date = .now, updatedAt: Date = .now) {
+        self.id = id
+        self.ownerAccountId = ownerAccountId
+        self.momentId = momentId
+        self.assetId = assetId
+        self.operationId = operationId
+        self.relativeMediaPath = relativeMediaPath
+        self.cloudMediaId = cloudMediaId
+        self.contentSha256 = contentSha256
+        self.sizeBytes = sizeBytes
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.claimGeneration = claimGeneration
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}

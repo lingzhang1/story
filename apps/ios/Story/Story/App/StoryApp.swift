@@ -23,7 +23,8 @@ struct StoryApp: App {
             MyMusicAssetModel.self,
             PendingOperationModel.self,
             MusicPlanCacheModel.self,
-            DurationRecCacheModel.self
+            DurationRecCacheModel.self,
+            MediaUploadJobModel.self   // R4-A: persistent cloud-upload queue
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -120,6 +121,11 @@ struct StoryApp: App {
                         // now-authenticated account's unfinished operations (never another account's).
                         PendingOperationRecovery(context: container.mainContext,
                                                  activeAccountId: auth.storyUserId).recoverAll()
+                        // R4-A: recover orphaned uploads + drain this account's upload queue. Account-scoped —
+                        // drains ONLY the now-active account's jobs; A's jobs stay PENDING until A is active.
+                        let uq = makeUploadQueue()
+                        uq.recoverOrphans()
+                        Task { await uq.drain() }
                     }
                 }
         }
@@ -135,8 +141,26 @@ struct StoryApp: App {
                 // (only the signed-in account's Stories), idempotent + single-flight.
                 PendingOperationRecovery(context: container.mainContext,
                                          activeAccountId: auth.storyUserId).recoverAll()
+                // R4-A: on foreground, recover + drain the active account's upload queue (network may be back).
+                let uq = makeUploadQueue()
+                uq.recoverOrphans()
+                Task { await uq.drain() }
             }
         }
+    }
+
+    /// R4-A — build a MediaUploadQueue bound to the live AuthStore. The token closure returns a VALID token
+    /// ONLY for the currently-active account (rule 9: never B's token for A's job); for any other owner it
+    /// returns nil, so that owner's jobs are simply deferred until that account is active again.
+    @MainActor
+    private func makeUploadQueue() -> MediaUploadQueue {
+        MediaUploadQueue(
+            context: container.mainContext,
+            activeOwner: { [weak auth] in auth?.storyUserId },
+            tokenForOwner: { [weak auth] owner in
+                guard let auth, auth.storyUserId == owner else { return nil }
+                return await auth.validAccessToken()
+            })
     }
 
     @MainActor

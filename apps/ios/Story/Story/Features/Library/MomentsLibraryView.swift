@@ -43,6 +43,7 @@ struct MomentsLibraryView: View {
     @State private var selecting = false
     @State private var selected = Set<UUID>()
     @State private var pendingDelete = false
+    @State private var confirmBackup = false   // R4-A: first-use cloud-backup disclosure
     @State private var setupSelection: MomentSelection?   // Phase 3: selected → Start-a-Story setup
     /// Ids already linked to the active Story (.story context) — badged + excluded from re-add.
     @State private var alreadyInStory = Set<UUID>()
@@ -91,7 +92,30 @@ struct MomentsLibraryView: View {
         } message: {
             Text("This permanently removes the original media and analysis, and removes these moments from any Story that used them. Already-created videos are unaffected.")
         }
+        .confirmationDialog("Back up \(selected.count) moment\(selected.count == 1 ? "" : "s") to your account?",
+                            isPresented: $confirmBackup, titleVisibility: .visible) {
+            Button("Back Up") { backUpSelection() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The original video is uploaded privately to your YoTale account so it's safe if you lose this phone. It stays on this device too — nothing is deleted. Only you can access it; it won't appear for another account on this phone.")
+        }
         .onAppear(perform: reload)
+    }
+
+    /// R4-A: enroll the selected local-only Moments for cloud backup under the active account, then kick the
+    /// queue. Non-blocking; originals are preserved. Already-owned/other-account Moments are skipped by enroll.
+    private func backUpSelection() {
+        let picked = moments.filter { selected.contains($0.id) }
+        let queue = MediaUploadQueue(
+            context: context,
+            activeOwner: { [weak auth] in auth?.storyUserId },
+            tokenForOwner: { [weak auth] owner in
+                guard let auth, auth.storyUserId == owner else { return nil }
+                return await auth.validAccessToken()
+            })
+        for m in picked { queue.enroll(moment: m) }
+        selected.removeAll(); selecting = false
+        Task { await queue.drain(); reload() }
     }
 
     // MARK: - Header
@@ -207,6 +231,15 @@ struct MomentsLibraryView: View {
                     Text("Delete").frame(maxWidth: .infinity).padding(.vertical, 13)
                         .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.2), lineWidth: 1.5))
                 }.buttonStyle(.plain).foregroundStyle(StoryTheme.cream.opacity(0.75))
+                // R4-A: explicit, user-controlled cloud backup enrollment (signed-in only). First use shows a
+                // disclosure; enrollment reserves the selected local-only Moments to the active account and
+                // kicks the upload queue. Never auto-enrolls; capture is never blocked.
+                if auth.isSignedIn {
+                    Button { confirmBackup = true } label: {
+                        Text("Back up (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
+                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.6), lineWidth: 1.5))
+                    }.buttonStyle(.plain).foregroundStyle(StoryTheme.gold)
+                }
                 Button { createStoryFromSelection() } label: {
                     Text("Create Story (\(selected.count))").frame(maxWidth: .infinity).padding(.vertical, 13)
                         .background(Capsule().fill(StoryTheme.cream)).foregroundStyle(StoryTheme.ink)
