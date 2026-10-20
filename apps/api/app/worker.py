@@ -66,7 +66,7 @@ def _build_coverage_engine():
 def _validator_error_codes(errs: list[str]) -> list[str]:
     """Map validate_plan's human error strings to LOW-CARDINALITY, stable codes for diagnostics/metrics.
     Never echoes a raw id, instruction, path, or model output — only the invariant that failed."""
-    codes: set[str] = []
+    codes: set[str] = set()
     for e in errs:
         s = str(e).lower()
         if "not in the eligible source set" in s: codes.add("directive_ref_ineligible")
