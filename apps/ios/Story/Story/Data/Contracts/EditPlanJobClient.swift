@@ -19,6 +19,7 @@ enum EditPlanJobStatus: String {
 enum EditPlanJobFailure: String {
     case providerExhausted = "provider_exhausted"
     case materialInfeasible = "material_infeasible"
+    case preservationViolation = "preservation_violation"
     case unsupportedOperation = "unsupported_operation"
     case invalidAfterRepair = "invalid_after_repair"
     case providerError = "provider_error"

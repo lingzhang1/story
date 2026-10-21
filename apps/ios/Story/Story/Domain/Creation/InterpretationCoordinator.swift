@@ -76,7 +76,11 @@ enum InterpretationCoordinator {
                     unsupportedMusicNote: musicNote)
             }
             return InterpretationOutcome(
-                directives: det.directives, softDirection: trimmed,
+                directives: det.directives,
+                // Pure-structural instruction -> empty soft_direction so the engine's DETERMINISTIC revision
+                // path runs and preserves every base clip (no model re-plan, no spurious drops). A genuine
+                // creative leftover ("make it cinematic") survives as the residual and still routes to the model.
+                softDirection: residualSoftDirection(trimmed, typed: typed, ordering: ordering, implicit: implicit),
                 unresolved: [], blocking: [], canSubmit: true,
                 source: .deterministic, kind: .ok,
                 unresolvedMomentNumbers: [], unsupportedMusicNote: musicNote)
@@ -219,6 +223,68 @@ enum InterpretationCoordinator {
             }
         }
         return out
+    }
+
+    /// The CREATIVE RESIDUAL of an instruction the deterministic parser fully understood STRUCTURALLY — the
+    /// text left once every matched Moment-reference / ordering phrase is removed. This is what should be sent
+    /// as `soft_direction`: empty for a pure-structural instruction ("Start with Moment 1, then Moment 6, end
+    /// with Moment 2") so the engine's DETERMINISTIC revision path runs and preserves every base clip; the
+    /// genuine creative leftover ("make it more cinematic") when one remains, so the model path still gets it.
+    ///
+    /// Non-naive by construction: it subtracts the EXACT spans the parser claimed (`ParsedReference.matchedText`
+    /// plus the ordering/adjacency connectors), then strips bridging filler ("and", ",", "then"). If nothing
+    /// with letters survives, the instruction was entirely structural and the residual is empty. A music ask is
+    /// deliberately NOT treated as filler — it is surfaced separately via unsupportedMusicNote and, if present,
+    /// forces a non-empty residual so it is never silently dropped.
+    static func residualSoftDirection(_ text: String,
+                                      typed: [ParsedReference],
+                                      ordering: [(after: Int, before: Int, adjacent: Bool)],
+                                      implicit: [Int]) -> String {
+        var residual = text
+        // Remove the exact phrases the typed-directive parser matched (case-insensitively).
+        for r in typed {
+            if let range = residual.range(of: r.matchedText, options: .caseInsensitive) {
+                residual.replaceSubrange(range, with: " ")
+            }
+        }
+        // Remove ordering/adjacency phrasings the parser consumed. These are the connective clauses between
+        // two Moment references ("then", "immediately after moment N", "moment N follows"), not creative intent.
+        let orderingPhrases = [
+            #"moment\s*#?\d+\s+(?:immediately|right|directly)\s+(?:after|following)\s+moment\s*#?\d+"#,
+            #"moment\s*#?\d+\s+(?:somewhere\s+)?after\s+moment\s*#?\d+"#,
+            #"moment\s*#?\d+\s*,?\s+then\s+(?:moment\s+)?#?\d+"#,
+            #"moment\s*#?\d+\s+(?:follows?|next|afterwards?|comes\s+next)"#,
+            #"\bthen\b"#, #"\bfollowed\s+by\b"#,
+        ]
+        for pat in orderingPhrases {
+            if let re = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) {
+                let ns = residual as NSString
+                residual = re.stringByReplacingMatches(in: residual,
+                    range: NSRange(location: 0, length: ns.length), withTemplate: " ")
+            }
+        }
+        // Any stray "moment N" the typed/ordering removal left behind (e.g. a bare must_include token already
+        // captured as a directive) is structural, not creative.
+        if let re = try? NSRegularExpression(pattern: #"moment\s*#?\d+"#, options: [.caseInsensitive]) {
+            let ns = residual as NSString
+            residual = re.stringByReplacingMatches(in: residual,
+                range: NSRange(location: 0, length: ns.length), withTemplate: " ")
+        }
+        // Strip bridging filler + punctuation; collapse whitespace.
+        let fillerPattern = #"(?i)\b(?:and|also|plus|with|the|a|an|please|then|just)\b"#
+        if let re = try? NSRegularExpression(pattern: fillerPattern) {
+            let ns = residual as NSString
+            residual = re.stringByReplacingMatches(in: residual,
+                range: NSRange(location: 0, length: ns.length), withTemplate: " ")
+        }
+        residual = residual.components(separatedBy: CharacterSet(charactersIn: ",.;:!?-—"))
+            .joined(separator: " ")
+        residual = residual.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Residual is meaningful only if it still contains a letter (a lone connector/number is not creative).
+        let hasLetters = residual.rangeOfCharacter(from: .letters) != nil
+        return hasLetters ? residual : ""
     }
 
     static func humanReadable(_ u: UnresolvedReference) -> String {

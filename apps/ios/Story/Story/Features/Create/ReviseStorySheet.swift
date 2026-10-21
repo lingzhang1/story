@@ -208,7 +208,13 @@ struct ReviseStorySheet: View {
                     directives.mustInclude.append(c.id)
                 }
                 if !musicSuffix.isEmpty { clarification = outcome.unsupportedMusicNote }  // non-blocking note
-                onApply(directives, snapshotText)
+                // Pass the interpreter's RESIDUAL soft direction (creative leftover only), NOT the raw
+                // instruction. For a pure-structural revise ("Start with Moment 1, then Moment 6, end with
+                // Moment 2") the residual is empty, so the engine runs its deterministic reorder and preserves
+                // every base clip (no model re-plan, no "N clips dropped" preservation violation). The raw
+                // `instruction` text stays in this sheet's state for display/history (owner req #6). A genuine
+                // creative residual ("make it cinematic") is preserved and still routes to the model.
+                onApply(directives, outcome.softDirection)
                 dismiss()
             }
         }

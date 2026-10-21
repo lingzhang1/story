@@ -139,4 +139,64 @@ final class InterpretationPipelineTests: XCTestCase {
         XCTAssertFalse(decoded.canSubmit)
         XCTAssertEqual(decoded.blocking.count, 1)
     }
+
+    // MARK: - Phase 1 — redundant soft_direction suppression (deterministic revision routing)
+
+    /// A PURE-STRUCTURAL instruction yields EMPTY soft_direction, so the engine's deterministic revision path
+    /// runs (preserving every base clip) instead of a model re-plan that drops clips. (The 2-clips-dropped bug.)
+    func test_pureStructural_hasEmptySoftDirection() async {
+        let (num, _) = numbering(14)
+        let stub = StubInterpreter()
+        let o = await InterpretationCoordinator.interpret(
+            "Start with Moment 1, then Moment 6, and end with Moment 2", numbering: num, service: stub)
+        XCTAssertFalse(stub.called, "fully structural -> handled locally")
+        XCTAssertEqual(o.kind, .ok)
+        XCTAssertEqual(o.softDirection, "", "pure-structural revise must carry NO soft_direction")
+        XCTAssertNotNil(o.directives.opening)
+        XCTAssertNotNil(o.directives.ending)
+        XCTAssertFalse(o.directives.orderAdjacent.isEmpty)
+    }
+
+    /// A STRUCTURAL + CREATIVE instruction keeps the creative residual as soft_direction (never silently lost),
+    /// so the model path still receives it.
+    func test_structuralPlusCreative_keepsResidual() async {
+        let (num, _) = numbering(14)
+        // Has a residual actionable+creative clause -> routed to server; stub echoes a residual soft_direction.
+        let stub = StubInterpreter(result: InterpretedInstruction(
+            directives: ResolvedDirectives(),
+            softDirection: "make it more cinematic", unresolved: [], blocking: [], canSubmit: true))
+        let o = await InterpretationCoordinator.interpret(
+            "Start with Moment 1, make it more cinematic and add a glow", numbering: num, service: stub)
+        XCTAssertFalse(o.softDirection.isEmpty, "creative residual must be preserved, never dropped")
+    }
+
+    // MARK: - residualSoftDirection pure helper
+
+    func test_residual_pureStructural_empty() {
+        let text = "Start with Moment 1, then Moment 6, and end with Moment 2"
+        let typed = MomentReferenceResolver.parseTyped(text)
+        let ordering = MomentReferenceResolver.parseOrdering(text)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(text)
+        XCTAssertEqual(InterpretationCoordinator.residualSoftDirection(
+            text, typed: typed, ordering: ordering, implicit: implicit), "")
+    }
+
+    func test_residual_structuralPlusCreative_keepsCreative() {
+        let text = "Start with Moment 1, then Moment 6, end with Moment 2, make it more cinematic"
+        let typed = MomentReferenceResolver.parseTyped(text)
+        let ordering = MomentReferenceResolver.parseOrdering(text)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(text)
+        let r = InterpretationCoordinator.residualSoftDirection(
+            text, typed: typed, ordering: ordering, implicit: implicit).lowercased()
+        XCTAssertTrue(r.contains("cinematic"), "creative residual retained; got '\(r)'")
+    }
+
+    func test_residual_excludeOnly_empty() {
+        let text = "exclude Moment 4"
+        let typed = MomentReferenceResolver.parseTyped(text)
+        let ordering = MomentReferenceResolver.parseOrdering(text)
+        let implicit = MomentReferenceResolver.parseImplicitFollow(text)
+        XCTAssertEqual(InterpretationCoordinator.residualSoftDirection(
+            text, typed: typed, ordering: ordering, implicit: implicit), "")
+    }
 }

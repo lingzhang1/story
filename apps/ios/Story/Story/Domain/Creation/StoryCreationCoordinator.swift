@@ -65,6 +65,11 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     /// overlays — backend `unsupported_operation`). NOT transient: retrying fails identically, so the UI
     /// explains the limitation and never offers a plain Retry. The selected version is kept unchanged.
     case unsupportedOperation(String)
+    /// A targeted revise's plan would change clips the user did NOT ask to change (backend
+    /// `preservation_violation`). This is NOT material insufficiency and must NOT carry the "can't fill the
+    /// target" duration prefix — the current version was kept unchanged and the user should rephrase or use
+    /// Create Another Version. NOT transient; no plain Retry.
+    case preservationViolation(String)
     /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
     /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
     /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
@@ -91,6 +96,10 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
             return d.isEmpty
                 ? "That kind of edit isn't supported yet — this app can re-cut, re-time, reorder, set transitions and change the soundtrack, but not color, filters or visual effects. Your current version was kept."
                 : d
+        case .preservationViolation:
+            // Phase 2: a distinct message — NOT the duration "can't fill the target" copy. The revise would
+            // have changed clips the user did not ask to change, so the original was kept.
+            return "This change would have altered clips you didn't ask to change, so your current version was kept. Try naming the Moments to keep or move, or use Create Another Version for a fresh edit."
         case .insufficientMaterial(let achievable, let requested, let suggested):
             let a = Int(achievable.rounded()), req = Int(requested.rounded())
             if let s = suggested {
@@ -689,6 +698,10 @@ final class StoryCreationCoordinator {
                 markPendingFailed(story: story, category: final.failure?.rawValue)
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
+                case .preservationViolation:
+                    // Phase 2: distinct from material-infeasible — do NOT prepend the duration "can't fill the
+                    // target" copy. The revise would change clips the user did not ask to change; version kept.
+                    return finishFailed(.preservationViolation(final.failureDetail ?? ""))
                 case .invalidAfterRepair:
                     let hadDirectives = Self.revisionHasHardDirectives(build.request.revisionContext)
                     if hadDirectives {

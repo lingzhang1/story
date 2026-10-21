@@ -358,11 +358,18 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         _eng = locals().get("engine")
         if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "unsupported_operation":
             cat = "unsupported_operation"
+        # Phase 2 (revision messaging): a PRESERVATION VIOLATION is also raised as an EditPlanInfeasibleError
+        # (classified material_infeasible), but it is NOT a material-insufficiency — the revise WOULD change
+        # clips the user did not ask to change. Surface it under its own category so the app shows the correct
+        # reason (the current version was kept) instead of prepending the generic "material can't fill the
+        # target" duration copy. Mirrors the unsupported_operation promotion above.
+        if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "preservation_violation":
+            cat = "preservation_violation"
         # Phase 1 — privacy-safe validator diagnostics. Emit LOW-CARDINALITY error codes (never raw user
         # instructions, media paths, GPS, images, or raw model output) so invalid_after_repair is debuggable in
         # CloudWatch and future metrics. Correlation id (job_id) stays in the log, never a metric dimension.
         _diag = getattr(_eng, "last_diagnostics", {}) or {}
-        if cat in ("invalid_after_repair", "material_infeasible", "unsupported_operation"):
+        if cat in ("invalid_after_repair", "material_infeasible", "unsupported_operation", "preservation_violation"):
             _inp = locals().get("inputs")
             print(json.dumps({
                 "msg": "worker_validation_diag",

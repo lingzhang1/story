@@ -63,6 +63,9 @@ enum FailureRecovery: Equatable {
         // deterministic-failing request). Route it to Adjust Instructions. invalidPlanOutput (no proven
         // conflict) and everything else stay on the honest technical "Try again".
         if case .directivesUnsatisfiable? = error { return .adjustInstructions }
+        // A preservation violation also fails identically on a plain retry (the same target+directives produce
+        // the same clip changes) — route it to Adjust Instructions, not retry.
+        if case .preservationViolation? = error { return .adjustInstructions }
         return .technical
     }
 }
