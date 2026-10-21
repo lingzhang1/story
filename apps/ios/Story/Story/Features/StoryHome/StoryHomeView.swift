@@ -282,6 +282,21 @@ struct StoryHomeView: View {
     }
 
     private func loadCoverage() async {
+        // Issue 4: if this Story is still hydrating from the cloud (durable barrier seeded from the sync rows),
+        // do NOT enqueue AU backfill or run Guide/Coverage generation yet — a restore is about to supply the
+        // reusable results. Briefly wait for hydration to settle (bounded), then proceed. A hydration timeout
+        // does NOT force regeneration here — refreshGuideAndCoverage still holds via the per-entry gates, and
+        // ensureGuide returns the neutral/retry state rather than inferring.
+        if CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
+            for _ in 0..<20 {   // up to ~10s, 0.5s steps — restore is a couple of network round-trips
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if Task.isCancelled { return }
+                if !CloudHydrationGate.shared.isHydrating(storyId: story.id) { break }
+            }
+            // After hydration, adopt whatever was restored (guide/coverage render from the cloud copy).
+            await refreshGuideAndCoverage()
+            return
+        }
         // R-c.1 legacy backfill: videos imported BEFORE import-AU shipped have no MomentUnderstanding and no
         // job. Enqueue them once (idempotent — a Moment already understood or already queued is skipped, so
         // this is a no-op on subsequent opens and never duplicates analysis). Then drain opportunistically.
@@ -309,7 +324,8 @@ struct StoryHomeView: View {
         // user-authored direction untouched. No UI on Story Home (the MUSIC surface is on Creative
         // Direction) — this only backfills so a future MusicPlan has a direction to read.
         let musicCoord = MusicDirectionCoordinator(context: context)
-        if musicCoord.direction(for: story.id) == nil {
+        if musicCoord.direction(for: story.id) == nil,
+           !CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
             Task { await musicCoord.ensure(for: story, guideFramingSummary: g.framingSummary) }
         }
         let guideFingerprint = coordinator.guideFingerprint(for: story.id)

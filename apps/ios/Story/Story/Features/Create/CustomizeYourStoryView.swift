@@ -23,6 +23,17 @@ struct CustomizeYourStoryView: View {
     let initialCreativeDirection: String
     /// Draft reference chips to repopulate (stable ids; display numbers re-derived from `numbering`).
     let initialReferenceChipIds: [UUID]
+    /// Issue 1 — the Story's EXISTING target length (seconds) and editorial mode, when one was already chosen.
+    /// Used to PREFILL the length selection so re-opening Customize shows the user's prior choice instead of
+    /// silently resetting to the recommendation. An explicit "custom" mode seeds the exact-seconds Custom row
+    /// (provenance preserved); "highlights"/"full" re-selects that editorial row. nil => seed from `rec`.
+    let initialExplicitTargetSeconds: Double?
+    let initialEditorialMode: String?
+    /// Part B — the FULL set of persisted hard directives currently saved on the Story (opening, ending,
+    /// adjacency, order, must-include, exclude), so the sheet can SHOW them and let the user clear them. The
+    /// free-text `initialCreativeDirection` only round-trips the soft text + was the only visible surface for
+    /// opening/adjacency before; this makes every active structural directive visible. nil => none saved.
+    let initialSavedDirectives: ResolvedDirectives?
     /// Returns chosen duration (seconds), sound, length wire, editing approach, resolved HARD directives (nil
     /// when none), the SOFT creative-direction text, the chip ids, and the parsed MUSIC intent — so the caller
     /// persists the draft, forwards directives + soft_direction to the edit planner, and routes an explicit
@@ -32,6 +43,41 @@ struct CustomizeYourStoryView: View {
 
     enum LengthChoice: Hashable { case highlights, full, custom
         var wire: String { switch self { case .highlights: return "highlights"; case .full: return "full"; case .custom: return "custom" } }
+    }
+
+    /// PURE prefill decision for the length row (issue 1), extracted so it is unit-testable without a SwiftUI
+    /// host. An existing editorial mode wins (preserve the user's prior choice / explicit-custom provenance);
+    /// otherwise Full when a recommended point exists, else Custom.
+    static func seedLength(editorialMode: String?, hasRecommendedPoint: Bool) -> LengthChoice {
+        switch (editorialMode ?? "").lowercased() {
+        case "custom":     return .custom
+        case "highlights": return .highlights
+        case "full":       return .full
+        default:           return hasRecommendedPoint ? .full : .custom
+        }
+    }
+
+    /// PURE: render the active persisted directives as human-readable lines using the STABLE numbering, so the
+    /// user sees exactly what is saved (e.g. "Start with Moment 1", "Moment 6 right after Moment 1"). Part B.
+    static func savedDirectiveLines(_ d: ResolvedDirectives?, numbering: StoryMomentNumbering) -> [String] {
+        guard let d, !d.isEmpty else { return [] }
+        func n(_ id: UUID) -> String { numbering.number(forId: id).map { "Moment \($0)" } ?? "a Moment" }
+        var lines: [String] = []
+        if let o = d.opening { lines.append("Start with \(n(o))") }
+        if let e = d.ending { lines.append("End with \(n(e))") }
+        for p in d.orderAdjacent where p.count == 2 { lines.append("\(n(p[0])) right after \(n(p[1]))") }
+        for p in d.orderAfter where p.count == 2 { lines.append("\(n(p[0])) after \(n(p[1]))") }
+        let incOnly = d.mustInclude.filter { $0 != d.opening && $0 != d.ending }
+        if !incOnly.isEmpty { lines.append("Include " + incOnly.map(n).joined(separator: ", ")) }
+        if !d.exclude.isEmpty { lines.append("Exclude " + d.exclude.map(n).joined(separator: ", ")) }
+        return lines
+    }
+
+    /// PURE prefill decision for the exact Custom seconds: the user's prior EXPLICIT target wins (preserve
+    /// provenance), else the recommended point, else the feasible-band midpoint.
+    static func seedCustomSeconds(explicitTarget: Double?, recommendedPoint: Double?,
+                                  bandLo: Double?, bandHi: Double?) -> Double {
+        (explicitTarget ?? recommendedPoint ?? ((bandLo ?? 10) + (bandHi ?? 30)) / 2).rounded()
     }
 
     @State private var length: LengthChoice
@@ -49,29 +95,45 @@ struct CustomizeYourStoryView: View {
     @State private var isInterpreting = false
     @State private var interpretToken = UUID()
     @State private var retryableInstruction: String?   // non-nil => a Retry affordance is shown
+    /// Part B — the active persisted structural directives (opening/adjacency/order/must-include/exclude),
+    /// shown in a "Saved instructions" summary the user can clear. Cleared => removed from the submitted set.
+    @State private var savedDirectives: ResolvedDirectives?
+    @Environment(AuthStore.self) private var auth
+    @State private var cloudGate = CloudAuthGateModel()
 
     init(rec: DurationRecommendation, inferredSound: SoundPreference?, initialExplicitSound: SoundPreference?,
          initialEditingApproach: EditingApproach = .default, visualFirstAvailable: Bool = false,
          numbering: StoryMomentNumbering = StoryMomentNumbering(ordered: []),
          momentForId: @escaping (UUID) -> MomentModel? = { _ in nil },
          initialCreativeDirection: String = "", initialReferenceChipIds: [UUID] = [],
+         initialExplicitTargetSeconds: Double? = nil, initialEditorialMode: String? = nil,
+         initialSavedDirectives: ResolvedDirectives? = nil,
          onCreate: @escaping (Double, SoundPreference, String, EditingApproach, ResolvedDirectives?, String, [UUID], ParsedMusicIntent) -> Void,
          onCancel: @escaping () -> Void) {
         self.rec = rec; self.inferredSound = inferredSound; self.initialExplicitSound = initialExplicitSound
         self.initialEditingApproach = initialEditingApproach; self.visualFirstAvailable = visualFirstAvailable
         self.numbering = numbering; self.momentForId = momentForId
         self.initialCreativeDirection = initialCreativeDirection; self.initialReferenceChipIds = initialReferenceChipIds
+        self.initialExplicitTargetSeconds = initialExplicitTargetSeconds
+        self.initialEditorialMode = initialEditorialMode
+        self.initialSavedDirectives = initialSavedDirectives
         self.onCreate = onCreate; self.onCancel = onCancel
-        // Default length: Full Story when a recommended point exists, else Custom.
-        _length = State(initialValue: rec.recommendedPointSeconds != nil ? .full : .custom)
+        _savedDirectives = State(initialValue: initialSavedDirectives)
+        // Default length: prefer the Story's EXISTING editorial mode when re-opening (issue 1); else Full Story
+        // when a recommended point exists, else Custom. A prior exact "custom" target seeds the Custom row so
+        // the user's explicit length is shown (not silently reset to the recommendation).
+        _length = State(initialValue: Self.seedLength(editorialMode: initialEditorialMode,
+                                                      hasRecommendedPoint: rec.recommendedPointSeconds != nil))
         // Default sound: the user's explicit choice if any, else the inferred recommendation, else balanced.
         _sound = State(initialValue: initialExplicitSound ?? inferredSound ?? .balanced)
         // Default approach: the Story's current approach (defaults to .storytelling). If Visual-first is not
         // available, force storytelling so a hidden section can never leave a non-honorable selection.
         _approach = State(initialValue: visualFirstAvailable ? initialEditingApproach : .storytelling)
-        let seed = rec.recommendedPointSeconds
-            ?? ((rec.evidence.feasibleBandSeconds.first ?? 10) + (rec.evidence.feasibleBandSeconds.last ?? 30)) / 2
-        _customSeconds = State(initialValue: seed.rounded())
+        // Seed the exact-seconds Custom field: the user's prior EXPLICIT target wins (preserve provenance),
+        // else the recommended point, else the feasible-band midpoint.
+        _customSeconds = State(initialValue: Self.seedCustomSeconds(
+            explicitTarget: initialExplicitTargetSeconds, recommendedPoint: rec.recommendedPointSeconds,
+            bandLo: rec.evidence.feasibleBandSeconds.first, bandHi: rec.evidence.feasibleBandSeconds.last))
         // Seed Creative Direction draft (survives navigation / failed generation). Chips re-derive their display
         // number from the current numbering snapshot; an id no longer present is dropped (surfaced on Create).
         _creativeDirection = State(initialValue: initialCreativeDirection)
@@ -111,6 +173,34 @@ struct CustomizeYourStoryView: View {
                 if numbering.count > 0 {
                     section(title: "Creative Direction",
                             subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
+                        // Part B — SAVED instructions summary. Shows every active persisted structural directive
+                        // (opening/adjacency/order/include/exclude) by stable Moment number, visually distinct
+                        // from the new free-text input below, with an explicit Clear. Clearing removes them from
+                        // the submitted request (never silently retained, never silently dropped).
+                        let savedLines = Self.savedDirectiveLines(savedDirectives, numbering: numbering)
+                        if !savedLines.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("SAVED INSTRUCTIONS").font(StoryTheme.body(10, .bold)).tracking(0.6)
+                                        .foregroundStyle(StoryTheme.cream.opacity(0.45))
+                                    Spacer()
+                                    Button { savedDirectives = nil } label: {
+                                        Text("Clear").font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.gold)
+                                    }.buttonStyle(.plain)
+                                }
+                                ForEach(Array(savedLines.enumerated()), id: \.offset) { _, line in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "checkmark.circle").font(.system(size: 11))
+                                            .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                                        Text(line).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.8))
+                                    }
+                                }
+                                Text("Saved from an earlier edit. Clear to start fresh, or add more below.")
+                                    .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textSecondary)
+                            }
+                            .padding(12)
+                            .background(StoryTheme.surfaceAlt, in: RoundedRectangle(cornerRadius: StoryTheme.field))
+                        }
                         StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
                                        text: $creativeDirection, minHeight: 110)
                             // Editing the instruction invalidates any in-flight interpretation (owner #1): a
@@ -241,6 +331,7 @@ struct CustomizeYourStoryView: View {
                         .map { MomentReferenceChipModel(id: $0.id, displayNumber: $0.number) }
                 })
         }
+        .cloudAuthGate(cloudGate)
     }
 
     /// Resolve the typed references + chips against the stable snapshot. Hard references that cannot resolve
@@ -251,6 +342,14 @@ struct CustomizeYourStoryView: View {
     /// unresolved references BLOCK submit with clarification. Never silently downgrade a hard clause.
     private func attemptCreate() {
         guard !isInterpreting else { return }                 // duplicate-tap protection (#1)
+        // Paid NL interpretation is a cloud action — require a session first. The gate stores THIS closure and
+        // resumes it exactly once after sign-in, so the draft/chips snapshot below is taken from the values the
+        // user sees at resume time and the paid call fires only once (no duplicate inference).
+        cloudGate.run { self.performInterpretation() }
+    }
+
+    private func performInterpretation() {
+        guard !isInterpreting else { return }
         // Immutable submission snapshot (#1): the exact values the user sees right now.
         let snapshotText = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshotChips = chips
@@ -292,6 +391,18 @@ struct CustomizeYourStoryView: View {
                 var directives = outcome.directives
                 for c in snapshotChips where !directives.mustInclude.contains(c.id) {
                     directives.mustInclude.append(c.id)
+                }
+                // Part B — fold in the SAVED structural directives the user KEPT (savedDirectives reflects any
+                // Clear). New typed text wins per-slot (opening/ending it set); otherwise the saved value is
+                // preserved. If the user Cleared (savedDirectives == nil) nothing is folded -> request drops
+                // them. Never silently retains a cleared directive; never silently drops a kept one.
+                if let saved = savedDirectives {
+                    if directives.opening == nil { directives.opening = saved.opening }
+                    if directives.ending == nil { directives.ending = saved.ending }
+                    for id in saved.mustInclude where !directives.mustInclude.contains(id) { directives.mustInclude.append(id) }
+                    for id in saved.exclude where !directives.exclude.contains(id) { directives.exclude.append(id) }
+                    for p in saved.orderAfter where !directives.orderAfter.contains(p) { directives.orderAfter.append(p) }
+                    for p in saved.orderAdjacent where !directives.orderAdjacent.contains(p) { directives.orderAdjacent.append(p) }
                 }
                 let finalDirectives: ResolvedDirectives? = directives.isEmpty ? nil : directives
                 let music = MomentReferenceResolver.parseMusicIntent(snapshotText)

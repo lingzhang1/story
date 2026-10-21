@@ -39,11 +39,14 @@ enum ReopenDecision: Equatable {
 /// The playable state of a single output on the Result screen.
 enum ResultPlayback: Equatable {
     case playable(relativePath: String)   // file resolved + exists -> AVPlayer
-    case missing                           // relativeFilePath nil/empty or file gone -> recoverable "Re-create"
+    case restorable                        // R7-D: local MP4 absent BUT a verified cloud backup exists -> restore
+    case missing                           // no local file and no cloud backup -> recoverable "Re-create"
 
     static func resolve(output: GeneratedOutputModel, fileExists: (String) -> Bool) -> ResultPlayback {
-        guard let rel = output.relativeFilePath, !rel.isEmpty, fileExists(rel) else { return .missing }
-        return .playable(relativePath: rel)
+        if let rel = output.relativeFilePath, !rel.isEmpty, fileExists(rel) { return .playable(relativePath: rel) }
+        // R7-D: a verified cloud backup means the exact rendered MP4 can be RESTORED (never re-rendered).
+        if output.cloudMediaId != nil, output.cloudVerifiedAt != nil { return .restorable }
+        return .missing
     }
 }
 
@@ -73,6 +76,7 @@ enum MusicPresentation: Equatable {
 struct StoryResultView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(AuthStore.self) private var auth
     @Bindable var story: StoryModel
     let initialOutput: GeneratedOutputModel
     /// Change Music swaps the DISPLAYED output in place (never a stacked cover — that broke the recreate
@@ -116,6 +120,9 @@ struct StoryResultView: View {
     @State private var generationPhase: String?
     @State private var generationFailed: String?        // failureCategory of a failed op (honest message)
     @State private var showExport = false                // consolidated Save-or-Share sheet
+    // R7-D — cloud-restore of the generated MP4 when the local file is absent but a verified backup exists.
+    @State private var restoring = false
+    @State private var restoreError: String?
 
     private var playback: ResultPlayback {
         ResultPlayback.resolve(output: output) { RenderOutputStore.shared.exists(relative: $0) }
@@ -141,6 +148,8 @@ struct StoryResultView: View {
             switch playback {
             case .playable(let rel):
                 playableBody(relativePath: rel)
+            case .restorable:
+                restorableBody
             case .missing:
                 missingBody
             }
@@ -543,6 +552,67 @@ struct StoryResultView: View {
         Text(text).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.45))
     }
 
+    // MARK: - Restorable (R7-D: cloud backup exists — restore the EXACT MP4, never re-render)
+
+    /// Local MP4 is absent but a VERIFIED cloud backup exists. Auto-start a restore on appear; show progress,
+    /// and on failure offer a manual retry. On success the output's relativeFilePath is stamped and `playback`
+    /// re-resolves to `.playable`, so the player appears without a re-render.
+    private var restorableBody: some View {
+        VStack(spacing: 20) {
+            header
+            Spacer()
+            if restoring {
+                ProgressView().tint(StoryTheme.gold)
+                Text("Restoring your video…").font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                    .multilineTextAlignment(.center)
+                Text("Downloading the exact video from your account. It isn't being re-created.")
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("This video is backed up to your account.")
+                    .font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                    .multilineTextAlignment(.center)
+                if let restoreError {
+                    Text(restoreError).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.gold.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Restore it to this device to play and share.")
+                        .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                        .multilineTextAlignment(.center)
+                }
+                StoryPrimaryButton(title: "Restore") { Task { await restore() } }
+                    .padding(.horizontal, StoryTheme.screenPadding)
+            }
+            Spacer()
+        }
+        .padding(.bottom, 40)
+        .task(id: output.id) {
+            // Auto-attempt once on appear (no error shown yet) so the common case is seamless.
+            if !restoring && restoreError == nil { await restore() }
+        }
+    }
+
+    /// Restore the exact rendered MP4 from the account-owned cloud (R6-style: presign -> stream -> verify size
+    /// + full-file sha256 -> atomic install). Never re-renders. On success, `output.relativeFilePath` is set
+    /// and the view re-renders into the playable state.
+    @MainActor
+    private func restore() async {
+        guard !restoring else { return }
+        restoring = true
+        restoreError = nil
+        let out = output
+        do {
+            _ = try await GeneratedOutputResolver.shared.ensureLocal(
+                output: out, context: context, activeOwner: auth.storyUserId,
+                token: { await auth.validAccessToken() })
+            // Success: the resolver stamped relativeFilePath; reset the player so playableBody loads it.
+            player?.pause(); player = nil; isPlaying = false
+        } catch {
+            restoreError = (error as? LocalizedError)?.errorDescription ?? "Couldn't restore this video."
+        }
+        restoring = false
+    }
+
     // MARK: - Missing (recoverable — NEVER a fake result)
 
     private var missingBody: some View {
@@ -622,6 +692,13 @@ struct StoryResultView: View {
         // chip mid-job — reading it again inside the Task could bind the revise to the wrong parent. The sheet
         // was opened on THIS version; the whole operation must use exactly it.
         let base = output
+        // A REVISE preserves the base version's DURATION — it edits the existing ~N-second video, it does not
+        // re-target a new length. Without this the build falls back to story.intentTargetDurationSeconds, which
+        // can be a STALE/unrelated value (e.g. 16.5s from earlier testing) while the base video is 85s: honoring
+        // opening/adjacency/ending at the wrong short target then forces the planner to DROP most clips, which
+        // the preservation backstop correctly rejects ("N clips you did not ask to remove were dropped"). The
+        // authoritative target is the base PLAN's own target_duration_seconds; fall back to the rendered length.
+        let reviseTarget = Self.baseTargetSeconds(for: base)
         let coord = reviseCoordinator ?? StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         reviseCoordinator = coord
         reviseWorking = true
@@ -632,7 +709,7 @@ struct StoryResultView: View {
             // is re-resolved live (download + analysis) exactly as Change Music does. Nil => honestly no music.
             let music = await resolveBaseMusic(for: base)
             coord.reviseVersion(for: story, base: base, directives: directives,
-                                softDirection: instruction, music: music)
+                                softDirection: instruction, targetSeconds: reviseTarget, music: music)
             while coord.isCreating { try? await Task.sleep(nanoseconds: 200_000_000) }
             reviseWorking = false
             switch coord.state {
@@ -645,6 +722,20 @@ struct StoryResultView: View {
                 break   // cancelled / other — leave the current version displayed
             }
         }
+    }
+
+    /// The DURATION a revise must preserve: the base version's own target. Prefer the base executable plan's
+    /// `target_duration_seconds` (what it was planned at — authoritative), fall back to the rendered
+    /// `durationSeconds` when no plan JSON is stored. A revise edits the existing video; it never invents a new
+    /// length, so this is passed as the request target instead of letting build() fall back to the Story's
+    /// (possibly stale/unrelated) intentTargetDurationSeconds.
+    static func baseTargetSeconds(for base: GeneratedOutputModel) -> Double {
+        if let json = base.editPlanJSON, let data = json.data(using: .utf8),
+           let plan = try? StoryContractCoding.decoder().decode(EditPlanV2.self, from: data),
+           plan.targetDurationSeconds > 0 {
+            return plan.targetDurationSeconds
+        }
+        return base.durationSeconds
     }
 
     /// Re-resolve the base version's soundtrack so a Revise preserves its music. Reads the base output's

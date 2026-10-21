@@ -71,6 +71,15 @@ final class StoryModel {
     var title: String
     var statusRaw: String
 
+    // R1 — ACCOUNT OWNERSHIP (additive, SwiftData-lightweight-migration-safe: optional + defaulted nil).
+    // The device MIRROR of the server-authoritative owner. A Story is created ONLY after authentication and
+    // stamped with the active account's resolved `story_user_id` at creation (never a client-trusted value for
+    // backend authz). nil ONLY on pre-R1 Stories until the dev-only designated-account backfill stamps them,
+    // or on a Story that somehow predates stamping — treated as unowned and hidden from account-scoped reads.
+    // All Story-derived records (outputs, guide, coverage, links, plans) inherit ownership THROUGH this field
+    // (no owner duplication on children). Never overwritten once set to a non-nil account.
+    var ownerAccountId: String?
+
     // Structured CreativeIntent, flattened for persistence.
     var intentRawText: String
     var intentTheme: String
@@ -219,6 +228,12 @@ final class AssetModel {
     var sourceRaw: String
     var createdAt: Date
 
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). Mirrors the owning Moment's ownership: nil while the
+    // asset's Moment is local-only (shared). Cloud backup / eviction (which this field will gate) are OUT OF
+    // SCOPE for R1 — the field is stored now so the later upload pipeline has a home without a migration.
+    // R1 never sets it to non-nil.
+    var ownerAccountId: String?
+
     // Camera Metadata P0 (Part A) — ALL optional + defaulted = lightweight additive migration (an existing
     // populated store decodes cleanly, matching the 60+ prior additive fields in this file). nil everywhere
     // means "unknown" and is the honest default — location is NEVER fabricated.
@@ -231,6 +246,25 @@ final class AssetModel {
     var latitude: Double?
     var longitude: Double?
     var locationAccuracyMeters: Double?
+
+    // R5 — LOCAL ORIGINAL AVAILABILITY, an INDEPENDENT dimension from cloud state (owner correction): the
+    // Moment's cloudStateRaw keeps only {local_only, uploading, cloud_verified, upload_failed} and NEVER gains
+    // an "optimized/restored" value. Whether the original BYTES are on this device is tracked HERE:
+    //   available  — the original file is present at `relativePath` (the default; also the state after an R6
+    //                restore — a restored original stays cloud_verified, availability flips back to available).
+    //   evicted    — the local original was safely freed (R5 optimization); bytes live only in the cloud,
+    //                restorable on demand via R6. The Moment is STILL cloud_verified and STILL owned.
+    //   restoring  — an R6 download is in flight (persisted so a crash mid-restore is recoverable, not stuck).
+    // Default "available" so every existing row decodes as present (lightweight additive migration).
+    var localAvailabilityRaw: String = "available"
+    enum LocalAvailability: String { case available, evicted, restoring }
+    var localAvailability: LocalAvailability {
+        get { LocalAvailability(rawValue: localAvailabilityRaw) ?? .available }
+        set { localAvailabilityRaw = newValue.rawValue }
+    }
+    // R5 — "Keep Originals on iPhone" opt-out of eviction for THIS asset. When true the optimizer must NEVER
+    // evict it (safety check #5). Default false (eligible for optimization).
+    var keepDownloaded: Bool = false
 
     var source: MomentSource {
         get { MomentSource(rawValue: sourceRaw) ?? .directed }
@@ -266,6 +300,26 @@ final class MomentModel {
     var caption: String?
     var sourceRaw: String
     var createdAt: Date
+
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). A Moment is LOCAL-ONLY (nil owner) until it is
+    // successfully uploaded and associated with an authenticated account (a FUTURE increment — not R1). A
+    // local-only Moment belongs to the SHARED device-local library and is deliberately visible to EVERY account
+    // on the device (owner Decision 1.A/1.C). Only a `cloud_*` Moment is account-scoped and hidden from other
+    // accounts. R1 never sets this to non-nil (no upload path yet); the field exists so the shared-vs-owned
+    // distinction is representable now and the isolation reads are written against it.
+    var ownerAccountId: String?
+
+    // R1 — MINIMAL cloud lifecycle state (additive, defaulted). The ownership state machine from the
+    // architecture review (local_only→uploading→cloud_verified→local_optimized→downloaded_on_demand). In R1 the
+    // ONLY reachable value is "local_only"; upload/eviction/download are explicitly out of scope. Stored now so
+    // visibility logic can key off it without a later migration. `cloudMediaId` is the server-minted cloud copy
+    // id once uploaded (nil until then).
+    var cloudStateRaw: String = "local_only"
+    var cloudMediaId: String?
+
+    /// True while this Moment lives only in the shared device-local library (no account owns it). In R1 this is
+    /// always true. An account-scoped read includes a Moment iff it is local-only OR owned by the active account.
+    var isLocalOnly: Bool { ownerAccountId == nil && cloudStateRaw == "local_only" }
 
     // Moment OWNS its media: deleting the Moment deletes its asset file. Independent of any Story.
     @Relationship(deleteRule: .cascade)
@@ -343,6 +397,20 @@ final class GeneratedOutputModel {
     var story: StoryModel?
     var title: String
     var durationSeconds: Double
+
+    // R7-D — GENERATED MP4 cloud backup (additive, defaulted). `cloudMediaId` is the media record for the
+    // uploaded rendered MP4 (media_kind:"generated"); `cloudVerifiedAt` is set once the upload verified. On
+    // Device B these let the exact rendered video be RESTORED for playback/sharing via R6 — NEVER re-planned
+    // or re-rendered. nil until the render completes AND its MP4 is backed up (R7-D).
+    var cloudMediaId: String?
+    var cloudVerifiedAt: Date?
+
+    // R1 — ACCOUNT OWNERSHIP (additive, defaulted nil). INHERITS the parent Story's owner — set equal to
+    // `story.ownerAccountId` at creation and by the dev-only backfill. Stored directly (not only via the
+    // `story` relationship) so account-scoped cleanup/recovery can filter outputs WITHOUT walking a possibly
+    // nil `story` link, and so an orphaned output (story deleted) still carries its last known owner. Never
+    // overwritten once non-nil. Rendered video bytes are NOT cloud-backed in beta (see review §5.3).
+    var ownerAccountId: String?
     // LEGACY snapshot of the moment ids this output was planned from (mock path).
     // Kept for back-compat; real outputs mirror this into `sourceMomentIds`.
     var momentIds: [UUID]
@@ -456,13 +524,20 @@ final class GeneratedOutputModel {
 }
 
 // Opaque local identity — no account required (spec 03 §9).
+// P0 Beta Auth Increment 4: additive, defaulted account fields (SwiftData lightweight-migration-safe). On
+// first sign-in the device's existing local content is ADOPTED by the account by stamping accountId here —
+// zero data movement, nothing deleted. nil accountId = anonymous local content (pre-sign-in / signed out).
 @Model
 final class LocalIdentityModel {
     @Attribute(.unique) var id: UUID
     var createdAt: Date
-    init(id: UUID = UUID(), createdAt: Date = .now) {
+    var accountId: String?   // resolved story_user_id of the account that adopted this device's content
+    var linkedAt: Date?
+    init(id: UUID = UUID(), createdAt: Date = .now, accountId: String? = nil, linkedAt: Date? = nil) {
         self.id = id
         self.createdAt = createdAt
+        self.accountId = accountId
+        self.linkedAt = linkedAt
     }
 }
 
@@ -940,6 +1015,312 @@ final class DurationRecCacheModel {
         self.recommendationJSON = recommendationJSON
         self.inputFingerprint = inputFingerprint
         self.promptVersion = promptVersion
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R4 — MediaUploadJob: the persistent, account-scoped cloud-upload queue state (R4-A).
+//
+// State machine (persisted, survives app termination):
+//     enroll ─▶ PENDING ─(eligible, owner active)─▶ RUNNING ─success─▶ VERIFIED
+//                 ▲                                     │
+//                 └──── failure / interruption ─────────┘  (+ bounded backoff)
+//                 └──── FAILED (retries exhausted; recoverable by explicit retry)
+//
+// CROSS-ACCOUNT SAFETY (owner's immutable-owner rule — the heart of R4):
+//   • `ownerAccountId` is the CANONICAL story_user_id of the account that ENROLLED the upload. Set ONCE at
+//     enrollment; NEVER re-derived from the currently-active account inside an async callback.
+//   • The queue only SCHEDULES jobs whose ownerAccountId == the active account. A switch to B stops scheduling
+//     A's jobs; an already-running A transfer may finish, and its verified completion is written against A's
+//     job only (never B's Moments/Assets).
+//   • `momentId`/`assetId` are LOCAL targets; `operationId` is the stable idempotency key; `cloudMediaId` is
+//     filled once the server assigns it. A completion mutates the Moment/Asset ONLY when the job's owner still
+//     matches the record's reservation AND `claimGeneration` is current (a stale callback cannot overwrite a
+//     newer transition — rule 10).
+//
+// RESERVATION (shared local-only Moment): enrolling sets MomentModel.ownerAccountId to the enrolling account
+// (local RESERVATION — not cloud ownership) so A and B cannot both claim the same local-only Moment. Cloud
+// ownership (cloudStateRaw -> cloud_verified) happens ONLY after the server verifies. A failed/cancelled upload
+// before verification RELEASES the reservation back to shared local-only (safe retry/release policy).
+@Model
+final class MediaUploadJobModel {
+    @Attribute(.unique) var id: UUID
+
+    // IMMUTABLE identity binding (set once at enrollment; never re-derived in a callback).
+    var ownerAccountId: String          // canonical story_user_id of the enrolling account
+    var momentId: UUID
+    var assetId: UUID
+    var operationId: String             // stable upload idempotency key
+    var relativeMediaPath: String       // resolve via MediaStore; original is NEVER deleted by the queue
+
+    // Server-assigned once initiate succeeds (nil until then).
+    var cloudMediaId: String?
+    var contentSha256: String?          // full-file sha256 (hex), computed off the capture path
+    var sizeBytes: Int?
+
+    // Lifecycle. stateRaw: pending|running|verified|failed|cancelled. `claimGeneration` bumps on each owner
+    // (re)reservation/retry so a stale async completion for an older generation is ignored (rule 10).
+    var stateRaw: String = "pending"
+    var attempts: Int = 0
+    var lastError: String?
+    var nextEligibleAt: Date = Date.now
+    var progress: Double = 0            // 0..1 advisory upload progress
+    var claimGeneration: Int = 0
+
+    var createdAt: Date = Date.now
+    var updatedAt: Date = Date.now
+
+    enum State: String { case pending, running, verified, failed, cancelled }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+
+    /// Terminal for the AUTOMATIC drain (verified or cancelled). `failed` is recoverable by explicit retry.
+    var isAutoTerminal: Bool { state == .verified || state == .cancelled }
+
+    init(id: UUID = UUID(), ownerAccountId: String, momentId: UUID, assetId: UUID,
+         operationId: String, relativeMediaPath: String, cloudMediaId: String? = nil,
+         contentSha256: String? = nil, sizeBytes: Int? = nil, state: State = .pending,
+         attempts: Int = 0, claimGeneration: Int = 0, createdAt: Date = .now, updatedAt: Date = .now) {
+        self.id = id
+        self.ownerAccountId = ownerAccountId
+        self.momentId = momentId
+        self.assetId = assetId
+        self.operationId = operationId
+        self.relativeMediaPath = relativeMediaPath
+        self.cloudMediaId = cloudMediaId
+        self.contentSha256 = contentSha256
+        self.sizeBytes = sizeBytes
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.claimGeneration = claimGeneration
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R4-A.1 — Auto Backup preference, ACCOUNT-SCOPED (owner: not a device-global toggle). One row per
+// canonical story_user_id (upsert). Default OFF (a missing row = disabled). `enabled` gates automatic
+// enrollment of NEW captures/imports under that account; `allowCellular` opts into cellular uploads
+// (default false = Wi-Fi only). `existingChoiceMade` records that the one-time "back up existing vs only new"
+// decision was answered, so we never silently claim the shared local library and never re-ask.
+@Model
+final class AutoBackupSettingModel {
+    @Attribute(.unique) var accountId: String   // canonical story_user_id this preference belongs to
+    var enabled: Bool = false
+    var allowCellular: Bool = false             // default: Wi-Fi only
+    var existingChoiceMade: Bool = false        // the Part-3 one-time existing-Moments decision was made
+    var updatedAt: Date = Date.now
+
+    init(accountId: String, enabled: Bool = false, allowCellular: Bool = false,
+         existingChoiceMade: Bool = false, updatedAt: Date = Date.now) {
+        self.accountId = accountId
+        self.enabled = enabled
+        self.allowCellular = allowCellular
+        self.existingChoiceMade = existingChoiceMade
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R6 — Cloud media DOWNLOAD / restoration state, PERSISTENT (survives app relaunch — req #5/#7).
+// One row per (ownerAccountId, cloudMediaId). The composite is the natural de-dupe key: two concurrent
+// requests to restore the same cloud asset for the same account resolve to the SAME row (req #3), and an
+// in-process coalescing actor (MediaResolver) ensures only one download task runs for it.
+//
+// OWNERSHIP: ownerAccountId is the canonical story_user_id that owns the Moment (immutable binding, read
+// from MomentModel.ownerAccountId — never re-derived from the active account in a callback). A download is
+// only ever attempted when the active account == ownerAccountId, and the presign call carries that owner's
+// token (req #6 / safeguard #6). No cross-account restoration.
+//
+// expectedSize / expectedSha256 are filled from the SERVER-AUTHORITATIVE download response (safeguard #7),
+// NOT from a local MediaUploadJobModel — a fresh install or Device B has no upload job but can still verify.
+@Model
+final class MediaDownloadJobModel {
+    @Attribute(.unique) var key: String          // "\(ownerAccountId)#\(cloudMediaId)" — de-dupe identity
+    var ownerAccountId: String                   // canonical story_user_id of the owner
+    var cloudMediaId: String
+    var momentId: UUID
+    var targetRelativePath: String               // the Moment asset's relativePath the verified file installs to
+
+    var expectedSize: Int = 0                    // server-authoritative (0 until first presign)
+    var expectedSha256: String = ""              // server-authoritative full-file sha256 hex
+
+    var stateRaw: String = "pending"             // pending|running|verified|failed
+    var attempts: Int = 0
+    var lastError: String?
+    var progress: Double = 0                     // 0..1 advisory
+    var updatedAt: Date = Date.now
+
+    enum State: String { case pending, running, verified, failed }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+
+    static func makeKey(ownerAccountId: String, cloudMediaId: String) -> String {
+        "\(ownerAccountId)#\(cloudMediaId)"
+    }
+
+    init(ownerAccountId: String, cloudMediaId: String, momentId: UUID, targetRelativePath: String,
+         expectedSize: Int = 0, expectedSha256: String = "", state: State = .pending,
+         attempts: Int = 0, updatedAt: Date = .now) {
+        self.key = Self.makeKey(ownerAccountId: ownerAccountId, cloudMediaId: cloudMediaId)
+        self.ownerAccountId = ownerAccountId
+        self.cloudMediaId = cloudMediaId
+        self.momentId = momentId
+        self.targetRelativePath = targetRelativePath
+        self.expectedSize = expectedSize
+        self.expectedSha256 = expectedSha256
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R5 — "Optimize iPhone Storage" preference, ACCOUNT-SCOPED and DISTINCT from Auto Backup (owner: never
+// confuse the two). Auto Backup (AutoBackupSettingModel) governs UPLOAD of originals to the cloud; this
+// governs whether verified originals may be EVICTED locally to reclaim space. One row per canonical
+// story_user_id (upsert). Default OFF — automatic optimization must not run until the combined R5/R6 device
+// acceptance passes. `autoOptimizeEnabled` gates the (future) automatic policy; Manual Free Up Space does NOT
+// require it. Eviction itself is always subject to the per-asset `keepDownloaded` opt-out and the safety checks.
+@Model
+final class OptimizationSettingModel {
+    @Attribute(.unique) var accountId: String   // canonical story_user_id this preference belongs to
+    var autoOptimizeEnabled: Bool = false        // default OFF — automatic eviction policy (gated until acceptance)
+    var updatedAt: Date = Date.now
+
+    init(accountId: String, autoOptimizeEnabled: Bool = false, updatedAt: Date = Date.now) {
+        self.accountId = accountId
+        self.autoOptimizeEnabled = autoOptimizeEnabled
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R7-C — persistent Story SYNC state, per (ownerAccountId, storyId). Survives relaunch so pending pushes,
+// dirty drafts and conflicts are never lost. Owner is bound ONCE at creation (never re-derived from the
+// active account inside an async callback — rule 7); a stale callback for account A must not mutate B's row.
+@Model
+final class StorySyncJobModel {
+    @Attribute(.unique) var key: String          // "\(ownerAccountId)#\(storyId)"
+    var ownerAccountId: String                   // canonical story_user_id (immutable binding)
+    var storyId: UUID
+
+    var baseRevision: Int = 0                    // last SERVER revision this device has acknowledged (rule 5)
+    var dirty: Bool = false                      // local edits not yet pushed (rule 2)
+    var lastSyncedHash: String = ""              // story_doc/1 content hash at last successful push (dirty = hash changed)
+    var pendingMutationId: String?               // the mutation_id of an in-flight/last push (idempotent retry)
+    var lastAttemptHash: String = ""             // story_doc hash of the pending attempt (reuse mutation_id iff unchanged)
+    var claimGeneration: Int = 0                 // bumps on owner (re)bind/retry; guards stale async callbacks (rule 9)
+
+    // Conflict (survives restart — C1/C4). When set, a 409 was seen and the user must choose Keep Both / Use
+    // Cloud Version. The server's conflicting doc + revision are preserved so the choice can be applied offline.
+    var inConflict: Bool = false
+    var conflictServerRevision: Int = 0
+    var conflictServerDocJSON: String?           // the server document returned by the 409
+    var conflictLocalDraftJSON: String?          // the local draft preserved at conflict time (never discarded)
+
+    var attempts: Int = 0
+    var lastError: String?
+    var updatedAt: Date = Date.now
+
+    // R7-F issue-4 — DURABLE hydration barrier. When a pull observes a cloud revision this device has not yet
+    // fully hydrated (clean local record), it marks the Story hydrationPending=true and records
+    // cloudRevisionSeen. The CloudHydrationGate seeds its in-memory barrier from these rows at first access, so
+    // a SwiftUI view recreation or an app relaunch that races ahead of the pull STILL holds AU/Guide/Coverage/
+    // Music generation until the derived block + understandings are restored. Cleared only when hydration of
+    // that revision completes (results adopted) or the dependency is classified missing/incompatible. Defaulted
+    // so pre-existing rows migrate cleanly (false => not pending, treated as already hydrated).
+    var hydrationPending: Bool = false
+    var cloudRevisionSeen: Int = 0
+
+    static func makeKey(ownerAccountId: String, storyId: UUID) -> String {
+        "\(ownerAccountId)#\(storyId.uuidString)"
+    }
+
+    init(ownerAccountId: String, storyId: UUID, baseRevision: Int = 0, dirty: Bool = false,
+         lastSyncedHash: String = "", updatedAt: Date = .now) {
+        self.key = Self.makeKey(ownerAccountId: ownerAccountId, storyId: storyId)
+        self.ownerAccountId = ownerAccountId
+        self.storyId = storyId
+        self.baseRevision = baseRevision
+        self.dirty = dirty
+        self.lastSyncedHash = lastSyncedHash
+        self.updatedAt = updatedAt
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// R7-D — persistent GENERATED MP4 backup queue state. One row per (ownerAccountId, outputId). A sibling of
+// MediaUploadJobModel (which backs up captured ORIGINALS, moment-scoped) but keyed to a GeneratedOutput and
+// deliberately WITHOUT the Moment-reservation logic — a rendered output has no shared local-only "claim", it
+// simply belongs to the Story's owner. The upload itself reuses the SAME R4 multipart pipeline (MediaUploading)
+// with media_kind="generated" + source_output_id — there is NO second uploader.
+//
+// IMMUTABLE identity binding (set once at enrollment; never re-derived in a callback — rule 7/10). On server
+// cloud_verified, the queue stamps GeneratedOutputModel.cloudMediaId + cloudVerifiedAt, guarded by owner-match
+// + current claimGeneration so a stale async completion cannot overwrite a newer state. The rendered MP4 is
+// NEVER deleted by the queue (safeguard #8: never remove the only local copy before cloud verification).
+@Model
+final class GeneratedOutputBackupJobModel {
+    @Attribute(.unique) var id: UUID
+
+    var ownerAccountId: String          // canonical story_user_id of the Story/output owner
+    var outputId: UUID                  // GeneratedOutputModel.id this job backs up
+    var storyId: UUID                   // owning Story (for account-scoped recovery without walking the link)
+    var operationId: String             // stable upload idempotency key
+    var relativeFilePath: String        // RenderOutputStore relative path; the MP4 is NEVER deleted by the queue
+
+    var cloudMediaId: String?           // server-assigned once initiate succeeds
+    var contentSha256: String?          // full-file sha256 (hex), computed off the render path
+    var sizeBytes: Int?
+
+    var stateRaw: String = "pending"    // pending|running|verified|failed|cancelled
+    var attempts: Int = 0
+    var lastError: String?
+    var nextEligibleAt: Date = Date.now
+    var progress: Double = 0
+    var claimGeneration: Int = 0
+
+    var createdAt: Date = Date.now
+    var updatedAt: Date = Date.now
+
+    enum State: String { case pending, running, verified, failed, cancelled }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+    /// Terminal for the AUTOMATIC drain (verified or cancelled). `failed` is recoverable by explicit retry.
+    var isAutoTerminal: Bool { state == .verified || state == .cancelled }
+
+    init(id: UUID = UUID(), ownerAccountId: String, outputId: UUID, storyId: UUID,
+         operationId: String, relativeFilePath: String, cloudMediaId: String? = nil,
+         contentSha256: String? = nil, sizeBytes: Int? = nil, state: State = .pending,
+         attempts: Int = 0, claimGeneration: Int = 0, createdAt: Date = .now, updatedAt: Date = .now) {
+        self.id = id
+        self.ownerAccountId = ownerAccountId
+        self.outputId = outputId
+        self.storyId = storyId
+        self.operationId = operationId
+        self.relativeFilePath = relativeFilePath
+        self.cloudMediaId = cloudMediaId
+        self.contentSha256 = contentSha256
+        self.sizeBytes = sizeBytes
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.claimGeneration = claimGeneration
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

@@ -25,6 +25,19 @@ final class AssetUnderstandingQueue {
     private let context: ModelContext
     private let service: AUAnalyzing
     private let extractFrames: (URL) async throws -> [AUExtractedFrame]
+    /// Whether an authenticated session exists. Asset Understanding is a PAID cloud call, so draining is
+    /// DEFERRED until this returns true (Increment 4, Phase 4): the Moment and its PENDING job are preserved;
+    /// no model call is made while signed out. On sign-in the app calls `drain()` and the existing idempotent
+    /// upsert + orphan recovery resume each pending job exactly once under the authenticated account. Injected
+    /// (not an AuthStore import) to keep the queue pure/testable; defaults to the shared predicate below so all
+    /// existing construction sites defer correctly without plumbing an AuthStore through each.
+    private let isAuthed: () -> Bool
+
+    /// Shared auth predicate, set once by AuthStore (same seam pattern as `StoryBackend.authTokenProvider`).
+    /// Defaults to `false` — fail SAFE: until AuthStore wires it, paid AU does not run unauthenticated. The app
+    /// sets it on launch before the first drain, and in dev optional-auth AuthStore reports signed-in state
+    /// honestly (a restored session = true).
+    nonisolated(unsafe) static var sharedIsAuthed: () -> Bool = { false }
     private let framePolicy = MomentFrameExtractor.framePolicy
     private let promptVersion = "au_prompt/1"
     private let schemaVersion = "moment_understanding/1"
@@ -38,11 +51,13 @@ final class AssetUnderstandingQueue {
     init(
         context: ModelContext,
         service: AUAnalyzing = AssetUnderstandingService(),
-        extractFrames: @escaping (URL) async throws -> [AUExtractedFrame] = { try await MomentFrameExtractor.extract(from: $0) }
+        extractFrames: @escaping (URL) async throws -> [AUExtractedFrame] = { try await MomentFrameExtractor.extract(from: $0) },
+        isAuthed: @escaping () -> Bool = { AssetUnderstandingQueue.sharedIsAuthed() }
     ) {
         self.context = context
         self.service = service
         self.extractFrames = extractFrames
+        self.isAuthed = isAuthed
     }
 
     // MARK: - Enqueue (called AFTER the Moment is persisted; never blocks it)
@@ -56,6 +71,10 @@ final class AssetUnderstandingQueue {
         captureContext: [String: Any]?
     ) {
         if existingJob(for: momentId) != nil { return }
+        // R7-C fix: a Moment that ALREADY has a completed understanding must NOT be re-analyzed — this is the
+        // case after an R6 restore (the downloaded original is byte-identical, SHA256-verified, to what was
+        // understood before). Re-enqueuing here is what flooded the queue with duplicate AU + coverage work.
+        if hasCompletedUnderstanding(momentId: momentId) { return }
         var ctxJSON: String?
         if let captureContext,
            let d = try? JSONSerialization.data(withJSONObject: captureContext) {
@@ -95,14 +114,23 @@ final class AssetUnderstandingQueue {
 
     /// Process eligible PENDING jobs one at a time. Safe to call repeatedly
     /// (app-active tick, network-available, next launch). Re-entrancy guarded.
+    ///
+    /// DEFERRED while signed out: Asset Understanding is a paid cloud call, so a signed-out drain is a silent
+    /// no-op — pending jobs are left untouched (not failed, no backoff burned) and resume on the next drain
+    /// after sign-in. This is the "defer background AI until an authenticated session exists" boundary; there
+    /// is NO sign-in prompt here (background work waits silently).
     func drain(maxJobs: Int = 50) async {
         if draining { return }
+        guard isAuthed() else { return }   // defer silently until authenticated
         draining = true
         defer { draining = false }
 
         var processed = 0
         while processed < maxJobs, let job = nextEligibleJob() {
             processed += 1
+            // R7-F: do NOT analyze a Moment while its Story's cloud state is still hydrating — a restore may
+            // be about to supply a reusable understanding (restore first, regenerate only if missing).
+            if CloudHydrationGate.shared.isHydrating(momentId: job.momentId) { continue }
             await run(job)
         }
     }
@@ -192,6 +220,17 @@ final class AssetUnderstandingQueue {
                 predicate: #Predicate { $0.momentId == momentId }
             )
         ))?.first
+    }
+
+    /// True if a completed MomentUnderstanding already exists for this Moment — used to avoid re-analyzing a
+    /// Moment whose original was merely RESTORED (R6). A restored original is the SAME verified bytes, so its
+    /// understanding is still valid; re-running AU (and the coverage it invalidates) is pure waste.
+    private func hasCompletedUnderstanding(momentId: UUID) -> Bool {
+        ((try? context.fetch(
+            FetchDescriptor<MomentUnderstandingModel>(
+                predicate: #Predicate { $0.momentId == momentId }
+            )
+        ))?.first) != nil
     }
 
     private func nextEligibleJob() -> AssetUnderstandingJobModel? {

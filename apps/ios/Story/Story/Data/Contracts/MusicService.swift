@@ -150,6 +150,7 @@ final class MusicPlanService: MusicPlanning {
 
     func plan(_ request: MusicPlanRequestDTO) async throws -> JSONValue {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/music-plan"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do { req.httpBody = try StoryContractCoding.encoder().encode(request) }
@@ -275,6 +276,7 @@ final class MusicCandidatesService {
 
     private func postData<B: Encodable>(_ path: String, body: B) async throws -> Data {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do { req.httpBody = try StoryContractCoding.encoder().encode(body) }

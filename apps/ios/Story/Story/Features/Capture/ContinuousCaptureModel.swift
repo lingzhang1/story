@@ -541,6 +541,10 @@ final class ContinuousCaptureModel: ObservableObject, ContinuousCameraController
                             sourceCaptureId: captureSessionId, captureContext: nil)
             Task.detached { await auQueue.drain() }
 
+            // R4-A.1: if the active account has Auto Backup ON, auto-enroll this new Moment for cloud backup
+            // (fire-and-forget; no-op when OFF/signed out). NEVER blocks capture.
+            MediaUploadQueue.sharedAutoEnroll(moment)
+
             // Add-only Photos copy — fire-and-forget, degrades silently. Carries the capture date + a
             // trustworthy location so the user's own Photos copy is correctly dated and placed.
             let adoptedURL = MediaStore.shared.absoluteURL(for: relativePath)

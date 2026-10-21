@@ -57,10 +57,19 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     /// instruction fails identically, so the UI must ask the user to loosen/adjust the instruction, never
     /// offer a plain Retry.
     case directivesUnsatisfiable(String)
+    /// invalid_after_repair with NO hard directives in the request — an honest PLANNER/technical failure, not a
+    /// user-instruction conflict. Bounded retry is appropriate (a nondeterministic planner may succeed), and
+    /// the copy must NOT blame the user's instruction. Issue 2.
+    case invalidPlanOutput(String)
     /// The requested edit is not something the renderer can do (color/filters/effects/reframe/stabilize/
     /// overlays — backend `unsupported_operation`). NOT transient: retrying fails identically, so the UI
     /// explains the limitation and never offers a plain Retry. The selected version is kept unchanged.
     case unsupportedOperation(String)
+    /// A targeted revise's plan would change clips the user did NOT ask to change (backend
+    /// `preservation_violation`). This is NOT material insufficiency and must NOT carry the "can't fill the
+    /// target" duration prefix — the current version was kept unchanged and the user should rephrase or use
+    /// Create Another Version. NOT transient; no plain Retry.
+    case preservationViolation(String)
     /// Deterministic PREFLIGHT verdict: the Story's material can't reach the target's lower tolerance bound.
     /// Carries the conservative achievable estimate, the requested target, and (when a shorter Story is
     /// possible) a suggested target. This is NOT a technical failure — the UI offers an actionable duration
@@ -78,12 +87,19 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
         case .alreadyCreating: return "A video is already being created for this Story."
         case .directivesUnsatisfiable:
             return "Your instruction couldn't be applied to this footage — it may exclude too much or conflict. Try adjusting it (for example, exclude fewer Moments)."
+        case .invalidPlanOutput:
+            // No user directives were involved — do NOT blame the instruction. Honest technical message.
+            return "I couldn't put together a valid edit this time. This is on my side, not your footage — please try again."
         case .unsupportedOperation(let detail):
             // Prefer the backend's specific capability message; fall back to a clear generic one.
             let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
             return d.isEmpty
                 ? "That kind of edit isn't supported yet — this app can re-cut, re-time, reorder, set transitions and change the soundtrack, but not color, filters or visual effects. Your current version was kept."
                 : d
+        case .preservationViolation:
+            // Phase 2: a distinct message — NOT the duration "can't fill the target" copy. The revise would
+            // have changed clips the user did not ask to change, so the original was kept.
+            return "This change would have altered clips you didn't ask to change, so your current version was kept. Try naming the Moments to keep or move, or use Create Another Version for a fresh edit."
         case .insufficientMaterial(let achievable, let requested, let suggested):
             let a = Int(achievable.rounded()), req = Int(requested.rounded())
             if let s = suggested {
@@ -342,8 +358,15 @@ final class StoryCreationCoordinator {
         guard !isCreating else { return }
         // Process-global single-flight: refuse if ANOTHER coordinator (a different view, or the app-level
         // recovery driver) is already running/resuming this Story — two concurrent runs would each persist a
-        // GeneratedOutput and duplicate the version. Phase 5.
-        guard Self.claimActive(story.id) else { return }
+        // GeneratedOutput and duplicate the version. Phase 5. If the claim fails we must NOT silently return
+        // into a dead .idle state (the Creating screen would spin on "Getting your moments ready…" forever with
+        // no failure surfaced) — surface a recoverable failure so the user gets Try again.
+        guard Self.claimActive(story.id, by: self) else {
+            state = .failed(message: "A video is already being created for this Story. Please wait a moment and try again.")
+            lastFailure = .alreadyCreating
+            lastStory = story
+            return
+        }
         lastStory = story
         lastOutputFormat = outputFormat
         lastTargetSeconds = targetSeconds
@@ -359,14 +382,25 @@ final class StoryCreationCoordinator {
         }
     }
 
-    // Process-global set of Story ids with an ACTIVE run/resume. Guards against duplicate concurrent
-    // create/resume for the same Story across different coordinator instances (per-view + app recovery driver).
-    private static var activeStories: Set<UUID> = []
-    private static func claimActive(_ id: UUID) -> Bool {
-        if activeStories.contains(id) { return false }
-        activeStories.insert(id); return true
+    // Process-global set of Story ids with an ACTIVE run/resume, each mapped to the OWNING coordinator (weak).
+    // Guards against duplicate concurrent create/resume for the same Story across coordinator instances
+    // (per-view + app recovery driver). Self-healing: a claim whose owner was deallocated, or is no longer
+    // actually creating, is STALE and can be stolen — otherwise a coordinator that died without its run()
+    // `defer` firing (view dismissed, abnormal task teardown) would leak the id and silently brick every future
+    // create for that Story (observed as an eternal "Getting your moments ready…" spinner).
+    private final class ActiveClaim { weak var owner: StoryCreationCoordinator? }
+    private static var activeStories: [UUID: ActiveClaim] = [:]
+    private static func claimActive(_ id: UUID, by owner: StoryCreationCoordinator) -> Bool {
+        if let existing = activeStories[id] {
+            // A live owner that is genuinely still creating holds the claim; refuse.
+            if let o = existing.owner, o !== owner, o.isCreating { return false }
+            // Otherwise the claim is stale (owner gone / finished) — steal it.
+        }
+        let claim = ActiveClaim(); claim.owner = owner
+        activeStories[id] = claim
+        return true
     }
-    private static func releaseActive(_ id: UUID) { activeStories.remove(id) }
+    private static func releaseActive(_ id: UUID) { activeStories.removeValue(forKey: id) }
 
     /// Keep the device awake during an active Create/Revise so a screen sleep cannot suspend the app and tear
     /// down the in-flight planning/render connection (observed as NSURLError -1005). Cleared when the run ends.
@@ -565,9 +599,12 @@ final class StoryCreationCoordinator {
             // retry a couple of times with a short backoff before giving up, so a brief suspension does not lose
             // a revision whose job is already running server-side.
             let jobId: String
+            let reusedExistingJob: Bool
             if let existing = story.planJobId {
                 jobId = existing   // recovery: a job was already submitted for this attempt
+                reusedExistingJob = true
             } else {
+                reusedExistingJob = false
                 var submitted: String? = nil
                 var lastErr: Error? = nil
                 for attempt in 0..<3 {
@@ -607,24 +644,32 @@ final class StoryCreationCoordinator {
                 + "music=\(pendingMusic?.trackId.prefix(10) ?? "none") op=\(pendingOperationType)")
 
             // Poll to terminal (bounded backoff; transport errors don't end the poll; cancel stops it).
-            let final = try await jobClient.pollUntilTerminal(
-                jobId: jobId, maxSeconds: 900,
-                shouldCancel: { [weak self] in self?.cancelRequested ?? false },
-                onState: { [weak self] st in
-                    story.planJobStatus = st.status.rawValue
-                    self?.updatePendingStatus(story: story, jobStatus: st.status.rawValue)
-                    // Reflect the REAL backend stage in the planning sub-line (honest; backend only distinguishes
-                    // queued vs running — critique happens inside one 'running' invocation and is NOT separately
-                    // observable, so we do not fabricate a 'Refining' stage the server can't report).
-                    self?.planningSubstatus = {
-                        switch st.status {
-                        case .queued:           return "Queued for planning…"
-                        case .running:          return "Planning your Story…"
-                        case .cancelRequested:  return "Cancelling…"
-                        default:                return nil
-                        }
-                    }()
-                })
+            // STALE-JOB RECOVERY: a REUSED persisted job_id can be gone server-side (expired / pruned / a
+            // different container) -> the GET 404s. Rather than dead-ending on "unexpected status 404", clear
+            // the stale handle and submit ONE fresh job for the same operation_id (idempotent), then poll that.
+            var activeJobId = jobId
+            var final: EditPlanJobState
+            do {
+                final = try await pollWithStatusUpdates(jobId: activeJobId, story: story)
+            } catch EditPlanJobError.badStatus(404) where reusedExistingJob {
+                if cancelRequested { return finishCancelled() }
+                MediaEngineV1.beacon("editplan-job: reused job \(activeJobId.prefix(8)) is GONE (404) -> resubmitting fresh for op=\(opId.prefix(8))")
+                story.planJobId = nil; story.planJobStatus = nil; try? context.save()
+                do {
+                    let fresh = try await jobClient.submit(build.request, operationId: opId, owner: "dev",
+                                                           approach: requested, sheets: sheets,
+                                                           creativeBrief: brief, critiqueRevision: critique)
+                    activeJobId = fresh
+                    story.planJobId = fresh; story.planJobStatus = "queued"; try? context.save()
+                    upsertPending(story: story, operationId: opId, jobId: fresh, phase: "planning",
+                                  jobStatus: "queued", fingerprint: Self.fingerprint(
+                                    for: build.includedMedia.map(\.momentId), story: story))
+                    final = try await pollWithStatusUpdates(jobId: activeJobId, story: story)
+                } catch let EditPlanJobError.transport(underlying) {
+                    if cancelRequested || (underlying as NSError).code == NSURLErrorCancelled { return finishCancelled() }
+                    return finishFailed(.planTransport(String(describing: underlying)))
+                }
+            }
 
             switch final.status {
             case .completed:
@@ -643,14 +688,27 @@ final class StoryCreationCoordinator {
                 // Phase 3: durably persist the completed, validated-on-fetch plan at plan_ready BEFORE
                 // rendering, so a force-quit during render resumes from the saved plan (no re-poll/re-inference).
                 let planJSON = (try? StoryContractCoding.encoder().encode(p)).flatMap { String(data: $0, encoding: .utf8) }
-                upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: jobId,
+                upsertPending(story: story, operationId: story.planOperationId ?? "", jobId: activeJobId,
                               phase: "plan_ready", jobStatus: "completed", planJSON: planJSON)
             case .failed:
-                // Distinguish the failure classes for honest UX (Phase 3).
+                // Distinguish the failure classes for honest UX (Phase 3). Issue 2: invalid_after_repair is
+                // only a USER directive-conflict when the request actually carried HARD directives
+                // (opening/ending/include/exclude/order). Without them it is an honest PLANNER/technical failure
+                // (bounded retry), never labeled as "your instruction excluded too much".
                 markPendingFailed(story: story, category: final.failure?.rawValue)
                 switch final.failure {
                 case .materialInfeasible: return finishFailed(.planInfeasible(final.failureDetail ?? "material"))
-                case .invalidAfterRepair: return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                case .preservationViolation:
+                    // Phase 2: distinct from material-infeasible — do NOT prepend the duration "can't fill the
+                    // target" copy. The revise would change clips the user did not ask to change; version kept.
+                    return finishFailed(.preservationViolation(final.failureDetail ?? ""))
+                case .invalidAfterRepair:
+                    let hadDirectives = Self.revisionHasHardDirectives(build.request.revisionContext)
+                    if hadDirectives {
+                        return finishFailed(.directivesUnsatisfiable(final.failureDetail ?? ""))
+                    }
+                    // No proven directive conflict -> truthful technical failure (bounded retry allowed).
+                    return finishFailed(.invalidPlanOutput(final.failureDetail ?? ""))
                 case .unsupportedOperation: return finishFailed(.unsupportedOperation(final.failureDetail ?? ""))
                 case .providerExhausted:  return finishFailed(.planUnavailable)   // quota — try later
                 default:                   return finishFailed(.planUnavailable)
@@ -692,11 +750,31 @@ final class StoryCreationCoordinator {
         }
         if cancelRequested { return finishCancelled() }
 
+        // ---- PRE-RENDER RESTORE (Phase 2, owner req): the planner is now CLOUD-AWARE and may SELECT a Moment
+        // whose original bytes are not on this device (it was eligible via synced AU + cloud duration). The
+        // renderer DOES need the bytes, so restore (R6) the originals for exactly the Moments the plan selected
+        // BEFORE validating/resolving — never a bulk download, only the chosen set. A Moment that cannot be
+        // restored is reported by validate() below as an unresolved asset (honest failure), never a silent skip.
+        let selectedAssetIds = Set(plan.segments.map { $0.assetId.lowercased() })
+        let selectedMoments = story.moments.filter { selectedAssetIds.contains($0.id.uuidString.lowercased()) }
+        let restoreResult = await MomentResolver.resolveEnsuringLocal(
+            moments: selectedMoments, context: context,
+            activeOwner: AuthStore.shared?.storyUserId,
+            token: { await AuthStore.shared?.validAccessToken() })
+        // The render media set = whatever is now LOCAL for the selected Moments (post-restore), unioned with
+        // build.includedMedia (Moments that were already local). Keyed by id so there are no duplicates.
+        var renderMediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+        for md in restoreResult.media { renderMediaById[md.momentId] = md }
+        let renderMedia = Array(renderMediaById.values)
+        if !restoreResult.unavailable.isEmpty {
+            MediaEngineV1.beacon("pre-render restore: \(restoreResult.unavailable.count) selected Moment(s) could not be restored")
+        }
+
         // ---- validating: deterministic, BEFORE AVFoundation; renderer never runs on an invalid plan ----
         planningSubstatus = nil   // planning is done; drop the backend-status sub-line
         state = .validating
-        let resolver = MomentResolver.urlResolver(for: build.includedMedia)
-        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
+        let resolver = MomentResolver.urlResolver(for: renderMedia)
+        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: renderMedia) {
             return finishFailed(.invalidPlan(reason))
         }
         if cancelRequested { return finishCancelled() }
@@ -709,7 +787,7 @@ final class StoryCreationCoordinator {
         // a valid result. Gate: StoryCreativeRefinement.enabled (default false until device-accepted).
         if StoryCreativeRefinement.enabled {
             let sourceDur: (String) -> Double? = { aid in
-                build.includedMedia.first { $0.momentId.uuidString.lowercased() == aid.lowercased() }?.durationSeconds
+                renderMedia.first { $0.momentId.uuidString.lowercased() == aid.lowercased() }?.durationSeconds
             }
             let outcome = CreativeRefinementV2b.refine(
                 plan: plan, enabled: true, resolveURL: resolver,
@@ -786,6 +864,26 @@ final class StoryCreationCoordinator {
     }
 
     // MARK: - Deterministic validator (pre-AVFoundation)
+
+    /// Poll one job to terminal, mirroring its status into the Story + pending row + planning sub-line. Shared
+    /// by the initial poll and the stale-job re-submit recovery.
+    private func pollWithStatusUpdates(jobId: String, story: StoryModel) async throws -> EditPlanJobState {
+        try await jobClient.pollUntilTerminal(
+            jobId: jobId, maxSeconds: 900,
+            shouldCancel: { [weak self] in self?.cancelRequested ?? false },
+            onState: { [weak self] st in
+                story.planJobStatus = st.status.rawValue
+                self?.updatePendingStatus(story: story, jobStatus: st.status.rawValue)
+                self?.planningSubstatus = {
+                    switch st.status {
+                    case .queued:           return "Queued for planning…"
+                    case .running:          return "Planning your Story…"
+                    case .cancelRequested:  return "Cancelling…"
+                    default:                return nil
+                    }
+                }()
+            })
+    }
 
     /// Validate a plan WITHOUT AVFoundation. Returns a human reason on the FIRST failure, or nil if valid.
     /// Checks: feasible flag; every referenced Moment resolves to a local file; source ranges valid
@@ -919,6 +1017,10 @@ final class StoryCreationCoordinator {
         // INVARIANT (02 §): Create != Complete — status is deliberately unchanged.
         // Prior successful outputs are LEFT in place; we only ever ADD a new one once the render succeeds.
         try? context.save()
+        // R7-D: enqueue the rendered MP4 for VERIFIED cloud backup (auto-enroll is a no-op unless the active
+        // account has Auto Backup ON). Fire-and-forget off the render path; the queue reuses the R4 multipart
+        // pipeline and NEVER deletes the local MP4. Stamps cloudMediaId + cloudVerifiedAt once verified.
+        GeneratedOutputBackupQueue.sharedAutoEnroll(output)
         return output
     }
 
@@ -1133,7 +1235,7 @@ extension StoryCreationCoordinator {
         guard let row = fetchPending(storyId: story.id), row.isRecoverable, let jobId = row.jobId else {
             return false
         }
-        guard Self.claimActive(story.id) else { return false }  // another coordinator already resuming/creating
+        guard Self.claimActive(story.id, by: self) else { return false }  // another coordinator already resuming/creating
         // Rehydrate the in-memory operation context from the durable row so persist() keeps lineage/music/type.
         lastStory = story
         lastOutputFormat = row.outputFormat ?? "vertical"
@@ -1186,9 +1288,21 @@ extension StoryCreationCoordinator {
         catch { return finishFailed(.planUnavailable) }
 
         let plan = plan0
+        // PRE-RENDER RESTORE (same as the fresh path): a recovered plan may reference a cloud-only Moment the
+        // cloud-aware planner selected. Restore the selected Moments' originals via R6 before resolving.
+        let selectedAssetIds = Set(plan.segments.map { $0.assetId.lowercased() })
+        let selectedMoments = story.moments.filter { selectedAssetIds.contains($0.id.uuidString.lowercased()) }
+        let restoreResult = await MomentResolver.resolveEnsuringLocal(
+            moments: selectedMoments, context: context,
+            activeOwner: AuthStore.shared?.storyUserId,
+            token: { await AuthStore.shared?.validAccessToken() })
+        var renderMediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+        for md in restoreResult.media { renderMediaById[md.momentId] = md }
+        let renderMedia = Array(renderMediaById.values)
+
         state = .validating
-        let resolver = MomentResolver.urlResolver(for: build.includedMedia)
-        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
+        let resolver = MomentResolver.urlResolver(for: renderMedia)
+        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: renderMedia) {
             return finishFailed(.invalidPlan(reason))
         }
         state = .rendering(progress: 0)

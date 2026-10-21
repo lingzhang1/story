@@ -111,6 +111,7 @@ struct AssetUnderstandingService: AUAnalyzing {
         captureContext: [String: Any]?
     ) async throws -> MomentUnderstandingDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/asset-understanding"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         let boundary = "Boundary-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

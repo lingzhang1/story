@@ -147,6 +147,36 @@ final class StoryResultFlowTests: XCTestCase {
         XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }), .missing)
     }
 
+    // R7-D — a verified cloud backup makes an absent-local output RESTORABLE, not missing (restore, not re-render).
+    func test_resultPlayback_restorableWhenLocalGoneButCloudVerified() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/evicted.mp4")
+        o.cloudMediaId = "cm-1"; o.cloudVerifiedAt = .now
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in false }), .restorable)
+    }
+
+    func test_resultPlayback_restorableOnDeviceBWithNoLocalPath() {
+        let s = newStory()
+        let o = output(s, rel: nil)                 // Device B: never had a local render
+        o.cloudMediaId = "cm-2"; o.cloudVerifiedAt = .now
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }), .restorable)
+    }
+
+    func test_resultPlayback_missingWhenCloudRefButNotVerified() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/gone.mp4")
+        o.cloudMediaId = "cm-3"; o.cloudVerifiedAt = nil   // ref present but not verified -> not restorable
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in false }), .missing)
+    }
+
+    func test_resultPlayback_playableWinsOverCloud() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/ok.mp4")
+        o.cloudMediaId = "cm-4"; o.cloudVerifiedAt = .now   // backed up AND local present -> play local
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }),
+                       .playable(relativePath: "rendered/ok.mp4"))
+    }
+
     // MARK: - Music presentation (honest copy)
 
     func test_music_noMusic_isCreatedWithoutMusic() {
@@ -176,5 +206,117 @@ final class StoryResultFlowTests: XCTestCase {
         let url = RenderOutputStore.shared.absoluteURL(for: rel)
         XCTAssertTrue(url.path.hasSuffix(rel))                       // Save/Share build the activity URL from this
         XCTAssertTrue(url.isFileURL)
+    }
+
+    // MARK: - Issue 1: Customize prefill seeds (an existing target must prefill, never silently reset)
+
+    func test_customizeSeedLength_explicitModeWins() {
+        // An existing editorial mode is honored (preserves the user's prior choice).
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "custom", hasRecommendedPoint: true), .custom)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "highlights", hasRecommendedPoint: true), .highlights)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "full", hasRecommendedPoint: false), .full)
+    }
+
+    func test_customizeSeedLength_fallbackWhenNoMode() {
+        // No prior mode -> Full when a recommendation exists, else Custom.
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: nil, hasRecommendedPoint: true), .full)
+        XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "", hasRecommendedPoint: false), .custom)
+    }
+
+    // Part B — persisted directives are rendered by stable Moment number so the user can see + clear them.
+    func test_savedDirectiveLines_rendersAllActiveDirectives() {
+        func nm(_ n: Int, _ id: UUID) -> NumberedMoment { NumberedMoment(number: n, id: id, durationSeconds: 5, relativePath: nil) }
+        let a = UUID(), b = UUID(), c = UUID()
+        let numbering = StoryMomentNumbering(ordered: [nm(1, a), nm(2, b), nm(3, c)])
+        var d = ResolvedDirectives()
+        d.opening = a; d.orderAdjacent = [[b, a]]; d.mustInclude = [a, b]; d.exclude = [c]
+        let lines = CustomizeYourStoryView.savedDirectiveLines(d, numbering: numbering)
+        XCTAssertTrue(lines.contains("Start with Moment 1"))
+        XCTAssertTrue(lines.contains("Moment 2 right after Moment 1"))
+        XCTAssertTrue(lines.contains("Exclude Moment 3"))
+        // must_include that is ALSO opening/ending is not double-listed; the standalone include (none here) omitted
+        XCTAssertFalse(lines.contains("Include Moment 1, Moment 2"))
+        XCTAssertTrue(CustomizeYourStoryView.savedDirectiveLines(nil, numbering: numbering).isEmpty)
+    }
+
+    func test_customizeSeedSeconds_explicitTargetWins() {
+        // The user's prior EXPLICIT target wins (provenance preserved), even over a recommendation.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: 45, recommendedPoint: 30,
+                                                                bandLo: 10, bandHi: 60), 45)
+        // Absent an explicit target -> recommended point.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: nil, recommendedPoint: 30,
+                                                                bandLo: 10, bandHi: 60), 30)
+        // Absent both -> band midpoint.
+        XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: nil, recommendedPoint: nil,
+                                                                bandLo: 10, bandHi: 30), 20)
+    }
+
+    // MARK: - Issue 2: deterministic failure recovery (no plain-retry loop on a proven directive conflict)
+
+    func test_failureRecovery_directiveConflict_routesToAdjust_notRetry() {
+        // A PROVEN directive conflict must route to Adjust Instructions (no identical-request retry loop).
+        XCTAssertEqual(FailureRecovery.from(.directivesUnsatisfiable("too many excludes")), .adjustInstructions)
+    }
+
+    func test_failureRecovery_invalidPlanOutput_isTechnical_notUserError() {
+        // invalid_after_repair WITHOUT directives -> honest technical failure (bounded retry), not user error.
+        XCTAssertEqual(FailureRecovery.from(.invalidPlanOutput("planner")), .technical)
+    }
+
+    func test_failureRecovery_insufficientMaterial_offersDurationChoice() {
+        XCTAssertEqual(FailureRecovery.from(.insufficientMaterial(achievable: 100, requested: 240, suggested: 90)),
+                       .shorterStory(suggestedSeconds: 90))
+        XCTAssertEqual(FailureRecovery.from(.insufficientMaterial(achievable: 3, requested: 240, suggested: nil)),
+                       .keepShooting)
+    }
+
+    func test_failureRecovery_technicalErrors_offerRetry() {
+        XCTAssertEqual(FailureRecovery.from(.planUnavailable), .technical)
+        XCTAssertEqual(FailureRecovery.from(.renderFailed("x")), .technical)
+        XCTAssertEqual(FailureRecovery.from(.planTransport("x")), .technical)
+    }
+
+    // Issue 2: the two invalid_after_repair messages are distinct — directive conflict blames the instruction,
+    // the no-directive technical failure explicitly does NOT.
+    func test_invalidOutput_message_doesNotBlameUser() {
+        let dir = StoryCreationError.directivesUnsatisfiable("").errorDescription ?? ""
+        let tech = StoryCreationError.invalidPlanOutput("").errorDescription ?? ""
+        XCTAssertTrue(dir.lowercased().contains("instruction"))
+        XCTAssertFalse(tech.lowercased().contains("instruction"))
+        XCTAssertNotEqual(dir, tech)
+    }
+
+    // MARK: - Revise preserves the base version's duration (not a stale Story intent target)
+
+    private func planJSON(targetSeconds: Double) -> String {
+        let plan = EditPlanV2(schemaVersion: "edit_plan/2", targetDurationSeconds: targetSeconds,
+                              outputFormat: "vertical", musicAssetId: nil, feasible: true,
+                              segments: [EditSegmentV2(order: 0, assetId: UUID().uuidString,
+                                                       sourceStartSeconds: 0, sourceEndSeconds: 3,
+                                                       outputDurationSeconds: 3, speed: 1.0,
+                                                       nativeAudio: "keep", musicAlignment: nil)])
+        let data = try! StoryContractCoding.encoder().encode(plan)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    /// A revise must target the base PLAN's target_duration_seconds (what it was planned at), so an 85s video
+    /// revises at 85s — never a stale Story intent target (the 16.5s bug that dropped 9 clips).
+    func test_baseTargetSeconds_prefersBasePlanTarget() {
+        let s = newStory()
+        let o = GeneratedOutputModel(title: s.title, durationSeconds: 85.055, momentIds: [],
+                                     editPlanJSON: planJSON(targetSeconds: 85.0))
+        o.story = s; ctx.insert(o)
+        XCTAssertEqual(StoryResultView.baseTargetSeconds(for: o), 85.0, accuracy: 0.001,
+                       "revise target = base plan's target_duration_seconds")
+    }
+
+    /// Legacy output with no stored plan JSON falls back to the rendered duration (never a short default).
+    func test_baseTargetSeconds_fallsBackToRenderedDuration() {
+        let s = newStory()
+        let o = GeneratedOutputModel(title: s.title, durationSeconds: 85.055, momentIds: [],
+                                     editPlanJSON: nil)
+        o.story = s; ctx.insert(o)
+        XCTAssertEqual(StoryResultView.baseTargetSeconds(for: o), 85.055, accuracy: 0.001,
+                       "no plan JSON -> rendered duration, not a stale/short target")
     }
 }

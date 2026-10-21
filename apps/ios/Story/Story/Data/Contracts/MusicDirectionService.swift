@@ -32,6 +32,7 @@ final class MusicDirectionService: MusicDirectionInferring {
 
     func infer(_ request: MusicDirectionRequestDTO) async throws -> MusicDirectionContractDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/music-direction"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {

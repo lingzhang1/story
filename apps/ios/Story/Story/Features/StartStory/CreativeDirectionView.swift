@@ -9,6 +9,11 @@ import SwiftData
 struct CreativeDirectionView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    // P0 Beta Auth Increment 4: gate the cloud-AI "resolve" behind sign-in; present SignInView and resume.
+    @Environment(AuthStore.self) private var auth
+    @State private var pendingAuthAction: (() -> Void)?
+    @State private var resumedPendingAction = false
+    @State private var showSignIn = false
 
     /// Phase 3: when Story creation starts from the Moments Library, the selected Moments are
     /// seeded here. On final confirmation they are linked to the newly-created Story (order
@@ -44,7 +49,10 @@ struct CreativeDirectionView: View {
     ]
 
     private var useCases: StoryUseCases {
-        StoryUseCases(repository: StoryRepository(context: context))
+        // R1: Story creation binds the active account. The Start-a-Story Continue is auth-gated (requireAuthThen)
+        // so by the time resolve() calls createStory, this is `.account(story_user_id)`; an unauthenticated path
+        // is refused by the repository (StoryCreationRequiresAuth) rather than falling back to a `dev` owner.
+        StoryUseCases(repository: StoryRepository(context: context, owner: auth.activeOwner))
     }
 
     var body: some View {
@@ -91,6 +99,45 @@ struct CreativeDirectionView: View {
             Button("Try Again") { Task { await resolve() } }
             Button("Cancel", role: .cancel) {}
         } message: { Text(errorMessage ?? "") }
+        .sheet(isPresented: $showSignIn) {
+            SignInView(auth: auth,
+                       onSignedIn: { resumePendingAuthAction() },
+                       onCancel: { cancelPendingAuthAction() })
+        }
+    }
+
+    /// Require authentication before a cloud-AI action, preserving + resuming it once (P0 Phase 4). In dev
+    /// optional-auth the backend still accepts no token, but the app prompts sign-in so the cutover to
+    /// required-auth is a one-line flip and the user sees a real prompt rather than a silent anonymous call.
+    private func requireAuthThen(_ action: @escaping () -> Void) {
+        // Direct, desync-proof gating: if already signed in, run now; otherwise store the action and
+        // present the sheet by setting the SAME boolean the .sheet binds to. No mirrored @Observable gate
+        // (the old `showSignIn = g.presentingSignIn` mirror could be read before the gate mutated, so the
+        // sheet never appeared on a signed-out device — the exact symptom seen in device testing).
+        if auth.isSignedIn {
+            action()
+            return
+        }
+        pendingAuthAction = action
+        resumedPendingAction = false
+        showSignIn = true
+        #if DEBUG
+        print("[AuthGate] Start-a-Story gated: signedOut -> presenting sign-in (showSignIn=\(showSignIn))")
+        #endif
+    }
+
+    private func resumePendingAuthAction() {
+        showSignIn = false
+        guard !resumedPendingAction, let action = pendingAuthAction else { return }
+        resumedPendingAction = true
+        pendingAuthAction = nil
+        action()
+    }
+
+    private func cancelPendingAuthAction() {
+        showSignIn = false
+        pendingAuthAction = nil
+        resumedPendingAction = false
     }
 
     private var backRow: some View {
@@ -186,7 +233,7 @@ struct CreativeDirectionView: View {
             Text("or describe it").font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.3))
             StoryTextField(placeholder: "Mostly landscapes and the scale of the mountains. Include us naturally. Slow, cinematic feeling.",
                            text: $description, minHeight: 96)
-            StoryPrimaryButton(title: "Continue") { Task { await resolve() } }
+            StoryPrimaryButton(title: "Continue") { requireAuthThen { Task { await resolve() } } }
         }
     }
 

@@ -59,6 +59,7 @@ final class InterpretService: Interpreting {
             throw InterpretServiceError.transport
         }
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/interpret-revision"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData

@@ -51,6 +51,7 @@ enum CreatingPhase: Equatable {
 enum FailureRecovery: Equatable {
     case shorterStory(suggestedSeconds: Double)   // insufficient material, a shorter Story is possible
     case keepShooting                              // insufficient material, not even a minimum Story -> only "keep shooting"
+    case adjustInstructions                        // proven directive conflict -> Adjust Instructions, NO plain retry
     case technical                                 // recoverable technical failure -> honest "Try again"
 
     static func from(_ error: StoryCreationError?) -> FailureRecovery {
@@ -58,6 +59,13 @@ enum FailureRecovery: Equatable {
             if let s = suggested { return .shorterStory(suggestedSeconds: s) }
             return .keepShooting
         }
+        // Issue 2: a PROVEN directive conflict must NOT offer a plain retry (it would resubmit the identical
+        // deterministic-failing request). Route it to Adjust Instructions. invalidPlanOutput (no proven
+        // conflict) and everything else stay on the honest technical "Try again".
+        if case .directivesUnsatisfiable? = error { return .adjustInstructions }
+        // A preservation violation also fails identically on a plain retry (the same target+directives produce
+        // the same clip changes) — route it to Adjust Instructions, not retry.
+        if case .preservationViolation? = error { return .adjustInstructions }
         return .technical
     }
 }
@@ -90,6 +98,11 @@ struct StoryCreatingView: View {
     /// and renders the recovered plan. `preresolvedMusic` carries the re-resolved selection when the parent
     /// already resolved it. Used when a Story is reopened with a recoverable pending operation.
     var resumePending: Bool = false
+
+    /// Issue 2: proven directive-conflict recovery. When set, the "Adjust instructions" button on the failure
+    /// screen asks the HOST to re-open the Customize / Creative-Direction editor (the instruction is preserved
+    /// on the Story). When nil, the view just dismisses to the Story. Never a plain retry of the failing request.
+    var onAdjustInstructions: (() -> Void)? = nil
 
     @State private var coordinator: StoryCreationCoordinator?
     // R-d.2 keep-alive: creating a Story runs a long foreground pipeline (Opus planning + AVAssetExportSession),
@@ -345,8 +358,44 @@ struct StoryCreatingView: View {
             insufficientBody(message: message, suggestedSeconds: suggested)
         case .keepShooting:
             insufficientBody(message: message, suggestedSeconds: nil)
+        case .adjustInstructions:
+            adjustInstructionsBody(message: message)
         case .technical:
             technicalFailedBody(message: message)
+        }
+    }
+
+    /// Proven directive conflict (invalid_after_repair WITH hard directives). The instruction is preserved
+    /// (persisted on the Story) — we send the user back to adjust it rather than resubmitting an identical
+    /// request that will fail deterministically again. NO plain "Try again" here. `onAdjustInstructions`, when
+    /// provided by the host, pops back into the Customize / Creative-Direction editor; otherwise we dismiss to
+    /// the Story so the user can re-open Create and edit the instruction.
+    private func adjustInstructionsBody(message: String) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Text("Let's adjust your instruction.")
+                .font(StoryTheme.display(22))
+                .foregroundStyle(StoryTheme.cream)
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(StoryTheme.body(14))
+                .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            StoryPrimaryButton(title: "Adjust instructions") {
+                if let onAdjustInstructions { onAdjustInstructions() } else { dismiss() }
+            }
+            Button {
+                dismiss()
+            } label: {
+                Text("Back to Story")
+                    .font(StoryTheme.body(14))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 24)
         }
     }
 

@@ -296,6 +296,134 @@ def normalize_plan(plan: dict, inputs: EditPlanInputs) -> tuple[dict, list[str]]
     return out, notes
 
 
+# Error-string prefixes that a DETERMINISTIC reorder can fix (placement only — no content change).
+_ORDER_REPAIRABLE_PREFIXES = (
+    "directive opening:",            # first segment must be X but is Y
+    "directive ending:",             # last segment must be X but is Y
+    "directive order_after:",        # A must come after B but is at position ...
+    "directive order_adjacent:",     # A must immediately follow B ...
+)
+
+
+def _errors_are_order_only(errs: list[str]) -> bool:
+    """True when EVERY error is an opening/ending/order PLACEMENT violation — i.e. fixable by reordering
+    segments without touching content, membership, duration, speed or source ranges. An empty list is False
+    (nothing to repair). A 'references Moment not in the eligible source set' or 'appears in no segment' error
+    is a MEMBERSHIP problem a reorder cannot fix, so it is deliberately NOT in the repairable set."""
+    if not errs:
+        return False
+    return all(any(str(e).startswith(p) for p in _ORDER_REPAIRABLE_PREFIXES) for e in errs)
+
+
+def repair_directive_placement(plan: dict, inputs: EditPlanInputs) -> dict | None:
+    """DETERMINISTIC structural repair: reassign segment `order` so the plan satisfies the hard PLACEMENT
+    directives (opening, ending, order_adjacent, order_after) carried in revision_context['directives'].
+
+    Preserves EVERYTHING else exactly — asset_id, source ranges, output_duration, speed, transition,
+    native_audio, music_alignment — and never adds, drops, duplicates or reselects a segment. It only changes
+    the order in which the SAME segments play. must_include / exclude are membership constraints a reorder
+    cannot satisfy, so they are left to the (unchanged) validator + model-repair path.
+
+    Returns a reordered COPY, or None when the placement constraints are unsatisfiable by reordering alone
+    (opening/ending Moment absent from the plan, or a cyclic/conflicting order graph) — in which case the
+    caller keeps the existing failure path. No model call. No frozen-contract change."""
+    import copy as _copy
+    ctx = inputs.revision_context or {}
+    directives = ctx.get("directives") or {}
+    if not isinstance(directives, dict):
+        return None
+    segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
+    if not segs:
+        return None
+
+    def _aid(s):
+        return str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None
+
+    def _low(v):
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [_low(x) for x in v]
+        return v
+
+    opening = _low(directives.get("opening")) if isinstance(directives.get("opening"), str) else None
+    ending = _low(directives.get("ending")) if isinstance(directives.get("ending"), str) else None
+    adj = [(a, b) for a, b in (_pairs(directives.get("order_adjacent")) or [])]
+    adj = [(a.lower(), b.lower()) for a, b in adj]
+    aft = [(a.lower(), b.lower()) for a, b in (_pairs(directives.get("order_after")) or [])]
+
+    present = [_aid(s) for s in segs]
+    present_set = set(present)
+    # opening/ending must be present to be placeable by reorder; absent => membership issue, not reorderable.
+    if opening is not None and opening not in present_set:
+        return None
+    if ending is not None and ending not in present_set:
+        return None
+
+    # Unique assets in current first-occurrence order.
+    uniq, seen = [], set()
+    for a in present:
+        if a not in seen:
+            seen.add(a); uniq.append(a)
+
+    # Adjacency chains: B -> A (A glued immediately after B). An asset follows at most one B; guard cycles.
+    follow, glued = {}, set()
+    for a, b in adj:
+        if a in present_set and b in present_set and b not in follow and a not in glued and a != b:
+            follow[b] = a; glued.add(a)
+
+    emitted, seq = set(), []
+    def _emit_chain(start):
+        cur = start
+        while cur is not None and cur not in emitted:
+            seq.append(cur); emitted.add(cur)
+            cur = follow.get(cur)
+    if opening is not None:
+        _emit_chain(opening)
+    for a in uniq:
+        if a in emitted or a in glued:
+            continue
+        _emit_chain(a)
+    for a in uniq:                      # defensive: a glued asset whose B was missing
+        if a not in emitted:
+            seq.append(a); emitted.add(a)
+
+    # order_after[A,B]: A after B (by first-occurrence position). Stable bubble with a cycle bound.
+    for _ in range(len(seq) * max(1, len(aft)) + 1):
+        pos = {a: i for i, a in enumerate(seq)}; changed = False
+        for a, b in aft:
+            if a in pos and b in pos and pos[a] < pos[b]:
+                seq.remove(a); seq.insert(seq.index(b) + 1, a); changed = True
+        if not changed:
+            break
+    else:
+        return None  # could not stabilize -> conflicting/cyclic ordering
+
+    # Placement must hold after after-fixups.
+    if opening is not None and (not seq or seq[0] != opening):
+        return None
+    if ending is not None and (not seq or seq[-1] != ending):
+        # ending may conflict with an adjacency chain ending elsewhere -> unrepairable by reorder.
+        return None
+
+    # Expand unique order back to full segments (repeats keep original relative order), renumber 0..N-1.
+    by_asset = {}
+    for s in segs:
+        by_asset.setdefault(_aid(s), []).append(s)
+    out_segs = []
+    for a in seq:
+        for s in by_asset.get(a, []):
+            out_segs.append(_copy.deepcopy(s))
+    placed = set(seq)
+    for s in segs:                      # defensive: anything not placed keeps original tail order
+        if _aid(s) not in placed:
+            out_segs.append(_copy.deepcopy(s))
+    for i, s in enumerate(out_segs):
+        s["order"] = i
+    out = _copy.deepcopy(plan); out["segments"] = out_segs
+    return out
+
+
 @dataclass
 class EditPlanInputs:
     story_id: str
@@ -399,57 +527,146 @@ def _duration_target_source(inputs: "EditPlanInputs") -> str:
     return src if src in ("user_exact", "ai_recommended") else "user_exact"
 
 
+def _has_retime_intent(inputs: "EditPlanInputs") -> bool:
+    """A revise whose soft_direction asks for shorter clips / faster pacing / a shorter video — whether or not
+    it ALSO carries a structural directive. Phase 5 (owner 2026-10-21): "do not add footage merely to preserve
+    an inherited duration the user did not request." A mixed revise like "open with Moment 1 AND shorten each
+    clip to ~5s" legitimately produces a SHORTER total, so for an AI-recommended target its undershoot floor is
+    relaxed too — not only the pure-timing-only case. Distinct from `_is_timing_only_revise`, which still gates
+    the zero-model deterministic retime fast path (that path requires NO directives)."""
+    rc = inputs.revision_context or {}
+    if rc.get("mode") != "revise":
+        return False
+    soft = (rc.get("soft_direction") or "").lower()
+    if _parse_target_clip_seconds(soft) is not None:
+        return True
+    return any(p in soft for p in ("shorten", "shorter", "make it short", "condense", "tighten", "faster",
+                                   "speed it up", "quicker", "snappier", "less time", "cut it down",
+                                   "trim it down", "shorten each", "shorter clip"))
+
+
 def _undershoot_tolerance_for(inputs: "EditPlanInputs") -> float | None:
     """The effective undershoot floor for THIS operation. Returns the strict default for initial creation and
-    for any revise with an explicit user duration; returns None (no lower bound) ONLY for a timing-only revise
-    whose target length is AI-recommended, so honoring the user's pacing can shorten the whole video without
-    being rejected. Never relaxes the overshoot/feasibility checks — this governs the lower bound alone."""
-    if _is_timing_only_revise(inputs) and _duration_target_source(inputs) == "ai_recommended":
+    for any revise with an explicit user duration; returns None (no lower bound) for a revise that carries a
+    retime/shorter-pacing intent whose target length is AI-recommended, so honoring the user's pacing can
+    shorten the whole video without being rejected (whether or not a structural directive is also present).
+    Never relaxes the overshoot/feasibility checks — this governs the lower bound alone."""
+    if _has_retime_intent(inputs) and _duration_target_source(inputs) == "ai_recommended":
         return None
     return DURATION_UNDERSHOOT_TOLERANCE
 
 
-def _preservation_violation(base_plan: dict | None, revised: dict, rc: dict) -> str | None:
-    """Return a short human reason when a targeted revise's `revised` plan changed the base plan's CLIP SET
-    beyond what the request authorized, else None. Preservation is defined over the set of source clips used
-    (segment asset_ids, case-insensitive) — identity of WHAT footage appears, not its timing or order.
+# Editorial-continuity floor (Phase 4, owner-approved 2026-10-21). A targeted revise whose instruction does NOT
+# itself authorize a selection change (no exclude / no shorter-duration drop / no "focus on the best shots")
+# must keep at least this fraction of the base plan's clips, else it is treated as a WHOLESALE replacement
+# (the model re-cut the whole edit rather than revising it) and rejected. When the instruction DOES authorize a
+# selection change, the floor does not apply — a shorter duration or an explicit exclude may legitimately drop
+# many clips. Single tunable; NOT a per-keyword rule and NOT a mode classifier.
+CONTINUITY_FLOOR = 0.5
 
-      * timing-only / soft-only revise (no hard directives): the clip set must be IDENTICAL — no clip added,
-        none removed. (Order/duration/speed are allowed to change; that is what the revise does.)
-      * directive revise: only clips NAMED by the directives may enter or leave; every other base clip must
-        still be present and no unrelated clip may appear.
 
-    This is a backstop against a consulted model silently re-picking footage; it never fabricates success and
-    never substitutes a different video — on violation the caller keeps the user's existing version."""
+def _directive_authorized_ids(directives) -> set[str]:
+    """The clip ids a structured-directive object explicitly authorizes adding or removing, lowercased. The
+    directive payload is a DICT of id-lists/scalars/pairs — opening, ending, must_include, exclude, and the
+    order_after / order_adjacent pair lists — NOT a list of {asset_id} dicts (the previous code iterated it as
+    the latter, so the authorized set was ALWAYS EMPTY and a legitimate exclude/add was flagged). This reads the
+    real shape. (A list-of-dicts shape is still tolerated for forward-compat.)"""
+    out: set[str] = set()
+    if not directives:
+        return out
+
+    def _add(v):
+        if isinstance(v, str) and v.strip():
+            out.add(v.lower())
+
+    if isinstance(directives, dict):
+        for k in ("opening", "ending"):
+            _add(directives.get(k))
+        for k in ("must_include", "exclude", "include_moment_ids", "exclude_moment_ids"):
+            v = directives.get(k)
+            for x in (v if isinstance(v, list) else ([v] if v else [])):
+                _add(x)
+        for k in ("order_after", "order_adjacent", "order_pins"):
+            for pair in (directives.get(k) or []):
+                if isinstance(pair, (list, tuple)):
+                    for x in pair:
+                        _add(x)
+                else:
+                    _add(pair)
+    elif isinstance(directives, list):   # forward-compat: list of {asset_id|id|moment_id|target_id}
+        for d in directives:
+            if isinstance(d, dict):
+                for kk in ("asset_id", "id", "moment_id", "target_id"):
+                    _add(d.get(kk))
+    return out
+
+
+def _continuity_assessment(base_plan: dict | None, revised: dict, rc: dict) -> dict | None:
+    """Deterministic (no model) editorial-continuity signal for a targeted revise. Compares the base vs revised
+    CLIP SET (segment asset_ids, case-insensitive) and returns a graded verdict rather than a terminal
+    rejection string. Phase 4, owner-approved 2026-10-21: a technically-valid revise is NOT discarded solely
+    because the clip set changed; only a NO-OP or a WHOLESALE replacement (below the continuity floor, when the
+    instruction did not authorize a selection change) is rejected.
+
+    Returns None when there is nothing to assess (no base plan / empty base). Otherwise a dict:
+      verdict:          "ok" | "noop" | "wholesale"
+      removed/added:    counts of UNAUTHORIZED drops/introductions (directive-named ids excluded)
+      reordered:        True when the shared clip set's order changed
+      continuity_ratio: |base ∩ revised| / |base|  (1.0 = every base clip retained)
+      authorized_change: True when the instruction itself authorizes a selection change (exclude / shorter
+                         duration / explicit selective-focus) — the floor does not apply then
+      reason:           short human string for the caller's limitation message on a reject verdict
+    """
     if not isinstance(base_plan, dict):
         return None
+
     def _ids(p):
-        out = []
-        for s in (p.get("segments") or []):
-            a = s.get("asset_id")
-            if a:
-                out.append(str(a).lower())
-        return out
-    base_ids = set(_ids(base_plan))
-    rev_ids = set(_ids(revised))
+        return [str(s.get("asset_id")).lower() for s in (p.get("segments") or []) if s.get("asset_id")]
+
+    base_list, rev_list = _ids(base_plan), _ids(revised)
+    base_ids, rev_ids = set(base_list), set(rev_list)
     if not base_ids:
         return None
-    # Clips the directives explicitly authorize changing (their referenced asset ids, any case).
-    authorized = set()
-    for d in (rc.get("directives") or []):
-        for k in ("asset_id", "id", "moment_id", "target_id"):
-            v = d.get(k) if isinstance(d, dict) else None
-            if v:
-                authorized.add(str(v).lower())
+
+    authorized = _directive_authorized_ids(rc.get("directives"))
     removed = base_ids - rev_ids - authorized
     added = rev_ids - base_ids - authorized
-    if removed and added:
-        return f"{len(removed)} clip(s) dropped and {len(added)} new clip(s) introduced"
-    if removed:
-        return f"{len(removed)} clip(s) you did not ask to remove were dropped"
-    if added:
-        return f"{len(added)} clip(s) you did not ask for were introduced"
-    return None
+    retained = len(base_ids & rev_ids)
+    continuity_ratio = retained / len(base_ids)
+
+    # Does the latest instruction itself authorize a selection change? (then the floor does not apply)
+    directives = rc.get("directives") or {}
+    has_exclude = bool(isinstance(directives, dict) and (directives.get("exclude")
+                       or directives.get("exclude_moment_ids")))
+    soft = (rc.get("soft_direction") or "").lower()
+    # Explicit selective-focus language ("focus on the best", "just the highlights", "only the best shots").
+    _selective = any(p in soft for p in ("focus on", "best shot", "best clip", "highlight", "only the",
+                                         "just the", "pick the", "trim it down", "cut it down"))
+    # A shorter total that the user asked for (shorter/retime) legitimately drops clips.
+    _shorter = _parse_target_clip_seconds(soft) is not None or any(
+        p in soft for p in ("shorten", "shorter", "make it short", "condense", "tighten"))
+    authorized_change = bool(has_exclude or _selective or _shorter or authorized)
+
+    # NO-OP: the directed revise produced NO effective change at all (same clip set AND same order). An honest
+    # "couldn't apply that", never saved as a successful edit. (Order change alone is a real edit, not a no-op.)
+    reordered = base_list != rev_list and base_ids == rev_ids
+    if base_ids == rev_ids and not reordered:
+        return {"verdict": "noop", "removed": 0, "added": 0, "reordered": False,
+                "continuity_ratio": 1.0, "authorized_change": authorized_change,
+                "reason": "the requested change produced no effective edit"}
+
+    # WHOLESALE replacement: continuity below the floor AND the instruction did not authorize dropping clips.
+    if continuity_ratio < CONTINUITY_FLOOR and not authorized_change:
+        dropped = len(base_ids - rev_ids)
+        return {"verdict": "wholesale", "removed": len(removed), "added": len(added),
+                "reordered": reordered, "continuity_ratio": round(continuity_ratio, 3),
+                "authorized_change": authorized_change,
+                "reason": (f"it would replace most of your video ({dropped} of {len(base_ids)} clips changed) "
+                           "rather than revise it")}
+
+    return {"verdict": "ok", "removed": len(removed), "added": len(added), "reordered": reordered,
+            "continuity_ratio": round(continuity_ratio, 3), "authorized_change": authorized_change,
+            "reason": ""}
 
 
 def _classify_unsupported_ops(instruction: str) -> dict:
@@ -971,14 +1188,28 @@ def _revision_context_block(ctx: dict | None) -> str:
             "NOT fragment a continuous performance just for novelty. If the material genuinely cannot support a "
             "meaningfully different good edit, return your best valid edit rather than a forced variation.")
     elif mode == "revise":
+        # Phase 1/D1 (owner 2026-10-21): Revise is a DIFF against the EXACT base plan — so inject it, plus a
+        # preserve-unaffected / latest-intent-wins objective. (Previously the base plan was NEVER put in the
+        # USER message, so the model revised with nothing concrete to preserve.) The frozen edit_plan/5.2
+        # SYSTEM body is untouched; this is USER-message text only.
+        lines.append(
+            "OBJECTIVE: this is a REVISE of the user's EXISTING edit (the BASE PLAN below), not a new edit. "
+            "Apply the user's latest requested changes to that edit. PRESERVE its footage, order, timing, "
+            "native audio and creative decisions wherever they do not need to change; make additional editorial "
+            "changes only when reasonably necessary to fulfil the request. Where an earlier creative preference "
+            "conflicts with the latest request, the LATEST request wins. Do NOT re-cut the whole video or seek "
+            "a different edit for novelty — change the smallest set needed to satisfy the request.")
         soft = (ctx.get("soft_direction") or "").strip()
         if soft:
-            lines.append("REVISE INTENT (soft): " + soft)
-        lines.append("Apply the requested changes and PRESERVE unaffected edits where feasible.")
+            lines.append("LATEST REVISE INTENT (soft): " + soft)
+        base_plan = ctx.get("base_plan")
+        if isinstance(base_plan, dict) and base_plan.get("segments"):
+            lines.append("BASE PLAN (the exact current edit to revise — preserve what the request does not change):")
+            lines.append(json.dumps(base_plan, indent=2))
     # HARD DIRECTIVES — resolved stable Moment references. Rendered in BOTH modes (a user may pin an opening
     # while exploring). These are REQUIREMENTS the deterministic validator also enforces; the model must obey.
     lines.extend(_directive_lines(ctx.get("directives")))
-    if summaries:
+    if summaries and mode != "revise":   # summaries are an EXPLORE "avoid being identical" reference, not Revise
         lines.append("PREVIOUS VERSION(S) (most recent first):")
         lines.append(json.dumps(summaries, indent=2))
     lines.append("=== END VERSION CONTEXT ===\n")
@@ -1401,6 +1632,23 @@ class RealEditPlannerEngine:
             diag["normalize_notes"] = notes
         errs = validate_plan(plan, inputs)
 
+        # 3b: DETERMINISTIC structural directive repair (Part A). When the ONLY failures are opening/ending/
+        # order PLACEMENT violations, reorder the SAME segments to satisfy them — no model call, no content
+        # change, full validate_plan re-run. This fixes the common "model picked the right clips but didn't put
+        # the opening/adjacency Moment in the right position" case (satisfiable directive the model mis-ordered)
+        # without relaxing any constraint. Membership/duration/speed/source errors are NOT order-only, so they
+        # fall through to the model-repair loop unchanged. If the reorder cannot satisfy the constraints
+        # (absent opening/ending, cyclic order) it returns None and we keep the existing path.
+        if errs and _errors_are_order_only(errs):
+            reordered = repair_directive_placement(plan, inputs)
+            if reordered is not None:
+                re_errs = validate_plan(reordered, inputs)
+                if not re_errs:
+                    plan = reordered
+                    errs = []
+                    diag["structural_repair"] = True
+                    diag["structural_repair_kind"] = "directive_placement"
+
         # 4-5: bounded model repair carrying the exact errors.
         for _ in range(self._exec_repairs):
             if not errs:
@@ -1437,21 +1685,34 @@ class RealEditPlannerEngine:
             self.last_diagnostics = diag
             raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
 
-        # 6a: PRESERVATION GATE (owner decision 2026-10-18). For a targeted revise (not broad-replan), the model
-        # plan must not have changed the base plan's CLIP SET beyond what the request authorized. A timing-only
-        # or soft-pacing revise is NOT allowed to drop or introduce clips at all; a structural directive revise
-        # may only touch the clips its directives name. If the accepted plan silently re-picked footage, we
-        # reject with a clear limitation rather than ship a different video. This is the backstop that makes the
-        # no-silent-replan boundary observable even when the model is consulted. Feasibility already passed.
+        # 6a: EDITORIAL-CONTINUITY GATE (owner decision 2026-10-21, supersedes the 2026-10-18 terminal
+        # preservation gate). For a targeted revise (not broad-replan), editorial continuity is an OBJECTIVE,
+        # not a hard rejection: a technically-valid revise that reasonably fulfils the latest request is
+        # ACCEPTED even when the clip set changed. We compute the deterministic (no-model) base-vs-revised clip
+        # delta and record it as a diagnostic/quality signal, and reject ONLY two cases: (1) a NO-OP (the
+        # directed revise produced no effective change — an honest "couldn't apply that", never saved as
+        # success), and (2) a WHOLESALE replacement (continuity below CONTINUITY_FLOOR when the instruction did
+        # not itself authorize dropping clips — the model re-cut the whole edit instead of revising it). Adding/
+        # removing clips, reordering, changing total duration or transitions no longer causes a terminal
+        # failure. Technical validation (validate_plan) already passed and is unchanged.
         if _is_targeted_revise:
-            pres_err = _preservation_violation(rc.get("base_plan"), plan, rc)
-            if pres_err:
-                diag["final"] = "preservation_violation"
-                diag["preservation_error"] = pres_err
-                self.last_diagnostics = diag
-                raise EditPlanInfeasibleError(
-                    "This revision could not be applied without changing parts of your video you did not ask "
-                    f"to change ({pres_err}). Your current version was kept unchanged.")
+            cont = _continuity_assessment(rc.get("base_plan"), plan, rc)
+            if cont is not None:
+                diag["continuity"] = cont   # Phase-6: ratio + added/removed/reordered + verdict, always logged
+                if cont["verdict"] == "noop":
+                    diag["final"] = "preservation_noop"
+                    self.last_diagnostics = diag
+                    raise EditPlanInfeasibleError(
+                        "That change could not be applied to your video — the result would be the same as your "
+                        "current version, so nothing was saved.")
+                if cont["verdict"] == "wholesale":
+                    diag["final"] = "preservation_violation"
+                    diag["preservation_error"] = cont["reason"]
+                    self.last_diagnostics = diag
+                    raise EditPlanInfeasibleError(
+                        "This revision could not be applied without replacing most of your video "
+                        f"({cont['reason']}). Your current version was kept unchanged — try naming the Moments "
+                        "to keep or change, or use Create Another Version for a fresh edit.")
 
         # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
         # after we already hold a VALID executable plan and only when a creative brief exists to critique

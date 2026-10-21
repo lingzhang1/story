@@ -13,6 +13,8 @@ import AVKit
 // production path. See ui-capability-matrix.md.
 struct CreateStoryPreviewView: View {
     @Environment(\.modelContext) private var context
+    @State private var cloudGate = CloudAuthGateModel()
+    @Environment(AuthStore.self) private var auth
     @Bindable var story: StoryModel
     @Environment(\.dismiss) private var dismiss
     /// When set, this host launches a CREATE ANOTHER VERSION from that parent (Explore + Customize), not a
@@ -32,6 +34,13 @@ struct CreateStoryPreviewView: View {
     @State private var resumePreresolvedMusic: StoryCreationCoordinator.MusicSelection?
     @State private var showResuming = false
     @State private var recoveryChecked = false
+    /// Issue 3: true once onAppear has kicked the flow. Guards the idle-dismiss so the very first frame (before
+    /// the flow starts) does not pop the host prematurely.
+    @State private var flowEverStarted = false
+    /// Issue 3: set ONLY on a genuine user back-out (cancel the music picker / the duration sheet) so the host
+    /// pops to Story Home. Distinct from a picker->Creating transition (which briefly has nothing presented but
+    /// must NOT dismiss). Prevents the stuck "Preparing" spinner AND a spurious dismissal mid-handoff.
+    @State private var userBackedOut = false
     /// Creative Revision Foundation: the parent output a "Create a new version" (Explore) is derived FROM.
     /// Set by handleRecreate; threaded into StoryCreatingView so the coordinator re-plans version-aware. nil
     /// for a first/original create.
@@ -52,6 +61,9 @@ struct CreateStoryPreviewView: View {
     // Stage 2 music-routing: set when an explicit Stage 2 music preference conflicts with a user-authored
     // MusicDirection — surfaced as an advisory (owner §2), never a silent overwrite.
     @State private var musicConflictMessage: String?
+    // invalid_after_repair root-cause fix: set when a directive references a Moment not yet in the planner
+    // payload (AU still running / stale ref). Shown as an honest alert; the directive is preserved for retry.
+    @State private var directiveBlockMessage: String?
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
@@ -64,6 +76,10 @@ struct CreateStoryPreviewView: View {
     private var isCreateFlowActive: Bool {
         showCreating || reopenOutput != nil || resolvingMusic || musicRecommendation != nil || preparingSelection || recommendingDuration || durationRec != nil
     }
+
+    /// Issue 3: whether ANY step of the create flow is currently presented/in-flight. When this goes false
+    /// after the flow started, the host dismisses to Story Home (never rests on a spinner).
+    private var isFlowActive: Bool { isCreateFlowActive }
 
     /// Entry from the Create button. On FIRST entry, if a good persisted output already exists, open it
     /// directly (reopen shortcut); otherwise begin the create+picker flow.
@@ -89,10 +105,10 @@ struct CreateStoryPreviewView: View {
     /// -first, no mandatory picker) so the user accepts/overrides before anything downstream runs.
     private func beginCreateFlow() {
         recreateSource = nil                        // original create — not an Explore version
-        if story.intentTargetDurationSeconds != nil {
-            beginMusicFlow()                        // explicit duration precedence — skip the duration step
-            return
-        }
+        // Issue 1: ALWAYS present Customize before music, even when the Story already has a target. The sheet
+        // prefills the existing duration (custom vs recommended), sound, and creative direction, so the user
+        // can review and adjust a stale/infeasible length instead of being dead-ended by a bypassed sheet.
+        // Explicit-custom provenance is preserved by seeding the Custom row from the saved exact target.
         promptDuration()
     }
 
@@ -180,6 +196,26 @@ struct CreateStoryPreviewView: View {
     private func beginMusicFlow() {
         resolvingMusic = true
         Task {
+            // Phase 3 (cloud-only references): restore ON DEMAND any Moment the user REFERENCED in a directive
+            // whose original bytes are not on this device yet (cloud-only shell after R7 sync), BEFORE planning
+            // — so the referenced Moment is in the planner's moments[] instead of being dropped (which made the
+            // opening/include directive unsatisfiable -> invalid_after_repair). Bounded to the referenced ids
+            // (never a bulk download). A failure does NOT abort or change the Moment set — the user's selections
+            // are preserved and the planner is told honestly about what it has.
+            await restoreReferencedCloudOnlyMoments()
+            // Directive-eligibility PREFLIGHT (invalid_after_repair root-cause fix): after restoring referenced
+            // files, a directive-referenced Moment may STILL be missing from the planner payload because its AU
+            // has not completed (or it is a stale reference). Submitting it would deterministically fail
+            // `directive … not in the eligible source set` -> invalid_after_repair. Block with an honest,
+            // specific message instead — the directive is PRESERVED, nothing is silently stripped.
+            let elig = EditPlanRequestBuilder.directiveEligibility(for: story, context: context)
+            if !elig.allEligible {
+                await MainActor.run {
+                    resolvingMusic = false
+                    directiveBlockMessage = Self.directiveBlockText(elig, story: story)
+                }
+                return
+            }
             let rec = await musicResolver.recommend(for: story, guideFramingSummary: nil)
             await MainActor.run {
                 resolvingMusic = false
@@ -192,13 +228,70 @@ struct CreateStoryPreviewView: View {
         }
     }
 
+    /// Honest, specific block text naming the referenced Moments that are not yet usable (AU pending / stale),
+    /// by their stable display number — never a generic "something went wrong". The directive stays persisted.
+    private static func directiveBlockText(_ e: EditPlanRequestBuilder.DirectiveEligibility,
+                                           story: StoryModel) -> String {
+        let numbering = StoryMomentNumbering(story: story.moments)
+        func nums(_ ids: [UUID]) -> String {
+            ids.compactMap { numbering.number(forId: $0) }.sorted().map { "Moment \($0)" }.joined(separator: ", ")
+        }
+        if !e.ineligibleNeedsAU.isEmpty {
+            let who = nums(e.ineligibleNeedsAU)
+            return "\(who) \(e.ineligibleNeedsAU.count == 1 ? "is" : "are") still being analyzed. "
+                 + "Give it a moment, then create your Story — your instruction is saved."
+        }
+        if !e.ineligibleUnknown.isEmpty {
+            return "A Moment your instruction refers to isn't available on this device. "
+                 + "Edit your instruction, or wait for it to finish syncing."
+        }
+        return "Some referenced Moments aren't ready yet. Please try again in a moment."
+    }
+
+    /// Restore (R6) only the cloud-only Moments this Story's PERSISTED directives reference, on demand, before
+    /// planning. Reuses MediaResolver.ensureLocal (size + SHA256 verified, atomic install, account-scoped). A
+    /// Moment that cannot be restored stays cloud-only and is simply not in the payload — the reference is not
+    /// discarded and the user's other selections are untouched.
+    private func restoreReferencedCloudOnlyMoments() async {
+        guard let dirs = ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON) else { return }
+        var ids = Set(dirs.mustInclude + dirs.exclude)
+        if let o = dirs.opening { ids.insert(o) }
+        if let e = dirs.ending { ids.insert(e) }
+        for pair in dirs.orderAfter + dirs.orderAdjacent { ids.formUnion(pair) }
+        guard !ids.isEmpty else { return }
+        let owner = auth.storyUserId
+
+        // Phase 1 (PRIMARY): HYDRATE server-side AU for every referenced Moment that lacks a LOCAL AU. The
+        // Edit Planner payload needs AU (useful_segments/summary) + duration, NOT original bytes — so this is
+        // what actually makes a cloud-only referenced Moment (e.g. TMB Moment 2) eligible. UnderstandingSync.
+        // restore is a metadata batch-get gated on content-sha / cloud-backed reuse: NO bytes, NO Bedrock.
+        // Only fetches ids missing locally, so it is a no-op when AU is already present. A failure leaves the
+        // directive intact and the eligibility preflight then surfaces an honest pending/recovery state.
+        _ = await UnderstandingSync.shared.restore(
+            momentIds: Array(ids), context: context, activeOwner: owner,
+            token: { [weak auth] in await auth?.validAccessToken() })
+
+        // SECONDARY (best-effort): pre-restore original BYTES for referenced cloud-only Moments. Not required
+        // for PLANNING (cloud-aware eligibility covers that) but gives RENDER a head start so the post-plan R6
+        // restore of selected Moments is faster. A failure is harmless — render restores on demand via R6.
+        for m in story.moments where ids.contains(m.id) {
+            guard let rel = m.asset?.relativePath else { continue }
+            if MediaStore.shared.fileExists(relativePath: rel) { continue }   // already local
+            guard m.cloudMediaId != nil else { continue }                     // not backed up — nothing to restore
+            _ = try? await MediaResolver.shared.ensureLocal(
+                moment: m, context: context, activeOwner: owner,
+                token: { [weak auth] in await auth?.validAccessToken() })
+        }
+    }
+
     /// The user made a choice in the picker. Resolve the selected track into a full MusicSelection (download),
     /// then start Creating. On .noMusic or a failed resolve, start Creating with no music (never a fake track).
     private func handlePickerChoice(_ choice: MusicPickerView.Choice, _ rec: MusicSelectionResolver.Recommendation) {
         musicRecommendation = nil
         switch choice {
         case .cancel:
-            return   // back out — no creation started
+            userBackedOut = true   // back out of the picker -> return to Story Home (never a stuck spinner)
+            return
         case .noMusic:
             chosenMusic = nil
             DispatchQueue.main.async { showCreating = true }
@@ -286,10 +379,11 @@ struct CreateStoryPreviewView: View {
     private let cols = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
 
     var body: some View {
-        // Pure flow host — NEVER the old "Here's what I'm working with" grid. This screen is reached only when
-        // a create is actually needed (StoryHomeView routes an existing result straight to the Result screen),
-        // and onAppear immediately starts the flow (duration -> Customize -> music -> Creating). We show only a
-        // minimal preparing state behind those sheets so there is no redundant resting page.
+        // Issue 3 — EXPLICIT navigation states, never a perpetual placeholder spinner. This host presents the
+        // create flow (duration -> Customize -> music -> Creating) over a minimal backdrop. The backdrop shows
+        // a brief "Preparing…" ONLY while a step is genuinely in flight; once the flow collapses to nothing
+        // (the user backed out of the first step or the music picker before Creating started), we POP back to
+        // Story Home rather than resting on an indefinite spinner. An active Creating/Result cover is NOT idle.
         VStack(spacing: 16) {
             HStack(spacing: 12) {
                 Button { dismiss() } label: {
@@ -300,15 +394,23 @@ struct CreateStoryPreviewView: View {
             }
             .padding(.horizontal, StoryTheme.screenPadding).padding(.top, 8)
             Spacer()
-            ProgressView().tint(StoryTheme.gold)
-            Text("Preparing your Story…")
-                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            if isFlowActive {
+                ProgressView().tint(StoryTheme.gold)
+                Text("Preparing your Story…")
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.55))
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .storyBackground()
         .toolbar(.hidden, for: .navigationBar)
         .swipeBackToDismiss(dismiss)
+        // Explicit back-out (music picker cancel / duration cancel) pops the host to Story Home instead of
+        // resting on a spinner. Driven by an explicit flag so a picker->Creating handoff (which briefly has
+        // nothing presented) never triggers a spurious dismissal.
+        .onChange(of: userBackedOut) { _, backed in
+            if backed { DispatchQueue.main.async { dismiss() } }
+        }
         .onAppear {
             guard !recoveryChecked else { return }
             recoveryChecked = true
@@ -316,12 +418,15 @@ struct CreateStoryPreviewView: View {
             // elsewhere). It deliberately does NOT do recovery routing — doing so here raced the app-level
             // PendingOperationRecovery on the SAME op and stuck the UI in a "Preparing" loop. A Create Another
             // Version from a parent (Explore + Customize), else a fresh original create.
+            // P0 Phase 4: creating a video runs paid AI (duration rec, music recommend, edit-plan) — require
+            // sign-in first, then start the flow (resumes once; no duplicate create).
+            flowEverStarted = true
             if let parent = forceNewVersionFrom {
                 MediaEngineV1.beacon("preview-route: NEW_VERSION story=\(story.id.uuidString.prefix(8))")
-                handleRecreate(from: parent)
+                cloudGate.run { handleRecreate(from: parent) }
             } else {
                 MediaEngineV1.beacon("preview-route: CREATE story=\(story.id.uuidString.prefix(8))")
-                beginCreateFlow()
+                cloudGate.run { beginCreateFlow() }
             }
         }
         // R-d: new render -> picker (sheet) -> Creating with the CHOSEN selection (nil = no-music). Creating
@@ -334,7 +439,14 @@ struct CreateStoryPreviewView: View {
             StoryCreatingView(story: story, preresolvedMusic: chosenMusic, musicIsPreresolved: true,
                               sourceVersion: recreateSource,
                               onRequestRecreate: { src in handleRecreate(from: src) },
-                              onCompleted: { out in showCreating = false; reopenOutput = out })
+                              onCompleted: { out in showCreating = false; reopenOutput = out },
+                              onAdjustInstructions: {
+                                  // Issue 2: proven directive conflict — drop the Creating cover and re-open
+                                  // the Customize editor so the user can adjust the (preserved) instruction.
+                                  // Never a plain retry of the identical failing request.
+                                  showCreating = false
+                                  DispatchQueue.main.async { promptDuration() }
+                              })
         }
         .fullScreenCover(item: $reopenOutput) { output in
             StoryResultView(story: story, initialOutput: output, onHome: goHome,
@@ -364,10 +476,17 @@ struct CreateStoryPreviewView: View {
                 // clip to the front. opening/ending survive via the typed creativeDirectionText above, not chips.
                 initialReferenceChipIds: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON)
                     .map { $0.mustInclude } ?? [],
+                // Issue 1: prefill the Story's existing length so re-opening Customize shows the prior choice
+                // (explicit custom seconds or the editorial mode) instead of silently resetting.
+                initialExplicitTargetSeconds: story.intentTargetDurationSeconds,
+                initialEditorialMode: story.editorialMode,
+                // Part B: surface ALL persisted structural directives (opening/adjacency/order/include/exclude)
+                // so the user can see + clear them, not just the must_include chips + soft text.
+                initialSavedDirectives: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON),
                 onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
                     acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
                                     directives: directives, soft: soft, chipIds: chipIds, music: music) },
-                onCancel: { durationRec = nil })
+                onCancel: { durationRec = nil; userBackedOut = true })
                 .presentationDetents([.large])
                 // Force a FRESH view identity each time the sheet opens. CustomizeYourStoryView seeds its
                 // `creativeDirection` @State once from initialCreativeDirection; .sheet(item:) alone can reuse
@@ -378,7 +497,7 @@ struct CreateStoryPreviewView: View {
                 .id(rec.id)
         }
         .alert("Keep shooting", isPresented: $durationNoMaterial) {
-            Button("OK", role: .cancel) { durationNoMaterial = false }
+            Button("OK", role: .cancel) { durationNoMaterial = false; userBackedOut = true }
         } message: {
             Text("There isn't enough usable footage yet to build a Story. Capture a few more Moments and try again.")
         }
@@ -386,6 +505,11 @@ struct CreateStoryPreviewView: View {
             get: { musicConflictMessage != nil }, set: { if !$0 { musicConflictMessage = nil } })) {
             Button("OK", role: .cancel) { musicConflictMessage = nil }
         } message: { Text(musicConflictMessage ?? "") }
+        .alert("Almost ready", isPresented: Binding(
+            get: { directiveBlockMessage != nil }, set: { if !$0 { directiveBlockMessage = nil } })) {
+            // The instruction is preserved — OK returns to the Story so the user can retry once AU finishes.
+            Button("OK", role: .cancel) { directiveBlockMessage = nil; userBackedOut = true }
+        } message: { Text(directiveBlockMessage ?? "") }
         .overlay {
             if resolvingMusic || preparingSelection || recommendingDuration {
                 ZStack {
@@ -399,6 +523,7 @@ struct CreateStoryPreviewView: View {
                 }
             }
         }
+        .cloudAuthGate(cloudGate)   // P0 Phase 4: gate the create flow (duration/music/edit-plan AI) behind sign-in
     }
 
     private func thumb(_ m: MomentModel) -> some View {

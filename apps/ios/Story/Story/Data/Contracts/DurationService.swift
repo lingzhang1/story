@@ -124,6 +124,7 @@ final class DurationService {
             creativeIntent: creativeIntent, moments: moments,
             storyGuide: storyGuide, storyCoverage: storyCoverage, requestedScope: requestedScope)
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/duration-recommendation"))
+        StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         guard let data = try? JSONEncoder().encode(body) else { return nil }

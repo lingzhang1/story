@@ -42,6 +42,29 @@ STATE_CLOUD_VERIFIED = "cloud_verified"
 STATE_UPLOAD_FAILED = "upload_failed"
 TERMINAL_STATES = {STATE_CLOUD_VERIFIED, STATE_UPLOAD_FAILED}
 
+# R7-D — media kind. A record is either a captured ORIGINAL ("moment", the R2/R3/R4 default) or a RENDERED
+# generated video ("generated"). The storage key, presign, upload and verification paths are IDENTICAL for
+# both — only the provenance fields differ (source_moment_id vs source_output_id) — so the R4 pipeline backs
+# up a generated MP4 with no second uploader. An unknown/blank kind normalizes to "moment" (back-compat: a
+# pre-R7-D record with no media_kind attribute reads as a moment).
+MEDIA_KIND_MOMENT = "moment"
+MEDIA_KIND_GENERATED = "generated"
+# R7 Phase 4 — ai_artifact. An IMMUTABLE, content-addressed AI blob (an oversized validated EditPlan, or a
+# large Moment Understanding) externalized out of the 350 KB Story/Understanding document so version history is
+# NEVER silently capped or truncated. The storage key, presign, upload and verification paths are IDENTICAL to
+# a media original — content-addressed by uuid5(owner + sha256), account-scoped key, full-file SHA256 verified,
+# non-deleting retention — so no second artifact store, bucket, or table is introduced. The Story document then
+# carries a durable {cloud_media_id, sha256, bytes, schema_version} reference in place of the inline JSON; the
+# client resolves it by the normal verified download. Provenance uses source_output_id (for an EditPlan) and is
+# otherwise metadata-only.
+MEDIA_KIND_AI_ARTIFACT = "ai_artifact"
+_MEDIA_KINDS = {MEDIA_KIND_MOMENT, MEDIA_KIND_GENERATED, MEDIA_KIND_AI_ARTIFACT}
+
+
+def _normalize_media_kind(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    return k if k in _MEDIA_KINDS else MEDIA_KIND_MOMENT
+
 # A media record lives at least this long without TTL reaping (originals are RETAINED — unlike edit-plan
 # staging; there is intentionally NO TTL attribute on the media table). This constant bounds an UNFINISHED
 # upload record only, used by the abort/cleanup sweep, not the verified original.
@@ -155,11 +178,18 @@ class MediaStore:
     # --- initiate (idempotent, conditional) ----------------------------------------------------------
     def initiate_upload(self, *, owner: str, content_sha256: str, size_bytes: int,
                         content_type: str = "video/quicktime",
-                        device_asset_id: str = "", source_moment_id: str = "") -> tuple[dict, bool]:
+                        device_asset_id: str = "", source_moment_id: str = "",
+                        media_kind: str = MEDIA_KIND_MOMENT, source_output_id: str = "") -> tuple[dict, bool]:
         """Create (or idempotently recover) an `uploading` record for (owner, content). Returns (record,
         created). A re-initiate of the SAME content by the SAME owner recovers the existing record (created=
         False). A reuse of the same cloud_media_id with a DIFFERENT size/sha raises MediaOwnershipConflict.
-        Ownership (`owner`) is the trusted story_user_id — never client-supplied here."""
+        Ownership (`owner`) is the trusted story_user_id — never client-supplied here.
+
+        R7-D: `media_kind` distinguishes a captured-original backup (MEDIA_KIND_MOMENT, default) from a
+        RENDERED generated-video backup (MEDIA_KIND_GENERATED); a generated record carries `source_output_id`
+        (the GeneratedOutput id) instead of a `source_moment_id`. The storage path/verification are IDENTICAL —
+        only the provenance fields differ, so the R4 upload pipeline is reused unchanged (no second uploader)."""
+        media_kind = _normalize_media_kind(media_kind)
         cmid = cloud_media_id_for(owner, content_sha256)
         now = _now()
         key = object_key(owner, cmid)
@@ -169,6 +199,7 @@ class MediaStore:
             "size_bytes": {"N": str(int(size_bytes))}, "content_type": {"S": content_type},
             "s3_key": {"S": key}, "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
             "device_asset_id": {"S": device_asset_id}, "source_moment_id": {"S": source_moment_id},
+            "media_kind": {"S": media_kind}, "source_output_id": {"S": source_output_id},
             "verified_at": {"N": "0"},
         }
         try:
@@ -279,12 +310,17 @@ class MediaStore:
     # --- MULTIPART (R4-B; large files) ---------------------------------------------------------------
     def initiate_multipart(self, *, owner: str, content_sha256: str, size_bytes: int,
                            part_shas_b64: list[str], content_type: str = "video/quicktime",
-                           device_asset_id: str = "", source_moment_id: str = "") -> tuple[dict, bool]:
+                           device_asset_id: str = "", source_moment_id: str = "",
+                           media_kind: str = MEDIA_KIND_MOMENT, source_output_id: str = "") -> tuple[dict, bool]:
         """Create (or idempotently recover) a MULTIPART upload for (owner, content). `part_shas_b64` is the
         device's per-part sha256 (base64), in order — recorded as the EXPECTED digests for composite
         verification. Returns (record, created). A re-initiate of the SAME content recovers the existing
         record + its S3 upload_id (never a second MPU, never a duplicate object). Owner is the trusted
-        story_user_id. Conflict on a different size/sha."""
+        story_user_id. Conflict on a different size/sha.
+
+        R7-D: `media_kind`/`source_output_id` carry generated-video provenance exactly as in initiate_upload —
+        a large rendered MP4 takes this multipart path unchanged."""
+        media_kind = _normalize_media_kind(media_kind)
         cmid = cloud_media_id_for(owner, content_sha256)
         existing = self.get(owner, cmid)
         if existing is not None:
@@ -310,6 +346,7 @@ class MediaStore:
             "part_shas": {"S": json.dumps(part_shas_b64)}, "part_count": {"N": str(len(part_shas_b64))},
             "created_at": {"N": str(now)}, "updated_at": {"N": str(now)},
             "device_asset_id": {"S": device_asset_id}, "source_moment_id": {"S": source_moment_id},
+            "media_kind": {"S": media_kind}, "source_output_id": {"S": source_output_id},
             "verified_at": {"N": "0"},
         }
         # Overwrite any prior single-PUT record for this cmid (same owner) with the multipart record.
@@ -449,6 +486,10 @@ class MediaStore:
                 out[k] = int(v["N"])
             elif "BOOL" in v:
                 out[k] = v["BOOL"]
+        # R7-D back-compat: a record written before media_kind existed reads as a captured moment with no
+        # output provenance. Normalize so every reader sees the keys regardless of record vintage.
+        out["media_kind"] = _normalize_media_kind(out.get("media_kind", ""))
+        out.setdefault("source_output_id", "")
         return out
 
 

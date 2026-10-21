@@ -18,6 +18,10 @@ struct NumberedMoment: Equatable {
     let durationSeconds: Double
     /// Relative media path for the thumbnail (resolved to a URL by the UI via MediaStore). Nil-safe.
     let relativePath: String?
+    /// Whether the ORIGINAL bytes are on THIS device right now. Cloud-only (evicted/not-yet-restored) Moments
+    /// are still full members — they are shown + referenceable with a cloud badge, never hidden (owner P0).
+    /// Defaulted true so every existing construction site (tests, revision) compiles unchanged.
+    var localAvailable: Bool = true
 }
 
 /// A STABLE snapshot of a Story's Moment numbering, captured when the user opens Creative Direction or Revision.
@@ -408,14 +412,19 @@ enum MomentReferenceResolver {
 
 extension StoryMomentNumbering {
     /// Build a snapshot from a Story's ordered Moments (`story.moments`, already ordered by StoryMomentLink
-    /// orderIndex then addedAt). Numbers are the 1-based display indices into that order. Reuses the existing
-    /// link ordering — no new numbering system, no model change (owner clarification #1).
+    /// orderIndex then addedAt). Numbers are the 1-based display indices into that STABLE order — EVERY linked
+    /// Moment is numbered, including cloud-only ones whose original bytes are not on this device (owner P0:
+    /// identity/numbering is independent of local availability, so Moment N is the same on every device).
+    /// `localAvailable` reflects whether the original is on disk right now, for the picker's local/cloud badge.
     init(story moments: [MomentModel]) {
         self.init(ordered: moments.map {
-            NumberedMoment(number: 0,  // re-stamped 1..N by the designated init
-                           id: $0.id,
-                           durationSeconds: $0.asset?.durationSeconds ?? 0,
-                           relativePath: $0.asset?.relativePath)
+            let rel = $0.asset?.relativePath
+            let onDisk = rel.map { MediaStore.shared.fileExists(relativePath: $0) } ?? false
+            return NumberedMoment(number: 0,  // re-stamped 1..N by the designated init
+                                  id: $0.id,
+                                  durationSeconds: $0.asset?.durationSeconds ?? 0,
+                                  relativePath: rel,
+                                  localAvailable: onDisk)
         })
     }
 }

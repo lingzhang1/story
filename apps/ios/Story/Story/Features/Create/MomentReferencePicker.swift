@@ -73,6 +73,7 @@ struct MomentReferencePicker: View {
                     .clipShape(RoundedRectangle(cornerRadius: StoryTheme.field))
                     .overlay(alignment: .topLeading) { numberBadge(item.number) }
                     .overlay(alignment: .topTrailing) { selectionBadge(isOn) }
+                    .overlay(alignment: .bottomLeading) { availabilityBadge(item.localAvailable) }
                     .overlay(alignment: .bottomTrailing) { durationBadge(item.durationSeconds) }
                     .overlay(
                         RoundedRectangle(cornerRadius: StoryTheme.field)
@@ -110,6 +111,19 @@ struct MomentReferencePicker: View {
                 .background(Circle().fill(StoryTheme.ink).padding(2))
                 .padding(6)
         }
+    }
+
+    /// Local vs cloud-only availability (owner P0). Green check = original is on this device; cloud glyph =
+    /// backed up in cloud, original not local yet (still selectable; restored on demand before an op needs it).
+    @ViewBuilder
+    private func availabilityBadge(_ local: Bool) -> some View {
+        Image(systemName: local ? "checkmark.circle.fill" : "icloud")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(local ? StoryTheme.gold : StoryTheme.cream.opacity(0.85))
+            .padding(4)
+            .background(StoryTheme.ink.opacity(0.7), in: Circle())
+            .padding(6)
+            .accessibilityLabel(local ? "Available on this device" : "Backed up in cloud")
     }
 
     private func durationBadge(_ sec: Double) -> some View {

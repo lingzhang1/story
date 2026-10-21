@@ -12,8 +12,12 @@ actor MomentThumbnailCache {
     private var cache: [String: UIImage] = [:]
 
     func thumbnail(for moment: MomentModel) async -> UIImage? {
-        guard let asset = moment.asset,
-              MediaStore.shared.fileExists(relativePath: asset.relativePath) else { return nil }
+        guard let asset = moment.asset else { return nil }
+        // R5: if the original is absent (cloud-only / evicted), use the PERSISTED poster so the tile still
+        // shows real content instead of a black square. The poster is written before eviction.
+        if !MediaStore.shared.fileExists(relativePath: asset.relativePath) {
+            return MediaPreviewStore.shared.loadPreview(momentId: moment.id)
+        }
         let key = asset.relativePath
         if let cached = cache[key] { return cached }
 

@@ -32,8 +32,13 @@ struct ReviseStorySheet: View {
     // Interpretation lifecycle (owner safeguards #1/#2) — mirror of CustomizeYourStoryView.
     @State private var isInterpreting = false
     @State private var interpretToken = UUID()
+    @Environment(AuthStore.self) private var auth
+    @Environment(\.modelContext) private var modelContext
+    @State private var cloudGate = CloudAuthGateModel()
     @State private var retryable = false
 
+    // Number ALL linked Moments by stable StoryMomentLink order (cloud-only included) so "Moment N" is the same
+    // Moment on every device; local availability is a per-item badge, never a filter (owner P0).
     private var numbering: StoryMomentNumbering { StoryMomentNumbering(story: story.moments) }
 
     var body: some View {
@@ -132,6 +137,7 @@ struct ReviseStorySheet: View {
                 }
                 Button("Cancel", role: .cancel) { confirmPartial = nil }
             } message: { Text(confirmPartial ?? "") }
+            .cloudAuthGate(cloudGate)
         }
     }
 
@@ -163,8 +169,13 @@ struct ReviseStorySheet: View {
     }
 
     /// The actual interpret+apply flow (unchanged), reached once capability pre-checks pass or the user
-    /// confirms partial execution.
+    /// confirms partial execution. Paid NL interpretation is a cloud action — require a session first; the gate
+    /// resumes THIS exact call once after sign-in (no duplicate inference, snapshot preserved).
     private func proceedApply(_ snapshotText: String) {
+        cloudGate.run { self.performApply(snapshotText) }
+    }
+
+    private func performApply(_ snapshotText: String) {
         let snapshotChips = chips
         let n = numbering
         let token = UUID()
@@ -197,7 +208,13 @@ struct ReviseStorySheet: View {
                     directives.mustInclude.append(c.id)
                 }
                 if !musicSuffix.isEmpty { clarification = outcome.unsupportedMusicNote }  // non-blocking note
-                onApply(directives, snapshotText)
+                // Pass the interpreter's RESIDUAL soft direction (creative leftover only), NOT the raw
+                // instruction. For a pure-structural revise ("Start with Moment 1, then Moment 6, end with
+                // Moment 2") the residual is empty, so the engine runs its deterministic reorder and preserves
+                // every base clip (no model re-plan, no "N clips dropped" preservation violation). The raw
+                // `instruction` text stays in this sheet's state for display/history (owner req #6). A genuine
+                // creative residual ("make it cinematic") is preserved and still routes to the model.
+                onApply(directives, outcome.softDirection)
                 dismiss()
             }
         }

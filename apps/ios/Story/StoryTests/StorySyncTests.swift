@@ -1,0 +1,703 @@
+import XCTest
+import SwiftData
+@testable import Story
+
+// R7-C — Story sync tests. A fake StorySyncing stands in for the backend (holds server revision + doc per
+// story), exercising the REAL coordinator push/pull/conflict/dirty logic + the story_doc/1 codec.
+@MainActor
+final class StorySyncTests: XCTestCase {
+    private var container: ModelContainer!
+    private var ctx: ModelContext { container.mainContext }
+
+    override func setUp() async throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        container = try ModelContainer(
+            for: StoryModel.self, MomentModel.self, StoryMomentLink.self, AssetModel.self,
+                 GeneratedOutputModel.self, LocalIdentityModel.self,
+                 MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
+                 StoryCoverageModel.self, StoryGuideModel.self, StoryMusicDirectionModel.self,
+                 MyMusicAssetModel.self, PendingOperationModel.self,
+                 MusicPlanCacheModel.self, DurationRecCacheModel.self, MediaUploadJobModel.self,
+                 AutoBackupSettingModel.self, MediaDownloadJobModel.self, OptimizationSettingModel.self,
+                 StorySyncJobModel.self,
+            configurations: config)
+    }
+
+    // A server stub: per-story {revision, doc, lastMutationId, lastDigest}.
+    final class FakeSync: StorySyncing, @unchecked Sendable {
+        struct Row { var revision: Int; var doc: [String: Any]; var mut: String; var digest: String; var deleted: Bool }
+        var rows: [String: Row] = [:]
+        var putCount = 0
+        func index(accessToken: String) async throws -> [StoryIndexEntry] {
+            rows.map { StoryIndexEntry(storyId: $0.key, revision: $0.value.revision, updatedAt: 0,
+                                       deleted: $0.value.deleted, incompleteDeps: false) }
+        }
+        func get(accessToken: String, storyId: String) async throws -> (revision: Int, doc: [String: Any], deleted: Bool) {
+            guard let r = rows[storyId] else { throw StorySyncError.notFound }
+            return (r.revision, r.doc, r.deleted)
+        }
+        func put(accessToken: String, storyId: String, baseRevision: Int, mutationId: String,
+                 doc: [String: Any], deleted: Bool, referencedCloudMediaIds: [String]) async throws -> StoryPutResult {
+            putCount += 1
+            let digest = StoryDocCodec.contentHash(doc) + "\(baseRevision)\(deleted)"
+            if let r = rows[storyId] {
+                if r.revision != baseRevision {
+                    if r.mut == mutationId { return StoryPutResult(revision: r.revision, deleted: r.deleted, incompleteDeps: false) } // idempotent
+                    throw StorySyncError.conflict(serverRevision: r.revision, serverDoc: r.doc)
+                }
+            } else if baseRevision != 0 {
+                throw StorySyncError.conflict(serverRevision: 0, serverDoc: [:])
+            }
+            let newRev = baseRevision + 1
+            rows[storyId] = Row(revision: newRev, doc: doc, mut: mutationId, digest: digest, deleted: deleted)
+            return StoryPutResult(revision: newRev, deleted: deleted, incompleteDeps: false)
+        }
+        // seed a server doc as if written by another device
+        func seed(storyId: String, title: String, revision: Int) {
+            rows[storyId] = Row(revision: revision,
+                                doc: ["schema_version": "story_doc/1",
+                                      "story": ["id": storyId, "title": title, "status": "active",
+                                                "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                                      "moment_refs": [], "outputs": []],
+                                mut: "seed", digest: "seed", deleted: false)
+        }
+    }
+
+    private func coord(_ f: FakeSync) -> StorySyncCoordinator { StorySyncCoordinator(service: f) }
+
+    private func makeStory(owner: String, title: String) throws -> StoryModel {
+        let s = StoryModel(title: title, intentRawText: "r", intentTheme: "t", intentTone: "to", intentSummary: "s")
+        s.ownerAccountId = owner
+        ctx.insert(s); try ctx.save(); return s
+    }
+
+    // 1. Codec: encode carries essentials + NO local path.
+    func test_codec_encodes_essentials_no_path() throws {
+        let s = try makeStory(owner: "A", title: "Trip")
+        let doc = StoryDocCodec.encode(story: s)
+        XCTAssertEqual((doc["schema_version"] as? String), "story_doc/1")
+        XCTAssertEqual(((doc["story"] as? [String: Any])?["title"] as? String), "Trip")
+        // No relativePath anywhere in the serialized doc.
+        let json = String(data: try JSONSerialization.data(withJSONObject: doc), encoding: .utf8)!
+        XCTAssertFalse(json.contains("relativePath"))
+        XCTAssertFalse(json.contains("relative_path"))
+    }
+
+    // 2. Unsupported schema is rejected explicitly.
+    func test_apply_rejects_unsupported_schema() {
+        let c = coord(FakeSync())
+        XCTAssertThrowsError(try c.apply(doc: ["schema_version": "story_doc/99"], deleted: false,
+                                         owner: "A", storyId: UUID(), context: ctx)) { e in
+            guard case StoryDocError.unsupportedSchema = e else { return XCTFail("wrong error") }
+        }
+    }
+
+    // 3. Dirty push creates server rev 1; a same-content re-push is idempotent (no new revision).
+    func test_push_then_idempotent() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let s = try makeStory(owner: "A", title: "Push")
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        XCTAssertEqual(f.rows[s.id.uuidString]?.revision, 1)
+        let after1 = f.putCount
+        // Re-push with no change -> no-op (hash == lastSyncedHash).
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, after1)   // did not even call PUT again
+    }
+
+    // 4. Clean pull applies a server doc the device lacks + creates a cloud-only Moment shell.
+    func test_pull_applies_clean_and_creates_cloud_shell() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString
+        let momentId = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 3,
+            doc: ["schema_version": "story_doc/1",
+                  "story": ["id": sid, "title": "FromCloud", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [["moment_id": momentId, "order_index": 0, "added_at": 0,
+                                   "cloud_media_id": "cm-1", "cloud_verified": true,
+                                   "duration_seconds": 5.0, "source": "directed"]],
+                  "outputs": []],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        let story = (try ctx.fetch(FetchDescriptor<StoryModel>())).first { $0.id.uuidString == sid }
+        XCTAssertEqual(story?.title, "FromCloud")
+        // cloud-only Moment shell exists with a valid R6 shape.
+        let m = (try ctx.fetch(FetchDescriptor<MomentModel>())).first { $0.id.uuidString == momentId }
+        XCTAssertNotNil(m?.asset)                                  // moment<->asset relationship
+        XCTAssertEqual(m?.cloudMediaId, "cm-1")
+        XCTAssertEqual(m?.cloudStateRaw, "cloud_verified")
+        XCTAssertEqual(m?.asset?.localAvailability, .evicted)       // cloud-only until R6 restore
+        XCTAssertEqual(m?.ownerAccountId, "A")
+    }
+
+    // 5. A DIRTY local record facing a newer server revision raises a conflict and PRESERVES the draft.
+    func test_dirty_pull_raises_conflict_preserves_draft() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let s = try makeStory(owner: "A", title: "LocalDraft")
+        // Make it dirty with a known job (baseRevision 1 so a server rev 2 is 'newer').
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })  // server rev 1, clean
+        s.title = "LocalDraft EDITED"; try ctx.save()
+        // mark dirty via touch's effect: set job.dirty by syncing hash-diff detection
+        let keyDesc = FetchDescriptor<StorySyncJobModel>()
+        let job = (try ctx.fetch(keyDesc)).first { $0.storyId == s.id }!
+        job.dirty = true; try ctx.save()
+        // Another device advanced the server to rev 2.
+        f.rows[s.id.uuidString]?.revision = 2
+        f.rows[s.id.uuidString]?.doc["story"] = ["id": s.id.uuidString, "title": "ServerWins", "status": "active",
+                                                 "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]]
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        let j2 = (try ctx.fetch(keyDesc)).first { $0.storyId == s.id }!
+        XCTAssertTrue(j2.inConflict)
+        XCTAssertNotNil(j2.conflictLocalDraftJSON)                 // local draft preserved, never discarded
+        XCTAssertEqual(s.title, "LocalDraft EDITED")               // local NOT clobbered by the pull
+    }
+
+    // 6. Keep Both: clone preserves the local draft as a NEW story; original adopts the server doc.
+    func test_keep_both_clones_and_adopts_server() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let s = try makeStory(owner: "A", title: "Original")
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        // Force a conflict state.
+        f.rows[s.id.uuidString]?.revision = 5
+        f.rows[s.id.uuidString]?.doc["story"] = ["id": s.id.uuidString, "title": "CloudTitle", "status": "active",
+                                                 "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]]
+        s.title = "LocalTitle"; try ctx.save()
+        let job = (try ctx.fetch(FetchDescriptor<StorySyncJobModel>())).first { $0.storyId == s.id }!
+        job.dirty = true; try ctx.save()
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })   // -> conflict
+        await c.resolveKeepBoth(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        let stories = try ctx.fetch(FetchDescriptor<StoryModel>())
+        XCTAssertTrue(stories.contains { $0.title == "LocalTitle (copy)" })   // draft preserved as new story
+        XCTAssertEqual(stories.first { $0.id == s.id }?.title, "CloudTitle")  // original adopts server
+    }
+
+    // 7. Account isolation: a stale callback for A never mutates under B; pull scoped to active owner.
+    func test_pull_owner_scoped() async throws {
+        let f = FakeSync(); let c = coord(f)
+        f.seed(storyId: UUID().uuidString, title: "A's cloud story", revision: 1)
+        // Pull as B: B has no local story for A's id; a shell would be created under B only if B pulls it.
+        await c.pull(context: ctx, activeOwner: "B", token: { "tok" })
+        let stories = try ctx.fetch(FetchDescriptor<StoryModel>())
+        // The created shell (if any) is owned by B, never A — no cross-account ownership.
+        for s in stories { XCTAssertEqual(s.ownerAccountId, "B") }
+    }
+}
+
+// R7-C fix: a restored (already-understood) Moment must NOT be re-enqueued for Asset Understanding.
+extension StorySyncTests {
+    func test_au_not_reenqueued_when_understanding_exists() throws {
+        // A Moment with a real file + an EXISTING completed understanding.
+        MediaStore.shared.ensureMediaDirectory()
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        try Data("vid".utf8).write(to: MediaStore.shared.absoluteURL(for: rel))
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        let m = MomentModel(source: .directed, asset: asset)
+        ctx.insert(asset); ctx.insert(m)
+        let mu = MomentUnderstandingModel(momentId: m.id, schemaVersion: "moment_understanding/1",
+                                          framePolicy: "f", promptVersion: "p", modelId: nil, nFrames: nil,
+                                          understandingJSON: "{}")
+        ctx.insert(mu); try ctx.save()
+        let q = AssetUnderstandingQueue(context: ctx)
+        q.enqueue(momentId: m.id, relativeMediaPath: rel, sourceCaptureId: nil, captureContext: nil)
+        // No new AU job created (already understood).
+        let jobs = try ctx.fetch(FetchDescriptor<AssetUnderstandingJobModel>()).filter { $0.momentId == m.id }
+        XCTAssertTrue(jobs.isEmpty, "a Moment with a completed understanding must not be re-enqueued")
+        try? FileManager.default.removeItem(at: MediaStore.shared.absoluteURL(for: rel))
+    }
+}
+
+// R7-F — derived AI-state round-trip + understanding restore + hydration gate.
+extension StorySyncTests {
+    func test_derived_block_roundtrip_guide_coverage() throws {
+        let s = try makeStory(owner: "A", title: "Derived")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"g\":1}", schemaVersion: "story_guide/1"))
+        ctx.insert(StoryCoverageModel(storyId: s.id, coverageJSON: "{\"c\":1}",
+                   sourceUnderstandingIdsFingerprint: "sfp", creativeIntentFingerprint: "ifp",
+                   pendingCount: 0, storyGuideFingerprint: "gfp"))
+        try ctx.save()
+        let doc = StoryDocCodec.encodeFull(story: s, context: ctx)
+        XCTAssertEqual(doc["schema_version"] as? String, "story_doc/2")
+        let derived = doc["derived"] as? [String: Any]
+        XCTAssertNotNil(derived?["guide"]); XCTAssertNotNil(derived?["coverage"])
+        // Wipe local caches and restore from the doc.
+        for g in try ctx.fetch(FetchDescriptor<StoryGuideModel>()) { ctx.delete(g) }
+        for c in try ctx.fetch(FetchDescriptor<StoryCoverageModel>()) { ctx.delete(c) }
+        try ctx.save()
+        let n = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx)
+        XCTAssertGreaterThanOrEqual(n, 2)
+        let g2 = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g2?.guideJSON, "{\"g\":1}")
+        let c2 = try ctx.fetch(FetchDescriptor<StoryCoverageModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(c2?.coverageJSON, "{\"c\":1}")
+        XCTAssertEqual(c2?.sourceUnderstandingIdsFingerprint, "sfp")   // provenance preserved
+    }
+
+    func test_understanding_restore_reuse_gated_by_cloud_backing() async throws {
+        // A cloud-backed Moment (cloudMediaId set) with NO local understanding -> restore should adopt it.
+        let rel = MediaStore.shared.newRelativeVideoPath()
+        let asset = AssetModel(relativePath: rel, durationSeconds: 5, source: .directed)
+        let m = MomentModel(source: .directed, asset: asset); m.cloudMediaId = "cm-1"
+        ctx.insert(asset); ctx.insert(m); try ctx.save()
+        final class FakeU: UnderstandingSyncing, @unchecked Sendable {
+            func batchGet(accessToken: String, momentIds: [String]) async throws -> [CloudUnderstandingRecord] {
+                momentIds.map { CloudUnderstandingRecord(momentId: $0, understandingJSON: "{\"u\":1}",
+                    schemaVersion: "moment_understanding/1", promptVersion: "p", framePolicy: "f",
+                    contentSha256: "sha", modelId: "") }
+            }
+            func put(accessToken: String, records: [CloudUnderstandingRecord]) async throws {}
+        }
+        let sync = UnderstandingSync(service: FakeU())
+        let n = await sync.restore(momentIds: [m.id], context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(n, 1)
+        let mu = try ctx.fetch(FetchDescriptor<MomentUnderstandingModel>()).first { $0.momentId == m.id }
+        XCTAssertNotNil(mu, "a cloud-backed Moment's understanding must restore (no re-analysis)")
+        try? FileManager.default.removeItem(at: MediaStore.shared.absoluteURL(for: rel))
+    }
+
+    func test_hydration_gate_blocks_au_for_hydrating_moment() async throws {
+        let gate = CloudHydrationGate.shared
+        let sid = UUID(); let mid = UUID()
+        gate.beginStory(sid, moments: [mid])
+        XCTAssertTrue(gate.isHydrating(momentId: mid))
+        XCTAssertTrue(gate.isHydrating(storyId: sid))
+        gate.endStory(sid, moments: [mid])
+        XCTAssertFalse(gate.isHydrating(momentId: mid))
+    }
+
+    // Issue 4 — applyDerived DEFAULT keeps a local cache (reuse-first); it never clobbers a provisional one
+    // outside hydration.
+    func test_applyDerived_default_keeps_local() throws {
+        let s = try makeStory(owner: "A", title: "KeepLocal")
+        // A local (provisional) guide already present.
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx)   // preferCloud defaults false
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"local\":1}", "default apply must not clobber a present local cache")
+    }
+
+    // Issue 4 §9 — during HYDRATION (preferCloud), a PROVISIONAL local guide is replaced by the verified cloud
+    // copy so Device B adopts A's Guide (the exact cross-device divergence bug).
+    func test_applyDerived_preferCloud_overwrites_provisional() throws {
+        let s = try makeStory(owner: "A", title: "PreferCloud")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx, preferCloud: true)
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"cloud\":1}", "hydration must adopt the verified cloud Guide")
+    }
+
+    // Issue 4 §10 — even under preferCloud, a USER-AUTHORED local music direction is never clobbered.
+    func test_applyDerived_preferCloud_preserves_user_authored_music() throws {
+        let s = try makeStory(owner: "A", title: "UserMusic")
+        ctx.insert(StoryMusicDirectionModel(storyId: s.id, directionJSON: "{\"mine\":1}",
+                                            userAuthored: true, fingerprint: "fp"))
+        try ctx.save()
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["music_direction": ["json": "{\"cloud\":1}", "user_authored": false, "fingerprint": "fp2"]]]
+        _ = StoryDocCodec.applyDerived(doc, storyId: s.id, context: ctx, preferCloud: true)
+        let m = try ctx.fetch(FetchDescriptor<StoryMusicDirectionModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(m?.directionJSON, "{\"mine\":1}", "a user-authored direction is never overwritten")
+        XCTAssertTrue(m?.userAuthored ?? false)
+    }
+
+    // Issue 4 §13 — the durable hydrationPending flag re-establishes the in-memory barrier after a view
+    // recreation / relaunch (seedFromDurable), so a Story that opens before the pull completes still holds.
+    func test_hydration_gate_seeds_from_durable_pending_row() throws {
+        let gate = CloudHydrationGate.shared
+        let s = try makeStory(owner: "A", title: "Durable")
+        gate.endStory(s.id, moments: [])    // ensure not already in-memory from a prior test
+        let job = StorySyncJobModel(ownerAccountId: "A", storyId: s.id)
+        job.hydrationPending = true
+        ctx.insert(job); try ctx.save()
+        gate.seedFromDurable(context: ctx)
+        XCTAssertTrue(gate.isHydrating(storyId: s.id), "a durable hydrationPending row must re-hold the barrier")
+        // Clean up in-memory state for other tests.
+        gate.endStory(s.id, moments: [])
+    }
+
+    // Issue 4 §12 — a Device-B clean pull marks hydrationPending durable, adopts the cloud Guide, and clears
+    // the flag; NO regeneration is triggered (ensureGuide is never called here). Zero-Bedrock restore shape.
+    func test_pull_hydrates_derived_and_clears_pending() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 2,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "B-Restore", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [],
+                  "derived": ["guide": ["json": "{\"fromA\":1}", "schema_version": "story_guide/1"]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        guard let suid = UUID(uuidString: sid) else { return XCTFail() }
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == suid }
+        XCTAssertEqual(g?.guideJSON, "{\"fromA\":1}", "Device B adopts A's cloud Guide on pull")
+        let job = try ctx.fetch(FetchDescriptor<StorySyncJobModel>()).first { $0.storyId == suid }
+        XCTAssertEqual(job?.hydrationPending, false, "hydration flag cleared after a successful restore")
+        XCTAssertFalse(CloudHydrationGate.shared.isHydrating(storyId: suid), "gate released after hydration")
+    }
+
+    // Issue 4 §7 — a DIRTY local record is NOT hydrated/overwritten by the pull (conflict path instead).
+    func test_pull_does_not_hydrate_dirty_local() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let s = try makeStory(owner: "A", title: "Dirty")
+        ctx.insert(StoryGuideModel(storyId: s.id, guideJSON: "{\"local\":1}", schemaVersion: "story_guide/1"))
+        try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })   // rev 1, clean
+        let job = try ctx.fetch(FetchDescriptor<StorySyncJobModel>()).first { $0.storyId == s.id }!
+        job.dirty = true; try ctx.save()
+        // Server advances with a different derived guide.
+        f.rows[s.id.uuidString]?.revision = 2
+        f.rows[s.id.uuidString]?.doc["derived"] = ["guide": ["json": "{\"cloud\":1}", "schema_version": "story_guide/1"]]
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        let g = try ctx.fetch(FetchDescriptor<StoryGuideModel>()).first { $0.storyId == s.id }
+        XCTAssertEqual(g?.guideJSON, "{\"local\":1}", "a dirty record's local derived state is preserved")
+    }
+}
+
+// R7 — GeneratedOutput VERSION ROW materialization (the decode half R7-C omitted). These cover the exact
+// Device-B symptom: versions must appear in the Result/version UI, with lineage + exact EditPlans + MP4 cloud
+// refs, and a repeated pull must NOT duplicate a version.
+extension StorySyncTests {
+    @discardableResult
+    private func addOutput(to s: StoryModel, title: String, op: String = "original",
+                           parent: UUID? = nil, plan: String? = nil, cmid: String? = nil,
+                           verified: Bool = false) -> GeneratedOutputModel {
+        let o = GeneratedOutputModel(
+            title: title, durationSeconds: 30, momentIds: [],
+            relativeFilePath: "rendered/\(UUID().uuidString).mp4",
+            sourceMomentIds: [], sourceFingerprint: "fp-\(title)",
+            editPlanProvenance: "edit_plan/2 bedrock 30s",
+            outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+            operationType: op, editPlanJSON: plan,
+            soundtrackTitle: "Song", soundtrackRole: "bed", nativeAudioPriority: "low",
+            soundPreferenceRaw: "music", musicAssetRef: "provider:t1",
+            parentVersionId: parent)
+        o.story = s; o.ownerAccountId = s.ownerAccountId
+        o.cloudMediaId = cmid
+        o.cloudVerifiedAt = verified ? .now : nil
+        ctx.insert(o); try? ctx.save()
+        return o
+    }
+
+    // Encode carries FULL version lineage (version_id / parent_version_id / operation_type) + render shape.
+    func test_encode_outputs_carry_lineage() throws {
+        let s = try makeStory(owner: "A", title: "Lineage")
+        let v1 = addOutput(to: s, title: "V1")
+        _ = addOutput(to: s, title: "V2", op: "change_music", parent: v1.versionId)
+        let doc = StoryDocCodec.encode(story: s)
+        let outs = (doc["outputs"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(outs.count, 2)
+        let second = outs[1]
+        XCTAssertEqual(second["operation_type"] as? String, "change_music")
+        XCTAssertEqual(second["parent_version_id"] as? String, v1.versionId.uuidString)
+        XCTAssertEqual(second["output_format"] as? String, "vertical")
+        XCTAssertEqual((second["render_width"] as? NSNumber)?.doubleValue, 1080)
+        XCTAssertEqual(second["music_asset_ref"] as? String, "provider:t1")
+        // Still never a local path.
+        let json = String(data: try JSONSerialization.data(withJSONObject: doc), encoding: .utf8)!
+        XCTAssertFalse(json.contains("rendered/"), "relative_file_path must NOT be serialized as a cloud ref")
+    }
+
+    // applyOutputs CREATES version rows on a device that lacks them (Device B), preserving lineage + exact plan.
+    func test_applyOutputs_creates_rows_with_lineage_and_plan() throws {
+        // Build a doc on "A" with two versions + exact plans, then materialize into an EMPTY "B" store.
+        let sA = try makeStory(owner: "A", title: "Src")
+        let v1 = addOutput(to: sA, title: "V1", plan: "{\"plan\":1}")
+        _ = addOutput(to: sA, title: "V2", op: "change_music", parent: v1.versionId, plan: "{\"plan\":2}",
+                      cmid: "cm-out-2", verified: true)
+        let doc = StoryDocCodec.encodeFull(story: sA, context: ctx)
+        let sid = sA.id
+        // Simulate Device B: delete the outputs locally (story remains, as apply() would create it).
+        for o in try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()) { ctx.delete(o) }
+        try ctx.save()
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).count, 0)
+
+        let created = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        XCTAssertEqual(created, 2, "both version rows materialized on Device B")
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).sorted { $0.createdAt < $1.createdAt }
+        XCTAssertEqual(outs.count, 2)
+        XCTAssertEqual(outs[0].editPlanJSON, "{\"plan\":1}", "exact EditPlan restored verbatim")
+        XCTAssertEqual(outs[1].operationType, "change_music")
+        XCTAssertEqual(outs[1].parentVersionId, v1.versionId, "lineage parent preserved")
+        XCTAssertEqual(outs[1].cloudMediaId, "cm-out-2", "MP4 cloud ref synced")
+        XCTAssertNotNil(outs[1].cloudVerifiedAt)
+        XCTAssertNil(outs[1].relativeFilePath, "bytes are cloud-only until R6 restore; no fabricated local path")
+        XCTAssertEqual(outs[0].story?.id, sid, "output linked to its Story")
+        XCTAssertEqual(outs[0].ownerAccountId, "A")
+    }
+
+    // Repeated pull/apply must NOT duplicate versions (rule 12) and must not regress a present plan.
+    func test_applyOutputs_idempotent_no_duplicates() throws {
+        let s = try makeStory(owner: "A", title: "Idem")
+        let v1 = addOutput(to: s, title: "V1", plan: "{\"plan\":1}")
+        let doc = StoryDocCodec.encodeFull(story: s, context: ctx)
+        let sid = s.id
+        // Apply twice (second pull).
+        _ = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        _ = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>())
+        XCTAssertEqual(outs.count, 1, "re-pull must not duplicate a version")
+        XCTAssertEqual(outs.first?.id, v1.id)
+        XCTAssertEqual(outs.first?.editPlanJSON, "{\"plan\":1}")
+    }
+
+    // Full clean PULL materializes the version rows end-to-end (via the coordinator), zero re-render.
+    func test_pull_materializes_output_versions() async throws {
+        let f = FakeSync(); let c = coord(f)
+        // Compose a cloud doc with an output + its exact plan in derived.output_edit_plans.
+        let sid = UUID().uuidString
+        let oid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 4,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "B-Versions", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": oid, "title": "The Film", "duration_seconds": 42.0,
+                               "operation_type": "original", "version_id": oid,
+                               "output_format": "vertical", "render_width": 1080.0, "render_height": 1920.0,
+                               "cloud_media_id": "cm-film", "cloud_verified": true]],
+                  "derived": ["output_edit_plans": [["output_id": oid, "edit_plan_json": "{\"exact\":true}"]]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        guard let suid = UUID(uuidString: sid), let ouid = UUID(uuidString: oid) else { return XCTFail() }
+        let story = try ctx.fetch(FetchDescriptor<StoryModel>()).first { $0.id == suid }
+        XCTAssertEqual(story?.title, "B-Versions")
+        let out = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).first { $0.id == ouid }
+        XCTAssertNotNil(out, "the version row must appear in the Result/version UI after pull")
+        XCTAssertEqual(out?.durationSeconds, 42.0)
+        XCTAssertEqual(out?.editPlanJSON, "{\"exact\":true}", "exact EditPlan attached (never re-planned)")
+        XCTAssertEqual(out?.cloudMediaId, "cm-film", "MP4 cloud ref present for R6 restore-on-play")
+        XCTAssertEqual(out?.story?.id, suid)
+    }
+
+    // Account isolation: outputs created under a pull are owned by the active account only.
+    func test_applyOutputs_owner_scoped() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString; let oid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 1,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "Owned", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": oid, "title": "X", "duration_seconds": 10.0,
+                               "operation_type": "original", "version_id": oid]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "B", token: { "tok" })
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>())
+        for o in outs { XCTAssertEqual(o.ownerAccountId, "B", "no cross-account output ownership") }
+    }
+
+    // ========================================================================================================
+    // R7 Phase 4 — ai_artifact externalization. Oversized EditPlans move to S3 so version history is never
+    // capped; Device B resolves them (size+sha256 verified) before decode. No version is silently dropped.
+    // ========================================================================================================
+
+    // A fake media uploader/downloader backing AIArtifactStore: records bytes by sha and serves them back with
+    // the SERVER-authoritative size/sha, so the real verification path runs end to end (no network).
+    final class FakeArtifactIO: MediaUploading, MediaDownloading, @unchecked Sendable {
+        var store: [String: (data: Data, sha: String)] = [:]     // cloud_media_id -> bytes
+        var uploads = 0
+        private func cmid(_ sha: String) -> String { "art-\(sha.prefix(12))" }   // deterministic by content
+
+        // MediaUploading (only the single-PUT path is used by AIArtifactStore)
+        func initiate(accessToken: String, sha256: String, size: Int, deviceAssetId: String,
+                      sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                      contentType: String) async throws -> MediaInitiateResult {
+            XCTAssertEqual(mediaKind, CloudMediaKind.aiArtifact)
+            XCTAssertEqual(contentType, "application/json")
+            let id = cmid(sha256)
+            // reserve the slot keyed by content sha (idempotent)
+            if store[id] == nil { store[id] = (Data(), sha256) }
+            return MediaInitiateResult(cloudMediaId: id, uploadURL: URL(string: "https://s3/\(id)")!, created: true)
+        }
+        func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {
+            uploads += 1
+            let data = try Data(contentsOf: fileURL)
+            store[cmid(sha256Hex)] = (data, sha256Hex)
+        }
+        func complete(accessToken: String, cloudMediaId: String) async throws { /* verified */ }
+        func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
+                               sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                               contentType: String) async throws -> MultipartInitiateResult { fatalError("unused") }
+        func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] { [:] }
+        func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
+        func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String, contentType: String) async throws {}
+        func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
+
+        // MediaDownloading
+        func presignDownload(accessToken: String, cloudMediaId: String) async throws -> MediaDownloadTarget {
+            guard let rec = store[cloudMediaId] else { throw MediaDownloadError.notFound }
+            return MediaDownloadTarget(url: URL(string: "https://s3/\(cloudMediaId)")!, expiresIn: 60,
+                                       expectedSize: rec.data.count, expectedSha256Hex: rec.sha,
+                                       contentType: "application/json")
+        }
+        func download(target: MediaDownloadTarget, to destURL: URL, progress: ((Double) -> Void)?) async throws {
+            // serve the stored bytes; AIArtifactStore re-verifies sha after reading them back
+            guard let rec = store.values.first(where: { $0.sha == target.expectedSha256Hex }) else { throw MediaDownloadError.notFound }
+            try rec.data.write(to: destURL, options: .atomic)
+        }
+        func listMedia(accessToken: String) async throws -> [CloudMediaRecord] { [] }
+    }
+
+    private func bigJSON(_ n: Int) -> String { "{\"shots\":\"" + String(repeating: "s", count: n) + "\"}" }
+
+    // Pure transform: an under-budget doc externalizes nothing (no cap/truncation ever for a small doc).
+    func test_p4_small_doc_externalizes_nothing() {
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+                                  "derived": ["output_edit_plans": [["output_id": "A", "edit_plan_json": "{\"x\":1}"]]]]
+        XCTAssertTrue(StoryDocCodec.plansToExternalize(doc).isEmpty)
+    }
+
+    // Pure transform: an over-budget doc picks the LARGEST plan first, and the ref round-trips back to identical JSON.
+    func test_p4_externalize_largest_first_and_inline_roundtrip() {
+        let big = bigJSON(320_000); let small = bigJSON(50_000)
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["output_edit_plans": [["output_id": "A", "edit_plan_json": big],
+                                              ["output_id": "B", "edit_plan_json": small]]]]
+        let picks = StoryDocCodec.plansToExternalize(doc)
+        XCTAssertEqual(picks.first?.outputId, "A", "largest externalized first")
+        let ref = AIArtifactRef(cloudMediaId: "cmid-A", sha256: "abc", bytes: big.utf8.count, schemaVersion: "edit_plan/2")
+        let rewritten = StoryDocCodec.applyExternalizedRefs(doc, refs: ["A": ref])
+        // The doc now carries a ref, not the inline bytes, and it's in referenced_cloud_media_ids.
+        XCTAssertTrue(StoryDocCodec.referencedCloudMediaIds(rewritten).contains("cmid-A"))
+        let ext = StoryDocCodec.externalizedRefs(rewritten)
+        XCTAssertEqual(ext.count, 1); XCTAssertEqual(ext.first?.ref.cloudMediaId, "cmid-A")
+        // Inlining the resolved JSON reproduces the original payload.
+        let inlined = StoryDocCodec.inlineResolvedPlans(rewritten, resolved: ["A": big])
+        let plans = ((inlined["derived"] as! [String: Any])["output_edit_plans"] as! [[String: Any]])
+        let a = plans.first { $0["output_id"] as? String == "A" }!
+        XCTAssertEqual(a["edit_plan_json"] as? String, big)
+        XCTAssertNil(a["edit_plan_ref"])
+    }
+
+    // AIArtifactStore: upload then resolve returns the EXACT bytes (size+sha256 verified through the real path).
+    func test_p4_artifact_store_roundtrip_verified() async throws {
+        let io = FakeArtifactIO()
+        let store = AIArtifactStore(uploader: io, downloader: io)
+        let json = bigJSON(40_000)
+        let ref = try await store.externalize(json: json, accessToken: "t", sourceOutputId: "out-1", schemaVersion: "edit_plan/2")
+        XCTAssertEqual(ref.bytes, json.utf8.count)
+        let back = try await store.resolve(ref, accessToken: "t")
+        XCTAssertEqual(back, json)
+    }
+
+    // AIArtifactStore: a tampered/mismatched sha fails integrity verification (explicit throw, never trusted).
+    func test_p4_artifact_store_integrity_failure_throws() async throws {
+        let io = FakeArtifactIO()
+        let store = AIArtifactStore(uploader: io, downloader: io)
+        let json = bigJSON(20_000)
+        let good = try await store.externalize(json: json, accessToken: "t", sourceOutputId: "o", schemaVersion: "edit_plan/2")
+        // Corrupt the stored bytes but keep the ref's declared sha -> resolve must throw.
+        let tampered = AIArtifactRef(cloudMediaId: good.cloudMediaId, sha256: String(repeating: "0", count: 64),
+                                     bytes: good.bytes, schemaVersion: good.schemaVersion)
+        do { _ = try await store.resolve(tampered, accessToken: "t"); XCTFail("expected integrity failure") }
+        catch { /* expected */ }
+    }
+
+    // Coordinator PUSH: an over-budget doc externalizes before the PUT; the server receives a ref (not inline
+    // bytes) and the externalized artifact is uploaded exactly once.
+    func test_p4_push_externalizes_oversized_plan() async throws {
+        let f = FakeSync(); let io = FakeArtifactIO()
+        let c = StorySyncCoordinator(service: f, artifacts: AIArtifactStore(uploader: io, downloader: io))
+        let s = try makeStory(owner: "A", title: "Big")
+        // One output with a huge exact edit plan -> over the 300 KB budget.
+        let o = GeneratedOutputModel(id: UUID(), title: "v1", durationSeconds: 30, momentIds: [],
+                                     relativeFilePath: "out/v1.mp4", sourceMomentIds: [], sourceFingerprint: "fp",
+                                     editPlanProvenance: "", outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+                                     isStale: false, soundtrackTitle: nil, versionId: UUID(), parentVersionId: nil,
+                                     operationType: "original", editPlanJSON: bigJSON(330_000))
+        o.story = s; o.ownerAccountId = "A"; ctx.insert(o); try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        XCTAssertEqual(io.uploads, 1, "oversized plan externalized exactly once")
+        let serverDoc = f.rows[s.id.uuidString]!.doc
+        let plans = ((serverDoc["derived"] as! [String: Any])["output_edit_plans"] as! [[String: Any]])
+        XCTAssertNotNil(plans.first?["edit_plan_ref"], "server doc carries a ref")
+        XCTAssertNil(plans.first?["edit_plan_json"], "inline bytes removed from the wire doc")
+    }
+
+    // Coordinator ROUND-TRIP: push externalizes; a fresh pull (Device B) resolves the ref and materializes the
+    // version row with the EXACT plan restored — no version dropped, no re-render.
+    func test_p4_pull_resolves_externalized_plan_into_version() async throws {
+        let f = FakeSync(); let io = FakeArtifactIO()
+        let c = StorySyncCoordinator(service: f, artifacts: AIArtifactStore(uploader: io, downloader: io))
+        let s = try makeStory(owner: "A", title: "Big")
+        let oid = UUID()
+        let plan = bigJSON(330_000)
+        let o = GeneratedOutputModel(id: oid, title: "v1", durationSeconds: 30, momentIds: [],
+                                     relativeFilePath: "out/v1.mp4", sourceMomentIds: [], sourceFingerprint: "fp",
+                                     editPlanProvenance: "", outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+                                     isStale: false, soundtrackTitle: nil, versionId: oid, parentVersionId: nil,
+                                     operationType: "original", editPlanJSON: plan)
+        o.story = s; o.ownerAccountId = "A"; ctx.insert(o); try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+
+        // Device B: a fresh store pulls the same account.
+        let ctxB = ModelContext(container)
+        // remove the local Story/output so B starts empty for this id
+        for row in try ctxB.fetch(FetchDescriptor<StoryModel>()) { ctxB.delete(row) }
+        for row in try ctxB.fetch(FetchDescriptor<GeneratedOutputModel>()) { ctxB.delete(row) }
+        try ctxB.save()
+        await c.pull(context: ctxB, activeOwner: "A", token: { "tok" })
+        let outs = try ctxB.fetch(FetchDescriptor<GeneratedOutputModel>(predicate: #Predicate { $0.id == oid }))
+        XCTAssertEqual(outs.count, 1, "version row materialized on Device B")
+        XCTAssertEqual(outs.first?.editPlanJSON, plan, "exact externalized plan restored (no re-plan)")
+    }
+
+    // ========================================================================================================
+    // Cross-device divergence fix (observed: Device B clobbering Device A; new story never synced).
+    // ========================================================================================================
+
+    // A freshly-pulled story must NOT be seen as a local edit by the subsequent syncAllDirty — otherwise the
+    // device pushes its (thinner) re-encode back and overwrites the other device's richer doc (silent LWW).
+    func test_pulled_story_is_not_repushed_by_syncAllDirty() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString
+        // Seed a RICH server doc (derived guide + an output) as if written by Device A.
+        f.rows[sid] = FakeSync.Row(
+            revision: 5,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "TMB", "status": "active",
+                            "intent": ["raw_text": "r", "theme": "t", "tone": "o", "summary": "s"]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": UUID().uuidString, "title": "v1", "duration_seconds": 30.0,
+                               "operation_type": "original", "version_id": UUID().uuidString]],
+                  "derived": ["guide": ["json": "{\"g\":1}", "schema_version": "story_guide/1"]]],
+            mut: "seed", digest: "seed", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "pull alone performs no PUT")
+        // Now the push pass that runs right after pull on foreground MUST NOT push the just-adopted story.
+        await c.syncAllDirty(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "a cleanly-pulled story must not be re-pushed (no silent LWW over the server)")
+        // And reconcile (pull THEN push) is idempotent — still no spurious PUT on a second cycle.
+        await c.reconcile(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "reconcile does not re-push an unchanged, cleanly-pulled story")
+    }
+
+    // reconcile() must adopt a brand-new server story even when a dirty local story exists in the same cycle
+    // (the real foreground case). Serialized pull-before-push; the new story gets a GET+materialize.
+    func test_reconcile_adopts_new_server_story_with_local_dirty_present() async throws {
+        let f = FakeSync(); let c = coord(f)
+        // A dirty local story on this device (never pushed yet).
+        let local = try makeStory(owner: "A", title: "Local Draft")
+        _ = local
+        // A new server story created on another device.
+        let newSid = UUID().uuidString
+        f.seed(storyId: newSid, title: "TMB A", revision: 1)
+        await c.reconcile(context: ctx, activeOwner: "A", token: { "tok" })
+        // The new server story is materialized locally…
+        let got = try ctx.fetch(FetchDescriptor<StoryModel>(predicate: #Predicate { $0.title == "TMB A" }))
+        XCTAssertEqual(got.count, 1, "new server story adopted on this device")
+        // …and the local dirty draft was pushed (its own id), proving push still ran after the pull.
+        XCTAssertGreaterThanOrEqual(f.putCount, 1, "local dirty draft still pushed after the serialized pull")
+    }
+}

@@ -39,6 +39,47 @@ from model_gateway import StructuredOutputError, ProviderError
 
 EXEC_DEADLINE_S = int(os.environ.get("STORY_WORKER_DEADLINE_S", "840"))
 
+# P0 Beta Observability — AI usage/cost metrics from the worker. Import is best-effort so a packaging gap in
+# the Lambda bundle never breaks plan execution (the worker predates observability wiring).
+try:
+    from observability import emit_metrics as _emit_metrics, estimated_cost_usd as _estimated_cost_usd
+except Exception:  # noqa: BLE001
+    _emit_metrics = None
+    _estimated_cost_usd = None
+
+_ENV = os.environ.get("STORY_ENVIRONMENT", "development")
+_PRIMARY_MODEL = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
+_FALLBACK_MODEL = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+
+
+def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan") -> None:
+    """Emit the Phase-2 AI metrics for one logical generation from the worker's diagnostics, via EMF.
+    Fire-and-forget: never raises into the worker. `diag` is the engine's last_diagnostics (carries token
+    accumulations + fallback + repair counts). The billed model is the FALLBACK model when a fallback fired,
+    else the primary — this is the physical attempt the tokens were spent on. Dimensions stay low-cardinality
+    (env/service/op_type/stage/model_id); correlation/job id are NEVER passed as dimensions."""
+    if _emit_metrics is None:
+        return
+    try:
+        in_tok = int(diag.get("input_tokens") or 0)
+        out_tok = int(diag.get("output_tokens") or 0)
+        any_fallback = bool(diag.get("any_fallback"))
+        model_id = _FALLBACK_MODEL if any_fallback else _PRIMARY_MODEL
+        dims = {"env": _ENV, "service": "worker", "op_type": op_type, "stage": stage, "model_id": model_id}
+        metrics: dict[str, float] = {
+            "ModelInvocations": float(diag.get("model_calls") or diag.get("calls") or 0),
+            "InputTokens": float(in_tok),
+            "OutputTokens": float(out_tok),
+            "RepairCount": float(diag.get("executability_repairs_used") or 0),
+            "CritiqueCount": float(1 if diag.get("critique_attempted") else 0),
+            "ModelFallbacks": float(1 if any_fallback else 0),
+        }
+        if _estimated_cost_usd is not None and (in_tok or out_tok):
+            metrics["EstimatedModelCostUSD"] = float(_estimated_cost_usd(in_tok, out_tok, model_id))
+        _emit_metrics(metrics, dims)
+    except Exception:  # noqa: BLE001 — observability must never break the worker
+        pass
+
 
 def _build_engine():
     """Mirror apps/api/app/deps.get_edit_planner_engine so the worker runs the IDENTICAL model path
@@ -61,6 +102,45 @@ def _build_coverage_engine():
     primary = BedrockModelGateway(model_id=model)
     gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
     return RealStoryCoverageV2Engine(gw, model_id=model)
+
+
+def _validator_error_codes(errs: list[str]) -> list[str]:
+    """Map validate_plan's human error strings to LOW-CARDINALITY, stable codes for diagnostics/metrics.
+    Never echoes a raw id, instruction, path, or model output — only the invariant that failed."""
+    codes: set[str] = set()
+    for e in errs:
+        s = str(e).lower()
+        if "not in the eligible source set" in s: codes.add("directive_ref_ineligible")
+        elif "appears in no segment" in s: codes.add("directive_include_unplaced")
+        elif "must not be used but appears" in s: codes.add("directive_exclude_violated")
+        elif "first segment must be" in s: codes.add("directive_opening_unplaced")
+        elif "last segment must be" in s: codes.add("directive_ending_unplaced")
+        elif "order_after" in s or "order_adjacent" in s: codes.add("directive_order_violated")
+        elif "no segments" in s: codes.add("no_segments")
+        elif "not a known moment id" in s: codes.add("segment_unknown_asset")
+        elif "overlaps no useful_segment" in s: codes.add("source_outside_useful")
+        elif "exceeds moment duration" in s: codes.add("source_exceeds_duration")
+        elif "invalid source range" in s or "missing source in/out" in s: codes.add("source_range_invalid")
+        elif "out of renderer-supported range" in s: codes.add("speed_unrenderable")
+        elif "inconsistent with source span" in s: codes.add("output_span_inconsistent")
+        elif "upper bound" in s: codes.add("duration_overshoot")
+        elif "lower bound" in s: codes.add("duration_undershoot")
+        elif "transition" in s and "infeasible" in s: codes.add("transition_infeasible")
+        elif "native_audio" in s: codes.add("native_audio_invalid")
+        else: codes.add("other")
+    return sorted(codes)
+
+
+def _directive_categories(inputs) -> list[str]:
+    """Which hard-directive CATEGORIES the request carried (not the ids/values). Low-cardinality."""
+    if inputs is None:
+        return []
+    ctx = getattr(inputs, "revision_context", None) or {}
+    d = ctx.get("directives") or {}
+    if not isinstance(d, dict):
+        return []
+    return sorted(k for k in ("must_include", "exclude", "opening", "ending", "order_after", "order_adjacent")
+                  if d.get(k))
 
 
 def _classify(exc: Exception, inputs: EditPlanInputs) -> tuple[str, str]:
@@ -272,6 +352,12 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                                              "retime_reject_errors")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
+        # P0 Beta Observability: surface TOKENS + the physical model into the diag (they live in the engine's
+        # last_diagnostics but were never forwarded) so EstimatedModelCost has an input and the log line is
+        # cost-legible. input_tokens/output_tokens are the SUMMED billable tokens across all attempts.
+        diag_out["input_tokens"] = int(diag.get("input_tokens") or 0)
+        diag_out["output_tokens"] = int(diag.get("output_tokens") or 0)
+        diag_out["model_id"] = _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
         # DIRECTIVE visibility: what revision_context the worker ACTUALLY received, the resolved opening id,
         # and whether the produced plan's first segment honored it. This is the only way to tell apart "the app
         # sent no/stale directive" from "the directive was sent but not enforced" from "Moment N resolved to an
@@ -306,7 +392,17 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                           "rev_diag": rev_diag,
                           "revision_path": diag_out.get("revision_path"),
                           "retime_reject_errors": diag_out.get("retime_reject_errors"),
+                          "input_tokens": diag_out.get("input_tokens"),
+                          "output_tokens": diag_out.get("output_tokens"),
+                          "model_id": diag_out.get("model_id"),
                           "repairs": diag_out.get("executability_repairs_used")})[:1500])
+        # P0 Beta Observability: emit AI usage/cost + a GenerationCompleted count (EMF, fire-and-forget). The
+        # op_type is the revision mode (original|another_version|revision) from the request body.
+        _op = (b.get("revision_context") or {}).get("mode", "original") if isinstance(b.get("revision_context"), dict) else "original"
+        _emit_ai_metrics(diag_out, op_type=_op)
+        if _emit_metrics is not None:
+            try: _emit_metrics({"GenerationCompleted": 1.0}, {"env": _ENV, "service": "worker", "op_type": _op})
+            except Exception: pass
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)
         store.delete_staging(prefix)
@@ -319,6 +415,48 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         _eng = locals().get("engine")
         if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "unsupported_operation":
             cat = "unsupported_operation"
+        # Phase 2 (revision messaging): a PRESERVATION VIOLATION is also raised as an EditPlanInfeasibleError
+        # (classified material_infeasible), but it is NOT a material-insufficiency — the revise WOULD change
+        # clips the user did not ask to change. Surface it under its own category so the app shows the correct
+        # reason (the current version was kept) instead of prepending the generic "material can't fill the
+        # target" duration copy. Mirrors the unsupported_operation promotion above.
+        if cat == "material_infeasible" and getattr(_eng, "last_diagnostics", {}).get("final") == "preservation_violation":
+            cat = "preservation_violation"
+        # Phase 1 — privacy-safe validator diagnostics. Emit LOW-CARDINALITY error codes (never raw user
+        # instructions, media paths, GPS, images, or raw model output) so invalid_after_repair is debuggable in
+        # CloudWatch and future metrics. Correlation id (job_id) stays in the log, never a metric dimension.
+        _diag = getattr(_eng, "last_diagnostics", {}) or {}
+        if cat in ("invalid_after_repair", "material_infeasible", "unsupported_operation", "preservation_violation"):
+            _inp = locals().get("inputs")
+            print(json.dumps({
+                "msg": "worker_validation_diag",
+                "job_id": job_id,
+                "operation_type": (getattr(_inp, "revision_context", None) or {}).get("mode", "original") if _inp else "unknown",
+                "terminal": _diag.get("final", cat),
+                "repairs_used": _diag.get("executability_repairs_used", 0),
+                "final_error_codes": _validator_error_codes(_diag.get("final_errors") or []),
+                "usable_moment_count": len(getattr(_inp, "moments", []) or []) if _inp else None,
+                "target_seconds": (getattr(_inp, "creative_intent", None) or {}).get("target_duration_seconds") if _inp else None,
+                "directive_categories": _directive_categories(_inp),
+            })[:1500])
+        # P0 Beta Observability: GenerationFailed count keyed by a LOW-CARDINALITY error_category (the design's
+        # throttle|quota|validation|provider|transport|none enum), mapped from the worker's failure category.
+        if _emit_metrics is not None:
+            try:
+                _ec = {
+                    "invalid_after_repair": "validation", "material_infeasible": "validation",
+                    "unsupported_operation": "validation", "preservation_violation": "validation",
+                    "provider_exhausted": "quota", "provider_throttled": "throttle",
+                    "provider_error": "provider", "transport": "transport",
+                }.get(cat, "provider")
+                _op = (getattr(locals().get("inputs"), "revision_context", None) or {}).get("mode", "original")
+                _emit_metrics({"GenerationFailed": 1.0},
+                              {"env": _ENV, "service": "worker", "op_type": _op, "error_category": _ec})
+                if _ec == "throttle":
+                    _emit_metrics({"BedrockThrottles": 1.0},
+                                  {"env": _ENV, "service": "worker", "model_id": _PRIMARY_MODEL})
+            except Exception:  # noqa: BLE001
+                pass
         store.fail(job_id, cat, detail, token)
         store.delete_staging(prefix)
         return f"failed:{cat}"

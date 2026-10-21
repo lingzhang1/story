@@ -46,9 +46,10 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     /// the coordinator reaches .completed/.failed without any network. `.transport` throws so the poll surfaces
     /// a transport error (used by the 503/retry test).
     private final class FakeJobClient: EditPlanJobClienting {
-        enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport }
+        enum Behavior { case ok(EditPlanV2), failInfeasible(String), failUnavailable, throwTransport, staleThenOk(EditPlanV2) }
         var behavior: Behavior
         private(set) var submitCount = 0
+        private(set) var pollCount = 0
         private(set) var lastRequest: EditPlanRequestDTO?
         init(_ b: Behavior) { behavior = b }
 
@@ -57,13 +58,14 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                     critiqueRevision: Bool) async throws -> String {
             submitCount += 1
             lastRequest = request
-            return "fake-job-\(operationId)"
+            return "fake-job-\(operationId)-\(submitCount)"
         }
 
         func pollUntilTerminal(jobId: String, maxSeconds: Int,
                                shouldCancel: @MainActor () -> Bool,
                                onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState {
-            if shouldCancel() { throw CancellationError() }
+            if await shouldCancel() { throw CancellationError() }
+            pollCount += 1
             switch behavior {
             case .ok(let p):
                 return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
@@ -76,6 +78,11 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                         failure: .providerError, failureDetail: "unavailable", diagnostics: nil)
             case .throwTransport:
                 throw EditPlanJobError.transport(URLError(.timedOut))
+            case .staleThenOk(let p):
+                // First poll (the REUSED stale job) 404s; after the coordinator resubmits, the next poll ok's.
+                if pollCount == 1 { throw EditPlanJobError.badStatus(404) }
+                return EditPlanJobState(jobId: jobId, status: .completed, plan: p,
+                                        failure: nil, failureDetail: nil, diagnostics: nil)
             }
         }
 
@@ -205,6 +212,32 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         // Persisted onto the Story and status unchanged (Create != Complete).
         XCTAssertTrue(s.generatedOutputs.contains { $0.id == output.id })
         XCTAssertEqual(s.status, .active)
+    }
+
+    // A STALE persisted planJobId (server-side job gone -> poll 404) must NOT dead-end: the coordinator clears
+    // the stale handle, resubmits ONE fresh job for the same operation_id, and reaches .completed. Regression
+    // for "Couldn't reach the Edit Planner: unexpected status 404".
+    func test_staleJobId_404_resubmitsAndCompletes() async throws {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/rc-stale-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
+        let m2 = momentWithFile(s, rel: "media/rc-stale-2.mov", dur: 8); completeAU(m2, useful: [(0, 5)])
+        // Simulate a prior session that left a persisted (now-stale) job handle on the Story.
+        s.planOperationId = "op-stale"; s.planJobId = "stale-job-gone"; try ctx.save()
+
+        let plan = validPlan([m1, m2])
+        let renderer = FakeRenderer(.ok(okResult()))
+        let fake = FakeJobClient(.staleThenOk(plan))
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .ok(plan)), jobClient: fake,
+                                             renderer: renderer, context: ctx)
+        coord.create(for: s)          // reuses the stale planJobId first (reusedExistingJob == true)
+        await awaitSettled(coord)
+
+        guard case .completed = coord.state else {
+            return XCTFail("expected .completed after stale-job recovery, got \(coord.state)")
+        }
+        XCTAssertEqual(fake.submitCount, 1, "exactly one fresh submit after the stale 404 (no duplicate)")
+        XCTAssertGreaterThanOrEqual(fake.pollCount, 2, "first poll 404'd, second poll on the resubmitted job")
+        XCTAssertTrue(renderer.called)
     }
 
     // MARK: - Planner failures (never fabricate a plan)
@@ -427,6 +460,75 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         XCTAssertFalse(StoryCreationCoordinator.isOutputStale(output: output, story: s))
         a.asset?.relativePath = "media/stale-a-REPLACED.mov"
         XCTAssertTrue(StoryCreationCoordinator.isOutputStale(output: output, story: s))
+    }
+
+    // R7 regression: "Moment N" numbering for Customize/Revise must come from the PLANNER-USABLE set (local
+    // The PLANNER PAYLOAD set (usableNumberedMoments) is local-file + completed-AU only — a cloud-only shell or
+    // an un-analyzed Moment is not in moments[]. (This is the planner input filter, NOT the picker numbering.)
+    func test_usableNumbering_excludesCloudOnlyAndNoAUMoments() {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/num-1.mov", dur: 6); completeAU(m1, useful: [(0, 4)])  // usable
+        let m2 = momentWithFile(s, rel: "media/num-2.mov", dur: 6)                                    // file but NO AU
+        // A cloud-only shell: asset present but NO local file on disk + evicted (R7-C shape).
+        let shellAsset = AssetModel(relativePath: "media/evicted-shell.mov", durationSeconds: 6, source: .directed)
+        shellAsset.localAvailability = .evicted
+        let m3 = MomentModel(source: .directed, asset: shellAsset)
+        ctx.insert(shellAsset); ctx.insert(m3)
+        if let lnk = s.attach(m3) { ctx.insert(lnk) }
+        completeAU(m3, useful: [(0, 4)])   // has AU but no local bytes -> still not usable
+        try? ctx.save()
+
+        let usable = EditPlanRequestBuilder.usableNumberedMoments(for: s, context: ctx)
+        XCTAssertEqual(usable.map { $0.id }, [m1.id], "planner payload = only Moments with BOTH a local file AND completed AU")
+        _ = m2
+    }
+
+    // Owner P0: the PICKER / "Moment N" numbering must include EVERY linked Moment — cloud-only included — by
+    // stable StoryMomentLink order, with a localAvailable flag for the badge (never hidden, never renumbered by
+    // availability). This is what makes "Moment N" the same Moment on every device.
+    func test_pickerNumbering_includesAllLinkedMomentsWithAvailabilityFlag() {
+        let s = newStory()
+        let m1 = momentWithFile(s, rel: "media/all-1.mov", dur: 6); completeAU(m1, useful: [(0, 4)])  // local
+        // Cloud-only shell (no local bytes) — must STILL be numbered.
+        let shellAsset = AssetModel(relativePath: "media/all-cloud.mov", durationSeconds: 6, source: .directed)
+        shellAsset.localAvailability = .evicted
+        let m2 = MomentModel(source: .directed, asset: shellAsset)
+        ctx.insert(shellAsset); ctx.insert(m2)
+        if let lnk = s.attach(m2) { ctx.insert(lnk) }
+        try? ctx.save()
+
+        let numbering = StoryMomentNumbering(story: s.moments)
+        XCTAssertEqual(numbering.count, 2, "ALL linked Moments are numbered, cloud-only included")
+        XCTAssertEqual(numbering.id(forNumber: 1), m1.id)
+        XCTAssertEqual(numbering.id(forNumber: 2), m2.id, "cloud-only Moment keeps its stable number")
+        XCTAssertEqual(numbering.items.first { $0.id == m1.id }?.localAvailable, true)
+        XCTAssertEqual(numbering.items.first { $0.id == m2.id }?.localAvailable, false, "cloud-only -> cloud badge")
+    }
+
+    // invalid_after_repair ROOT-CAUSE regression: a directive referencing a Moment NOT in the planner payload
+    // (no AU yet, or cloud-only, or stale) is caught by the preflight so the app blocks honestly instead of
+    // submitting a doomed request. Proven against the real validator that such a directive -> invalid_after_repair.
+    func test_directiveEligibility_classifiesIneligibleReferences() throws {
+        let s = newStory()
+        let mOK = momentWithFile(s, rel: "media/elig-ok.mov", dur: 6); completeAU(mOK, useful: [(0, 4)])  // file+AU
+        let mNoAU = momentWithFile(s, rel: "media/elig-noau.mov", dur: 6)                                 // file, NO AU
+        // Cloud-only shell (no local bytes, backed up) -> restorable.
+        let shell = AssetModel(relativePath: "media/elig-cloud.mov", durationSeconds: 6, source: .directed)
+        shell.localAvailability = .evicted
+        let mCloud = MomentModel(source: .directed, asset: shell); mCloud.cloudMediaId = "cm-x"
+        ctx.insert(shell); ctx.insert(mCloud); if let l = s.attach(mCloud) { ctx.insert(l) }
+        try ctx.save()
+
+        var d = ResolvedDirectives(); d.opening = mNoAU.id; d.mustInclude = [mCloud.id]
+        s.creativeDirectivesJSON = d.toWireJSON(); try ctx.save()
+        let e = EditPlanRequestBuilder.directiveEligibility(for: s, context: ctx)
+        XCTAssertFalse(e.allEligible)
+        XCTAssertEqual(e.ineligibleNeedsAU, [mNoAU.id], "a local-but-unanalyzed referenced Moment needs AU")
+        XCTAssertEqual(e.ineligibleNeedsRestore, [mCloud.id], "a cloud-only referenced Moment needs restore")
+
+        var d2 = ResolvedDirectives(); d2.opening = mOK.id
+        s.creativeDirectivesJSON = d2.toWireJSON(); try ctx.save()
+        XCTAssertTrue(EditPlanRequestBuilder.directiveEligibility(for: s, context: ctx).allEligible)
     }
 
     // MARK: - Music-ready seam
