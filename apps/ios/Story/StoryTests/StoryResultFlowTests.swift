@@ -255,4 +255,38 @@ final class StoryResultFlowTests: XCTestCase {
         XCTAssertFalse(tech.lowercased().contains("instruction"))
         XCTAssertNotEqual(dir, tech)
     }
+
+    // MARK: - Revise preserves the base version's duration (not a stale Story intent target)
+
+    private func planJSON(targetSeconds: Double) -> String {
+        let plan = EditPlanV2(schemaVersion: "edit_plan/2", targetDurationSeconds: targetSeconds,
+                              outputFormat: "vertical", musicAssetId: nil, feasible: true,
+                              segments: [EditSegmentV2(order: 0, assetId: UUID().uuidString,
+                                                       sourceStartSeconds: 0, sourceEndSeconds: 3,
+                                                       outputDurationSeconds: 3, speed: 1.0,
+                                                       nativeAudio: "keep", musicAlignment: nil)])
+        let data = try! StoryContractCoding.encoder().encode(plan)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    /// A revise must target the base PLAN's target_duration_seconds (what it was planned at), so an 85s video
+    /// revises at 85s — never a stale Story intent target (the 16.5s bug that dropped 9 clips).
+    func test_baseTargetSeconds_prefersBasePlanTarget() {
+        let s = newStory()
+        let o = GeneratedOutputModel(title: s.title, durationSeconds: 85.055, momentIds: [],
+                                     editPlanJSON: planJSON(targetSeconds: 85.0))
+        o.story = s; ctx.insert(o)
+        XCTAssertEqual(StoryResultView.baseTargetSeconds(for: o), 85.0, accuracy: 0.001,
+                       "revise target = base plan's target_duration_seconds")
+    }
+
+    /// Legacy output with no stored plan JSON falls back to the rendered duration (never a short default).
+    func test_baseTargetSeconds_fallsBackToRenderedDuration() {
+        let s = newStory()
+        let o = GeneratedOutputModel(title: s.title, durationSeconds: 85.055, momentIds: [],
+                                     editPlanJSON: nil)
+        o.story = s; ctx.insert(o)
+        XCTAssertEqual(StoryResultView.baseTargetSeconds(for: o), 85.055, accuracy: 0.001,
+                       "no plan JSON -> rendered duration, not a stale/short target")
+    }
 }

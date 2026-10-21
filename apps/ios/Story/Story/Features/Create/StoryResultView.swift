@@ -622,6 +622,13 @@ struct StoryResultView: View {
         // chip mid-job — reading it again inside the Task could bind the revise to the wrong parent. The sheet
         // was opened on THIS version; the whole operation must use exactly it.
         let base = output
+        // A REVISE preserves the base version's DURATION — it edits the existing ~N-second video, it does not
+        // re-target a new length. Without this the build falls back to story.intentTargetDurationSeconds, which
+        // can be a STALE/unrelated value (e.g. 16.5s from earlier testing) while the base video is 85s: honoring
+        // opening/adjacency/ending at the wrong short target then forces the planner to DROP most clips, which
+        // the preservation backstop correctly rejects ("N clips you did not ask to remove were dropped"). The
+        // authoritative target is the base PLAN's own target_duration_seconds; fall back to the rendered length.
+        let reviseTarget = Self.baseTargetSeconds(for: base)
         let coord = reviseCoordinator ?? StoryCreationCoordinator(planner: EditPlannerService(), context: context)
         reviseCoordinator = coord
         reviseWorking = true
@@ -632,7 +639,7 @@ struct StoryResultView: View {
             // is re-resolved live (download + analysis) exactly as Change Music does. Nil => honestly no music.
             let music = await resolveBaseMusic(for: base)
             coord.reviseVersion(for: story, base: base, directives: directives,
-                                softDirection: instruction, music: music)
+                                softDirection: instruction, targetSeconds: reviseTarget, music: music)
             while coord.isCreating { try? await Task.sleep(nanoseconds: 200_000_000) }
             reviseWorking = false
             switch coord.state {
@@ -645,6 +652,20 @@ struct StoryResultView: View {
                 break   // cancelled / other — leave the current version displayed
             }
         }
+    }
+
+    /// The DURATION a revise must preserve: the base version's own target. Prefer the base executable plan's
+    /// `target_duration_seconds` (what it was planned at — authoritative), fall back to the rendered
+    /// `durationSeconds` when no plan JSON is stored. A revise edits the existing video; it never invents a new
+    /// length, so this is passed as the request target instead of letting build() fall back to the Story's
+    /// (possibly stale/unrelated) intentTargetDurationSeconds.
+    static func baseTargetSeconds(for base: GeneratedOutputModel) -> Double {
+        if let json = base.editPlanJSON, let data = json.data(using: .utf8),
+           let plan = try? StoryContractCoding.decoder().decode(EditPlanV2.self, from: data),
+           plan.targetDurationSeconds > 0 {
+            return plan.targetDurationSeconds
+        }
+        return base.durationSeconds
     }
 
     /// Re-resolve the base version's soundtrack so a Revise preserves its music. Reads the base output's
