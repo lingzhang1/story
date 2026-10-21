@@ -193,6 +193,22 @@ final class StoryResultFlowTests: XCTestCase {
         XCTAssertEqual(CustomizeYourStoryView.seedLength(editorialMode: "", hasRecommendedPoint: false), .custom)
     }
 
+    // Part B — persisted directives are rendered by stable Moment number so the user can see + clear them.
+    func test_savedDirectiveLines_rendersAllActiveDirectives() {
+        func nm(_ n: Int, _ id: UUID) -> NumberedMoment { NumberedMoment(number: n, id: id, durationSeconds: 5, relativePath: nil) }
+        let a = UUID(), b = UUID(), c = UUID()
+        let numbering = StoryMomentNumbering(ordered: [nm(1, a), nm(2, b), nm(3, c)])
+        var d = ResolvedDirectives()
+        d.opening = a; d.orderAdjacent = [[b, a]]; d.mustInclude = [a, b]; d.exclude = [c]
+        let lines = CustomizeYourStoryView.savedDirectiveLines(d, numbering: numbering)
+        XCTAssertTrue(lines.contains("Start with Moment 1"))
+        XCTAssertTrue(lines.contains("Moment 2 right after Moment 1"))
+        XCTAssertTrue(lines.contains("Exclude Moment 3"))
+        // must_include that is ALSO opening/ending is not double-listed; the standalone include (none here) omitted
+        XCTAssertFalse(lines.contains("Include Moment 1, Moment 2"))
+        XCTAssertTrue(CustomizeYourStoryView.savedDirectiveLines(nil, numbering: numbering).isEmpty)
+    }
+
     func test_customizeSeedSeconds_explicitTargetWins() {
         // The user's prior EXPLICIT target wins (provenance preserved), even over a recommendation.
         XCTAssertEqual(CustomizeYourStoryView.seedCustomSeconds(explicitTarget: 45, recommendedPoint: 30,

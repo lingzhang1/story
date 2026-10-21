@@ -466,6 +466,9 @@ struct CreateStoryPreviewView: View {
                 // (explicit custom seconds or the editorial mode) instead of silently resetting.
                 initialExplicitTargetSeconds: story.intentTargetDurationSeconds,
                 initialEditorialMode: story.editorialMode,
+                // Part B: surface ALL persisted structural directives (opening/adjacency/order/include/exclude)
+                // so the user can see + clear them, not just the must_include chips + soft text.
+                initialSavedDirectives: ResolvedDirectives.fromWireJSON(story.creativeDirectivesJSON),
                 onCreate: { seconds, sound, mode, approach, directives, soft, chipIds, music in
                     acceptCustomize(seconds: seconds, sound: sound, mode: mode, approach: approach,
                                     directives: directives, soft: soft, chipIds: chipIds, music: music) },
