@@ -15,10 +15,14 @@ final class StorySyncCoordinator {
     static let shared = StorySyncCoordinator()
 
     private let service: StorySyncing
+    private let artifacts: AIArtifactStore
     private var debounce: [UUID: Task<Void, Never>] = [:]   // per-story debounce tasks
     private let debounceNanos: UInt64 = 2_500_000_000       // ~2.5s
 
-    init(service: StorySyncing = StorySyncService()) { self.service = service }
+    init(service: StorySyncing = StorySyncService(), artifacts: AIArtifactStore = AIArtifactStore()) {
+        self.service = service
+        self.artifacts = artifacts
+    }
 
     // MARK: - dirty marking (called by mutation seams; hash-diff is the safety net)
 
@@ -65,11 +69,34 @@ final class StorySyncCoordinator {
 
         guard let accessToken = await token() else { return }   // offline/signed-out: stays dirty, retry later
         let gen = job.claimGeneration
-        let refs = StoryDocCodec.referencedCloudMediaIds(doc)
+        // R7 Phase 4: if the serialized doc would exceed the server's 350 KB ceiling, externalize the largest
+        // inline EditPlans to S3 (ai_artifact) and carry durable refs instead — version history is preserved,
+        // never capped/truncated. Proactive (before the PUT) so a known-large doc never wastes a round-trip; a
+        // 413 below is the belt-and-braces safety net. An externalize failure leaves the doc dirty for retry
+        // rather than pushing a doc that will 413 (never drops a version).
+        var outDoc = doc
+        let toExternalize = StoryDocCodec.plansToExternalize(doc)
+        if !toExternalize.isEmpty {
+            do {
+                var refs: [String: AIArtifactRef] = [:]
+                for plan in toExternalize {
+                    refs[plan.outputId] = try await artifacts.externalize(
+                        json: plan.json, accessToken: accessToken,
+                        sourceOutputId: plan.outputId, schemaVersion: plan.schemaVersion)
+                }
+                outDoc = StoryDocCodec.applyExternalizedRefs(doc, refs: refs)
+            } catch {
+                if let j2 = fetchJob(owner: owner, storyId: storyId, context: context), j2.claimGeneration == gen {
+                    j2.lastError = (error as? LocalizedError)?.errorDescription ?? "\(error)"; try? context.save()
+                }
+                return   // stay dirty; retry on the next trigger
+            }
+        }
+        let refs = StoryDocCodec.referencedCloudMediaIds(outDoc)
         do {
             let res = try await service.put(accessToken: accessToken, storyId: storyId.uuidString,
                                             baseRevision: job.baseRevision, mutationId: mutationId,
-                                            doc: doc, deleted: false, referencedCloudMediaIds: refs)
+                                            doc: outDoc, deleted: false, referencedCloudMediaIds: refs)
             // Rule 9: a stale callback (owner rebound/retry since) must not regress newer state.
             guard let j2 = fetchJob(owner: owner, storyId: storyId, context: context), j2.claimGeneration == gen else { return }
             j2.baseRevision = res.revision
@@ -158,17 +185,22 @@ final class StorySyncCoordinator {
                 let momentIds: [UUID] = ((srv.doc["moment_refs"] as? [[String: Any]]) ?? [])
                     .compactMap { ($0["moment_id"] as? String).flatMap(UUID.init) }
                 CloudHydrationGate.shared.beginStory(sid, moments: momentIds)
-                try apply(doc: srv.doc, deleted: srv.deleted, owner: owner, storyId: sid, context: context)
+                // R7 Phase 4: resolve any externalized EditPlans (edit_plan_ref -> verified JSON) BEFORE decode,
+                // then inline them so applyOutputs/applyDerived consume them unchanged. A ref that cannot be
+                // restored THROWS (caught by the retry catch below) — the version is never silently dropped and
+                // the doc is never decoded with a missing plan.
+                let srvDoc = try await resolveExternalized(srv.doc, accessToken: accessToken)
+                try apply(doc: srvDoc, deleted: srv.deleted, owner: owner, storyId: sid, context: context)
                 // R7: materialize the GeneratedOutput VERSION ROWS from the doc BEFORE applyDerived, so the
                 // exact per-output EditPlans in `derived.output_edit_plans` attach to rows that now exist. This
                 // is the decode half R7-C omitted — without it Device B has zero versions. Idempotent by
                 // output_id (no duplicates on re-pull). Never re-renders; R6 restores MP4 bytes on play.
-                StoryDocCodec.applyOutputs(srv.doc, storyId: sid, context: context)
+                StoryDocCodec.applyOutputs(srvDoc, storyId: sid, context: context)
                 // Restore derived AI caches (Guide/Coverage/Music/plans), PREFERRING the cloud copy over a
                 // provisional local one generated during the race (issue 4 §8). A user-authored music direction
                 // and genuinely dirty records are never clobbered (enforced inside applyDerived + the dirty
                 // guard above).
-                StoryDocCodec.applyDerived(srv.doc, storyId: sid, context: context, preferCloud: true)
+                StoryDocCodec.applyDerived(srvDoc, storyId: sid, context: context, preferCloud: true)
                 // Restore Moment Understanding from the account-level store (so AU is not re-run on B).
                 _ = await UnderstandingSync.shared.restore(momentIds: momentIds, context: context,
                                                            activeOwner: owner, token: token)
@@ -209,14 +241,24 @@ final class StorySyncCoordinator {
         _ = cloneStoryAsNew(story, context: context, owner: owner)    // preserve local draft as a separate Story
         // Adopt the server doc for the original.
         if let sDocJSON = job.conflictServerDocJSON,
-           let sDoc = (try? JSONSerialization.jsonObject(with: Data(sDocJSON.utf8))) as? [String: Any] {
+           let sDoc0 = (try? JSONSerialization.jsonObject(with: Data(sDocJSON.utf8))) as? [String: Any] {
+            // R7 Phase 4: resolve externalized EditPlans before adopting; if an artifact cannot be restored,
+            // ABORT the adopt (leave the conflict unresolved for retry) rather than adopt a doc missing a plan.
+            var sDoc = sDoc0
+            if !StoryDocCodec.externalizedRefs(sDoc0).isEmpty {
+                guard let accessToken = await token(),
+                      let resolved = try? await resolveExternalized(sDoc0, accessToken: accessToken) else {
+                    return   // keep the conflict; the user can retry Keep Both / Use Cloud when back online
+                }
+                sDoc = resolved
+            }
             try? apply(doc: sDoc, deleted: false, owner: owner, storyId: storyId, context: context)
             // Adopt the server's version rows + derived AI caches too (same as a clean pull) so the adopted
             // Story shows its versions/guide/coverage and never re-renders. Idempotent by output_id.
             StoryDocCodec.applyOutputs(sDoc, storyId: storyId, context: context)
             StoryDocCodec.applyDerived(sDoc, storyId: storyId, context: context, preferCloud: true)
             job.baseRevision = job.conflictServerRevision
-            job.lastSyncedHash = StoryDocCodec.contentHash(sDoc)
+            job.lastSyncedHash = StoryDocCodec.contentHash(sDoc0)   // hash the WIRE doc (what the server holds)
         }
         clearConflict(job); job.dirty = false; try? context.save()
         // The clone is a brand-new Story -> it will be pushed on its own next trigger.
@@ -259,6 +301,20 @@ final class StorySyncCoordinator {
     private func fetchJob(owner: String, storyId: UUID, context: ModelContext) -> StorySyncJobModel? {
         let key = StorySyncJobModel.makeKey(ownerAccountId: owner, storyId: storyId)
         return (try? context.fetch(FetchDescriptor<StorySyncJobModel>(predicate: #Predicate { $0.key == key })))?.first
+    }
+
+    /// R7 Phase 4: resolve every externalized EditPlan ref in a pulled doc to verified JSON and inline it, so
+    /// the decode path consumes a fully self-contained doc. A doc with no refs (the common case) returns
+    /// unchanged with zero network cost. THROWS if any referenced artifact cannot be restored — the caller
+    /// treats that as a retryable hydration failure (version history is never decoded with a missing plan).
+    private func resolveExternalized(_ doc: [String: Any], accessToken: String) async throws -> [String: Any] {
+        let refs = StoryDocCodec.externalizedRefs(doc)
+        if refs.isEmpty { return doc }
+        var resolved: [String: String] = [:]
+        for (oid, ref) in refs {
+            resolved[oid] = try await artifacts.resolve(ref, accessToken: accessToken)
+        }
+        return StoryDocCodec.inlineResolvedPlans(doc, resolved: resolved)
     }
 
     private func fetchStory(_ id: UUID, context: ModelContext) -> StoryModel? {

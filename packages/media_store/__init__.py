@@ -49,7 +49,16 @@ TERMINAL_STATES = {STATE_CLOUD_VERIFIED, STATE_UPLOAD_FAILED}
 # pre-R7-D record with no media_kind attribute reads as a moment).
 MEDIA_KIND_MOMENT = "moment"
 MEDIA_KIND_GENERATED = "generated"
-_MEDIA_KINDS = {MEDIA_KIND_MOMENT, MEDIA_KIND_GENERATED}
+# R7 Phase 4 — ai_artifact. An IMMUTABLE, content-addressed AI blob (an oversized validated EditPlan, or a
+# large Moment Understanding) externalized out of the 350 KB Story/Understanding document so version history is
+# NEVER silently capped or truncated. The storage key, presign, upload and verification paths are IDENTICAL to
+# a media original — content-addressed by uuid5(owner + sha256), account-scoped key, full-file SHA256 verified,
+# non-deleting retention — so no second artifact store, bucket, or table is introduced. The Story document then
+# carries a durable {cloud_media_id, sha256, bytes, schema_version} reference in place of the inline JSON; the
+# client resolves it by the normal verified download. Provenance uses source_output_id (for an EditPlan) and is
+# otherwise metadata-only.
+MEDIA_KIND_AI_ARTIFACT = "ai_artifact"
+_MEDIA_KINDS = {MEDIA_KIND_MOMENT, MEDIA_KIND_GENERATED, MEDIA_KIND_AI_ARTIFACT}
 
 
 def _normalize_media_kind(kind: str) -> str:

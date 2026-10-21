@@ -496,4 +496,160 @@ extension StorySyncTests {
         let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>())
         for o in outs { XCTAssertEqual(o.ownerAccountId, "B", "no cross-account output ownership") }
     }
+
+    // ========================================================================================================
+    // R7 Phase 4 — ai_artifact externalization. Oversized EditPlans move to S3 so version history is never
+    // capped; Device B resolves them (size+sha256 verified) before decode. No version is silently dropped.
+    // ========================================================================================================
+
+    // A fake media uploader/downloader backing AIArtifactStore: records bytes by sha and serves them back with
+    // the SERVER-authoritative size/sha, so the real verification path runs end to end (no network).
+    final class FakeArtifactIO: MediaUploading, MediaDownloading, @unchecked Sendable {
+        var store: [String: (data: Data, sha: String)] = [:]     // cloud_media_id -> bytes
+        var uploads = 0
+        private func cmid(_ sha: String) -> String { "art-\(sha.prefix(12))" }   // deterministic by content
+
+        // MediaUploading (only the single-PUT path is used by AIArtifactStore)
+        func initiate(accessToken: String, sha256: String, size: Int, deviceAssetId: String,
+                      sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                      contentType: String) async throws -> MediaInitiateResult {
+            XCTAssertEqual(mediaKind, CloudMediaKind.aiArtifact)
+            XCTAssertEqual(contentType, "application/json")
+            let id = cmid(sha256)
+            // reserve the slot keyed by content sha (idempotent)
+            if store[id] == nil { store[id] = (Data(), sha256) }
+            return MediaInitiateResult(cloudMediaId: id, uploadURL: URL(string: "https://s3/\(id)")!, created: true)
+        }
+        func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {
+            uploads += 1
+            let data = try Data(contentsOf: fileURL)
+            store[cmid(sha256Hex)] = (data, sha256Hex)
+        }
+        func complete(accessToken: String, cloudMediaId: String) async throws { /* verified */ }
+        func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
+                               sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                               contentType: String) async throws -> MultipartInitiateResult { fatalError("unused") }
+        func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] { [:] }
+        func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
+        func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String, contentType: String) async throws {}
+        func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
+
+        // MediaDownloading
+        func presignDownload(accessToken: String, cloudMediaId: String) async throws -> MediaDownloadTarget {
+            guard let rec = store[cloudMediaId] else { throw MediaDownloadError.notFound }
+            return MediaDownloadTarget(url: URL(string: "https://s3/\(cloudMediaId)")!, expiresIn: 60,
+                                       expectedSize: rec.data.count, expectedSha256Hex: rec.sha,
+                                       contentType: "application/json")
+        }
+        func download(target: MediaDownloadTarget, to destURL: URL, progress: ((Double) -> Void)?) async throws {
+            // serve the stored bytes; AIArtifactStore re-verifies sha after reading them back
+            guard let rec = store.values.first(where: { $0.sha == target.expectedSha256Hex }) else { throw MediaDownloadError.notFound }
+            try rec.data.write(to: destURL, options: .atomic)
+        }
+        func listMedia(accessToken: String) async throws -> [CloudMediaRecord] { [] }
+    }
+
+    private func bigJSON(_ n: Int) -> String { "{\"shots\":\"" + String(repeating: "s", count: n) + "\"}" }
+
+    // Pure transform: an under-budget doc externalizes nothing (no cap/truncation ever for a small doc).
+    func test_p4_small_doc_externalizes_nothing() {
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+                                  "derived": ["output_edit_plans": [["output_id": "A", "edit_plan_json": "{\"x\":1}"]]]]
+        XCTAssertTrue(StoryDocCodec.plansToExternalize(doc).isEmpty)
+    }
+
+    // Pure transform: an over-budget doc picks the LARGEST plan first, and the ref round-trips back to identical JSON.
+    func test_p4_externalize_largest_first_and_inline_roundtrip() {
+        let big = bigJSON(320_000); let small = bigJSON(50_000)
+        let doc: [String: Any] = ["schema_version": "story_doc/2",
+            "derived": ["output_edit_plans": [["output_id": "A", "edit_plan_json": big],
+                                              ["output_id": "B", "edit_plan_json": small]]]]
+        let picks = StoryDocCodec.plansToExternalize(doc)
+        XCTAssertEqual(picks.first?.outputId, "A", "largest externalized first")
+        let ref = AIArtifactRef(cloudMediaId: "cmid-A", sha256: "abc", bytes: big.utf8.count, schemaVersion: "edit_plan/2")
+        let rewritten = StoryDocCodec.applyExternalizedRefs(doc, refs: ["A": ref])
+        // The doc now carries a ref, not the inline bytes, and it's in referenced_cloud_media_ids.
+        XCTAssertTrue(StoryDocCodec.referencedCloudMediaIds(rewritten).contains("cmid-A"))
+        let ext = StoryDocCodec.externalizedRefs(rewritten)
+        XCTAssertEqual(ext.count, 1); XCTAssertEqual(ext.first?.ref.cloudMediaId, "cmid-A")
+        // Inlining the resolved JSON reproduces the original payload.
+        let inlined = StoryDocCodec.inlineResolvedPlans(rewritten, resolved: ["A": big])
+        let plans = ((inlined["derived"] as! [String: Any])["output_edit_plans"] as! [[String: Any]])
+        let a = plans.first { $0["output_id"] as? String == "A" }!
+        XCTAssertEqual(a["edit_plan_json"] as? String, big)
+        XCTAssertNil(a["edit_plan_ref"])
+    }
+
+    // AIArtifactStore: upload then resolve returns the EXACT bytes (size+sha256 verified through the real path).
+    func test_p4_artifact_store_roundtrip_verified() async throws {
+        let io = FakeArtifactIO()
+        let store = AIArtifactStore(uploader: io, downloader: io)
+        let json = bigJSON(40_000)
+        let ref = try await store.externalize(json: json, accessToken: "t", sourceOutputId: "out-1", schemaVersion: "edit_plan/2")
+        XCTAssertEqual(ref.bytes, json.utf8.count)
+        let back = try await store.resolve(ref, accessToken: "t")
+        XCTAssertEqual(back, json)
+    }
+
+    // AIArtifactStore: a tampered/mismatched sha fails integrity verification (explicit throw, never trusted).
+    func test_p4_artifact_store_integrity_failure_throws() async throws {
+        let io = FakeArtifactIO()
+        let store = AIArtifactStore(uploader: io, downloader: io)
+        let json = bigJSON(20_000)
+        let good = try await store.externalize(json: json, accessToken: "t", sourceOutputId: "o", schemaVersion: "edit_plan/2")
+        // Corrupt the stored bytes but keep the ref's declared sha -> resolve must throw.
+        let tampered = AIArtifactRef(cloudMediaId: good.cloudMediaId, sha256: String(repeating: "0", count: 64),
+                                     bytes: good.bytes, schemaVersion: good.schemaVersion)
+        do { _ = try await store.resolve(tampered, accessToken: "t"); XCTFail("expected integrity failure") }
+        catch { /* expected */ }
+    }
+
+    // Coordinator PUSH: an over-budget doc externalizes before the PUT; the server receives a ref (not inline
+    // bytes) and the externalized artifact is uploaded exactly once.
+    func test_p4_push_externalizes_oversized_plan() async throws {
+        let f = FakeSync(); let io = FakeArtifactIO()
+        let c = StorySyncCoordinator(service: f, artifacts: AIArtifactStore(uploader: io, downloader: io))
+        let s = try makeStory(owner: "A", title: "Big")
+        // One output with a huge exact edit plan -> over the 300 KB budget.
+        let o = GeneratedOutputModel(id: UUID(), title: "v1", durationSeconds: 30, momentIds: [],
+                                     relativeFilePath: "out/v1.mp4", sourceMomentIds: [], sourceFingerprint: "fp",
+                                     editPlanProvenance: "", outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+                                     isStale: false, soundtrackTitle: nil, versionId: UUID(), parentVersionId: nil,
+                                     operationType: "original", editPlanJSON: bigJSON(330_000))
+        o.story = s; o.ownerAccountId = "A"; ctx.insert(o); try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+        XCTAssertEqual(io.uploads, 1, "oversized plan externalized exactly once")
+        let serverDoc = f.rows[s.id.uuidString]!.doc
+        let plans = ((serverDoc["derived"] as! [String: Any])["output_edit_plans"] as! [[String: Any]])
+        XCTAssertNotNil(plans.first?["edit_plan_ref"], "server doc carries a ref")
+        XCTAssertNil(plans.first?["edit_plan_json"], "inline bytes removed from the wire doc")
+    }
+
+    // Coordinator ROUND-TRIP: push externalizes; a fresh pull (Device B) resolves the ref and materializes the
+    // version row with the EXACT plan restored — no version dropped, no re-render.
+    func test_p4_pull_resolves_externalized_plan_into_version() async throws {
+        let f = FakeSync(); let io = FakeArtifactIO()
+        let c = StorySyncCoordinator(service: f, artifacts: AIArtifactStore(uploader: io, downloader: io))
+        let s = try makeStory(owner: "A", title: "Big")
+        let oid = UUID()
+        let plan = bigJSON(330_000)
+        let o = GeneratedOutputModel(id: oid, title: "v1", durationSeconds: 30, momentIds: [],
+                                     relativeFilePath: "out/v1.mp4", sourceMomentIds: [], sourceFingerprint: "fp",
+                                     editPlanProvenance: "", outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+                                     isStale: false, soundtrackTitle: nil, versionId: oid, parentVersionId: nil,
+                                     operationType: "original", editPlanJSON: plan)
+        o.story = s; o.ownerAccountId = "A"; ctx.insert(o); try ctx.save()
+        await c.pushIfDirty(storyId: s.id, context: ctx, owner: "A", token: { "tok" })
+
+        // Device B: a fresh store pulls the same account.
+        let ctxB = ModelContext(container)
+        // remove the local Story/output so B starts empty for this id
+        for row in try ctxB.fetch(FetchDescriptor<StoryModel>()) { ctxB.delete(row) }
+        for row in try ctxB.fetch(FetchDescriptor<GeneratedOutputModel>()) { ctxB.delete(row) }
+        try ctxB.save()
+        await c.pull(context: ctxB, activeOwner: "A", token: { "tok" })
+        let outs = try ctxB.fetch(FetchDescriptor<GeneratedOutputModel>(predicate: #Predicate { $0.id == oid }))
+        XCTAssertEqual(outs.count, 1, "version row materialized on Device B")
+        XCTAssertEqual(outs.first?.editPlanJSON, plan, "exact externalized plan restored (no re-plan)")
+    }
 }

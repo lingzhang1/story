@@ -128,6 +128,14 @@ enum StoryDocCodec {
         for o in (doc["outputs"] as? [[String: Any]]) ?? [] {
             if let c = o["cloud_media_id"] as? String, !c.isEmpty { ids.append(c) }
         }
+        // R7 Phase 4: an externalized EditPlan is a dependency too — the server must find it verified.
+        if let derived = doc["derived"] as? [String: Any],
+           let plans = derived["output_edit_plans"] as? [[String: Any]] {
+            for p in plans {
+                if let r = p["edit_plan_ref"] as? [String: Any],
+                   let c = r["cloud_media_id"] as? String, !c.isEmpty { ids.append(c) }
+            }
+        }
         return Array(Set(ids))
     }
 
@@ -422,5 +430,102 @@ extension StoryDocCodec {
         }
         try? context.save()
         return created
+    }
+}
+
+
+// MARK: - story_doc/2 Phase 4 — ai_artifact externalization (pure doc transforms)
+// Keeps the codec free of network I/O: these helpers DECIDE what to externalize and rewrite the doc; the
+// StorySyncCoordinator performs the actual upload/download via AIArtifactStore and feeds the results back.
+extension StoryDocCodec {
+    /// The server's hard ceiling; we externalize before reaching it (leave headroom for metadata growth).
+    static let docSizeHardLimit = 350_000
+    static let docSizeBudget = 300_000          // externalize when the serialized doc exceeds this
+    static let planExternalizeMinBytes = 8_000  // only a plan at least this large is worth externalizing
+
+    /// Serialized size of a doc in bytes (sorted keys = stable, matches contentHash serialization).
+    static func serializedSize(_ doc: [String: Any]) -> Int {
+        ((try? JSONSerialization.data(withJSONObject: doc, options: [.sortedKeys])) ?? Data()).count
+    }
+
+    /// One plan that must be externalized: its output_id + the exact JSON to upload. Returned to the
+    /// coordinator, which uploads each and calls `applyExternalizedRefs` with the resulting references.
+    struct PlanToExternalize: Equatable {
+        let outputId: String
+        let json: String
+        let schemaVersion: String
+    }
+
+    /// If `doc` exceeds the size budget, pick the LARGEST inline edit plans to externalize until the doc fits
+    /// (or no further candidates remain). Returns the plans whose bytes must be uploaded. Does NOT mutate the
+    /// doc — the coordinator uploads these, then calls `applyExternalizedRefs` to rewrite the doc. Returns [] when
+    /// the doc already fits or there is nothing worth externalizing (never truncates / caps versions).
+    static func plansToExternalize(_ doc: [String: Any]) -> [PlanToExternalize] {
+        guard serializedSize(doc) > docSizeBudget else { return [] }
+        guard let derived = doc["derived"] as? [String: Any],
+              let plans = derived["output_edit_plans"] as? [[String: Any]] else { return [] }
+        // Candidates: still-inline plans, largest first.
+        let candidates: [(oid: String, json: String, size: Int, schema: String)] = plans.compactMap { p in
+            guard let oid = p["output_id"] as? String,
+                  let json = p["edit_plan_json"] as? String, !json.isEmpty else { return nil }
+            let size = json.utf8.count
+            guard size >= planExternalizeMinBytes else { return nil }
+            let schema = (p["edit_plan_schema_version"] as? String) ?? "edit_plan/2"
+            return (oid, json, size, schema)
+        }.sorted { $0.size > $1.size }
+
+        var out: [PlanToExternalize] = []
+        var projected = serializedSize(doc)
+        for c in candidates {
+            if projected <= docSizeBudget { break }
+            out.append(PlanToExternalize(outputId: c.oid, json: c.json, schemaVersion: c.schema))
+            // Replacing inline JSON (size) with a compact ref (~160 bytes) shrinks the doc by roughly `size`.
+            projected -= max(0, c.size - 200)
+        }
+        return out
+    }
+
+    /// Rewrite `doc`, replacing each externalized plan's inline `edit_plan_json` with a durable `edit_plan_ref`
+    /// (keyed by output_id). Version history is preserved — the entry stays, only its payload moves to S3.
+    static func applyExternalizedRefs(_ doc: [String: Any], refs: [String: AIArtifactRef]) -> [String: Any] {
+        guard !refs.isEmpty, var derived = doc["derived"] as? [String: Any],
+              var plans = derived["output_edit_plans"] as? [[String: Any]] else { return doc }
+        for i in plans.indices {
+            guard let oid = plans[i]["output_id"] as? String, let ref = refs[oid] else { continue }
+            plans[i].removeValue(forKey: "edit_plan_json")   // bytes now live in S3
+            plans[i]["edit_plan_ref"] = ref.asDict
+        }
+        derived["output_edit_plans"] = plans
+        var d = doc; d["derived"] = derived
+        return d
+    }
+
+    /// Every externalized reference in a pulled doc that must be resolved before decode. Empty for an inline
+    /// (fully self-contained) doc — the common case — so the pull path pays nothing extra.
+    static func externalizedRefs(_ doc: [String: Any]) -> [(outputId: String, ref: AIArtifactRef)] {
+        guard let derived = doc["derived"] as? [String: Any],
+              let plans = derived["output_edit_plans"] as? [[String: Any]] else { return [] }
+        return plans.compactMap { p in
+            guard let oid = p["output_id"] as? String,
+                  let rd = p["edit_plan_ref"] as? [String: Any], let ref = AIArtifactRef(rd) else { return nil }
+            return (oid, ref)
+        }
+    }
+
+    /// Inline resolved plan JSON back into the doc (replacing `edit_plan_ref` with `edit_plan_json`) so the
+    /// existing decode path (applyOutputs / applyDerived) consumes it unchanged. The coordinator resolves every
+    /// ref FIRST and only calls this when ALL are present — a missing ref is an explicit decode failure
+    /// upstream, never a silently dropped version.
+    static func inlineResolvedPlans(_ doc: [String: Any], resolved: [String: String]) -> [String: Any] {
+        guard var derived = doc["derived"] as? [String: Any],
+              var plans = derived["output_edit_plans"] as? [[String: Any]] else { return doc }
+        for i in plans.indices {
+            guard let oid = plans[i]["output_id"] as? String, let json = resolved[oid] else { continue }
+            plans[i].removeValue(forKey: "edit_plan_ref")
+            plans[i]["edit_plan_json"] = json
+        }
+        derived["output_edit_plans"] = plans
+        var d = doc; d["derived"] = derived
+        return d
     }
 }

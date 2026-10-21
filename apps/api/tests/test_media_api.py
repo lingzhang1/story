@@ -525,3 +525,65 @@ def test_r7d_09_generated_multipart_records_kind_and_output_id(mpuctx):
     rec = store.get("story-alice", cmid)
     assert rec["media_kind"] == "generated" and rec["source_output_id"] == "out-mp"
     assert rec["upload_mode"] == "multipart"
+
+
+# ============================================================================================================
+# R7 Phase 4 — ai_artifact externalization: the SAME content-addressed pipeline accepts media_kind="ai_artifact"
+# (an oversized validated EditPlan or large Understanding) with source_output_id provenance and an
+# application/json content type. No second store — the Story doc carries a durable verified reference.
+# ============================================================================================================
+
+def test_r7p4_01_ai_artifact_single_initiate_records_kind_and_output_id(ctx):
+    client, _, store = ctx
+    r = client.post("/v1/media/initiate", headers=_auth("alice"),
+                    json={"content_sha256": "b" * 64, "size_bytes": 120000,
+                          "content_type": "application/json",
+                          "media_kind": "ai_artifact", "source_output_id": "output-xl-1"})
+    assert r.status_code == 200
+    cmid = r.json()["cloud_media_id"]
+    rec = store.get("story-alice", cmid)
+    assert rec["media_kind"] == "ai_artifact"
+    assert rec["source_output_id"] == "output-xl-1"
+    assert rec["content_type"] == "application/json"
+    assert rec.get("source_moment_id", "") == ""
+
+
+def test_r7p4_02_ai_artifact_verify_and_download_roundtrip(ctx):
+    client, s3, _ = ctx
+    sha = "7" * 64
+    r = client.post("/v1/media/initiate", headers=_auth("alice"),
+                    json={"content_sha256": sha, "size_bytes": 200000,
+                          "content_type": "application/json",
+                          "media_kind": "ai_artifact", "source_output_id": "out-xl-2"})
+    cmid = r.json()["cloud_media_id"]
+    key = _media.object_key("story-alice", cmid)
+    s3.put(key, 200000, sha)
+    c = client.post(f"/v1/media/{cmid}/complete", headers=_auth("alice"))
+    assert c.status_code == 200 and c.json()["state"] == "cloud_verified"
+    # Device B resolves the externalized plan by the SERVER-AUTHORITATIVE size + full-file sha.
+    d = client.get(f"/v1/media/{cmid}/download", headers=_auth("alice")).json()
+    assert d["size_bytes"] == 200000 and d["content_sha256"] == sha and d["url"]
+
+
+def test_r7p4_03_ai_artifact_appears_in_list_with_kind(ctx):
+    client, _, _ = ctx
+    client.post("/v1/media/initiate", headers=_auth("alice"),
+                json={"content_sha256": "9" * 64, "size_bytes": 90000,
+                      "content_type": "application/json",
+                      "media_kind": "ai_artifact", "source_output_id": "out-xl-3"})
+    media = client.get("/v1/media", headers=_auth("alice")).json()["media"]
+    art = [m for m in media if m["media_kind"] == "ai_artifact"]
+    assert len(art) == 1 and art[0]["source_output_id"] == "out-xl-3"
+
+
+def test_r7p4_04_cross_account_ai_artifact_download_denied(ctx):
+    client, s3, _ = ctx
+    sha = "5" * 64
+    cmid = client.post("/v1/media/initiate", headers=_auth("alice"),
+                       json={"content_sha256": sha, "size_bytes": 50000,
+                             "content_type": "application/json",
+                             "media_kind": "ai_artifact", "source_output_id": "out-1"}).json()["cloud_media_id"]
+    s3.put(_media.object_key("story-alice", cmid), 50000, sha)
+    client.post(f"/v1/media/{cmid}/complete", headers=_auth("alice"))
+    # bob cannot reach alice's externalized plan.
+    assert client.get(f"/v1/media/{cmid}/download", headers=_auth("bob")).status_code == 404

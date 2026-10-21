@@ -75,6 +75,9 @@ protocol MediaUploading {
 enum CloudMediaKind {
     static let moment = "moment"
     static let generated = "generated"
+    // R7 Phase 4 — an externalized immutable AI blob (oversized validated EditPlan) uploaded through this SAME
+    // pipeline so version history is never capped when a Story doc would exceed the 350 KB server limit.
+    static let aiArtifact = "ai_artifact"
 }
 
 // Back-compat defaults: existing R4 moment callers keep their exact call shape (moment kind, quicktime,
