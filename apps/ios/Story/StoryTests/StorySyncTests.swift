@@ -361,3 +361,139 @@ extension StorySyncTests {
         XCTAssertEqual(g?.guideJSON, "{\"local\":1}", "a dirty record's local derived state is preserved")
     }
 }
+
+// R7 — GeneratedOutput VERSION ROW materialization (the decode half R7-C omitted). These cover the exact
+// Device-B symptom: versions must appear in the Result/version UI, with lineage + exact EditPlans + MP4 cloud
+// refs, and a repeated pull must NOT duplicate a version.
+extension StorySyncTests {
+    @discardableResult
+    private func addOutput(to s: StoryModel, title: String, op: String = "original",
+                           parent: UUID? = nil, plan: String? = nil, cmid: String? = nil,
+                           verified: Bool = false) -> GeneratedOutputModel {
+        let o = GeneratedOutputModel(
+            title: title, durationSeconds: 30, momentIds: [],
+            relativeFilePath: "rendered/\(UUID().uuidString).mp4",
+            sourceMomentIds: [], sourceFingerprint: "fp-\(title)",
+            editPlanProvenance: "edit_plan/2 bedrock 30s",
+            outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+            operationType: op, editPlanJSON: plan,
+            soundtrackTitle: "Song", soundtrackRole: "bed", nativeAudioPriority: "low",
+            soundPreferenceRaw: "music", musicAssetRef: "provider:t1",
+            parentVersionId: parent)
+        o.story = s; o.ownerAccountId = s.ownerAccountId
+        o.cloudMediaId = cmid
+        o.cloudVerifiedAt = verified ? .now : nil
+        ctx.insert(o); try? ctx.save()
+        return o
+    }
+
+    // Encode carries FULL version lineage (version_id / parent_version_id / operation_type) + render shape.
+    func test_encode_outputs_carry_lineage() throws {
+        let s = try makeStory(owner: "A", title: "Lineage")
+        let v1 = addOutput(to: s, title: "V1")
+        _ = addOutput(to: s, title: "V2", op: "change_music", parent: v1.versionId)
+        let doc = StoryDocCodec.encode(story: s)
+        let outs = (doc["outputs"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(outs.count, 2)
+        let second = outs[1]
+        XCTAssertEqual(second["operation_type"] as? String, "change_music")
+        XCTAssertEqual(second["parent_version_id"] as? String, v1.versionId.uuidString)
+        XCTAssertEqual(second["output_format"] as? String, "vertical")
+        XCTAssertEqual((second["render_width"] as? NSNumber)?.doubleValue, 1080)
+        XCTAssertEqual(second["music_asset_ref"] as? String, "provider:t1")
+        // Still never a local path.
+        let json = String(data: try JSONSerialization.data(withJSONObject: doc), encoding: .utf8)!
+        XCTAssertFalse(json.contains("rendered/"), "relative_file_path must NOT be serialized as a cloud ref")
+    }
+
+    // applyOutputs CREATES version rows on a device that lacks them (Device B), preserving lineage + exact plan.
+    func test_applyOutputs_creates_rows_with_lineage_and_plan() throws {
+        // Build a doc on "A" with two versions + exact plans, then materialize into an EMPTY "B" store.
+        let sA = try makeStory(owner: "A", title: "Src")
+        let v1 = addOutput(to: sA, title: "V1", plan: "{\"plan\":1}")
+        _ = addOutput(to: sA, title: "V2", op: "change_music", parent: v1.versionId, plan: "{\"plan\":2}",
+                      cmid: "cm-out-2", verified: true)
+        let doc = StoryDocCodec.encodeFull(story: sA, context: ctx)
+        let sid = sA.id
+        // Simulate Device B: delete the outputs locally (story remains, as apply() would create it).
+        for o in try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()) { ctx.delete(o) }
+        try ctx.save()
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).count, 0)
+
+        let created = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        XCTAssertEqual(created, 2, "both version rows materialized on Device B")
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).sorted { $0.createdAt < $1.createdAt }
+        XCTAssertEqual(outs.count, 2)
+        XCTAssertEqual(outs[0].editPlanJSON, "{\"plan\":1}", "exact EditPlan restored verbatim")
+        XCTAssertEqual(outs[1].operationType, "change_music")
+        XCTAssertEqual(outs[1].parentVersionId, v1.versionId, "lineage parent preserved")
+        XCTAssertEqual(outs[1].cloudMediaId, "cm-out-2", "MP4 cloud ref synced")
+        XCTAssertNotNil(outs[1].cloudVerifiedAt)
+        XCTAssertNil(outs[1].relativeFilePath, "bytes are cloud-only until R6 restore; no fabricated local path")
+        XCTAssertEqual(outs[0].story?.id, sid, "output linked to its Story")
+        XCTAssertEqual(outs[0].ownerAccountId, "A")
+    }
+
+    // Repeated pull/apply must NOT duplicate versions (rule 12) and must not regress a present plan.
+    func test_applyOutputs_idempotent_no_duplicates() throws {
+        let s = try makeStory(owner: "A", title: "Idem")
+        let v1 = addOutput(to: s, title: "V1", plan: "{\"plan\":1}")
+        let doc = StoryDocCodec.encodeFull(story: s, context: ctx)
+        let sid = s.id
+        // Apply twice (second pull).
+        _ = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        _ = StoryDocCodec.applyOutputs(doc, storyId: sid, context: ctx)
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>())
+        XCTAssertEqual(outs.count, 1, "re-pull must not duplicate a version")
+        XCTAssertEqual(outs.first?.id, v1.id)
+        XCTAssertEqual(outs.first?.editPlanJSON, "{\"plan\":1}")
+    }
+
+    // Full clean PULL materializes the version rows end-to-end (via the coordinator), zero re-render.
+    func test_pull_materializes_output_versions() async throws {
+        let f = FakeSync(); let c = coord(f)
+        // Compose a cloud doc with an output + its exact plan in derived.output_edit_plans.
+        let sid = UUID().uuidString
+        let oid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 4,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "B-Versions", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": oid, "title": "The Film", "duration_seconds": 42.0,
+                               "operation_type": "original", "version_id": oid,
+                               "output_format": "vertical", "render_width": 1080.0, "render_height": 1920.0,
+                               "cloud_media_id": "cm-film", "cloud_verified": true]],
+                  "derived": ["output_edit_plans": [["output_id": oid, "edit_plan_json": "{\"exact\":true}"]]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        guard let suid = UUID(uuidString: sid), let ouid = UUID(uuidString: oid) else { return XCTFail() }
+        let story = try ctx.fetch(FetchDescriptor<StoryModel>()).first { $0.id == suid }
+        XCTAssertEqual(story?.title, "B-Versions")
+        let out = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>()).first { $0.id == ouid }
+        XCTAssertNotNil(out, "the version row must appear in the Result/version UI after pull")
+        XCTAssertEqual(out?.durationSeconds, 42.0)
+        XCTAssertEqual(out?.editPlanJSON, "{\"exact\":true}", "exact EditPlan attached (never re-planned)")
+        XCTAssertEqual(out?.cloudMediaId, "cm-film", "MP4 cloud ref present for R6 restore-on-play")
+        XCTAssertEqual(out?.story?.id, suid)
+    }
+
+    // Account isolation: outputs created under a pull are owned by the active account only.
+    func test_applyOutputs_owner_scoped() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString; let oid = UUID().uuidString
+        f.rows[sid] = FakeSync.Row(
+            revision: 1,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "Owned", "status": "active",
+                            "intent": ["raw_text": "", "theme": "", "tone": "", "summary": ""]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": oid, "title": "X", "duration_seconds": 10.0,
+                               "operation_type": "original", "version_id": oid]]],
+            mut: "x", digest: "x", deleted: false)
+        await c.pull(context: ctx, activeOwner: "B", token: { "tok" })
+        let outs = try ctx.fetch(FetchDescriptor<GeneratedOutputModel>())
+        for o in outs { XCTAssertEqual(o.ownerAccountId, "B", "no cross-account output ownership") }
+    }
+}

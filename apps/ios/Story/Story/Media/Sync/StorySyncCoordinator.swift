@@ -159,6 +159,11 @@ final class StorySyncCoordinator {
                     .compactMap { ($0["moment_id"] as? String).flatMap(UUID.init) }
                 CloudHydrationGate.shared.beginStory(sid, moments: momentIds)
                 try apply(doc: srv.doc, deleted: srv.deleted, owner: owner, storyId: sid, context: context)
+                // R7: materialize the GeneratedOutput VERSION ROWS from the doc BEFORE applyDerived, so the
+                // exact per-output EditPlans in `derived.output_edit_plans` attach to rows that now exist. This
+                // is the decode half R7-C omitted — without it Device B has zero versions. Idempotent by
+                // output_id (no duplicates on re-pull). Never re-renders; R6 restores MP4 bytes on play.
+                StoryDocCodec.applyOutputs(srv.doc, storyId: sid, context: context)
                 // Restore derived AI caches (Guide/Coverage/Music/plans), PREFERRING the cloud copy over a
                 // provisional local one generated during the race (issue 4 §8). A user-authored music direction
                 // and genuinely dirty records are never clobbered (enforced inside applyDerived + the dirty
@@ -206,6 +211,10 @@ final class StorySyncCoordinator {
         if let sDocJSON = job.conflictServerDocJSON,
            let sDoc = (try? JSONSerialization.jsonObject(with: Data(sDocJSON.utf8))) as? [String: Any] {
             try? apply(doc: sDoc, deleted: false, owner: owner, storyId: storyId, context: context)
+            // Adopt the server's version rows + derived AI caches too (same as a clean pull) so the adopted
+            // Story shows its versions/guide/coverage and never re-renders. Idempotent by output_id.
+            StoryDocCodec.applyOutputs(sDoc, storyId: storyId, context: context)
+            StoryDocCodec.applyDerived(sDoc, storyId: storyId, context: context, preferCloud: true)
             job.baseRevision = job.conflictServerRevision
             job.lastSyncedHash = StoryDocCodec.contentHash(sDoc)
         }

@@ -73,16 +73,38 @@ enum StoryDocCodec {
             ]
         }
 
-        // GeneratedOutput METADATA + lineage (R7-C: metadata only; cloud_media_id is nil until R7-D backup).
+        // GeneratedOutput ROWS — full version lineage so Device B materializes the EXACT version list (R7).
+        // Each row is a version: version_id + parent_version_id + operation_type define the lineage DAG; the
+        // exact validated EditPlanV2 rides in derived.output_edit_plans (verbatim, never re-planned). The
+        // rendered-MP4 cloud ref is cloud_media_id + cloud_verified (R7-D). NO device-local path is carried as
+        // an authoritative cloud reference — relative_file_path is a RESTORE HINT only (R6 re-mints its own).
         let outputs: [[String: Any]] = s.generatedOutputs.sorted { $0.createdAt < $1.createdAt }.map { o in
             [
                 "output_id": o.id.uuidString,
                 "title": o.title,
                 "duration_seconds": o.durationSeconds,
+                "created_at": o.createdAt.timeIntervalSince1970,
                 "source_moment_ids": (o.sourceMomentIds.isEmpty ? o.momentIds : o.sourceMomentIds).map { $0.uuidString },
+                "moment_ids": o.momentIds.map { $0.uuidString },
                 "source_fingerprint": o.sourceFingerprint,
                 "edit_plan_provenance": o.editPlanProvenance,
-                "cloud_media_id": (o.cloudMediaId as Any),     // R7-D: the uploaded MP4's media record (nil until backed up)
+                // Version lineage (M-e versioning foundation).
+                "version_id": o.versionId.uuidString,
+                "parent_version_id": (o.parentVersionId?.uuidString as Any),
+                "operation_type": o.operationType,
+                // Render shape (echoed from the EditPlan/RenderResult; reproduces the Result UI without re-render).
+                "output_format": o.outputFormat,
+                "render_width": o.renderWidth,
+                "render_height": o.renderHeight,
+                "is_stale": o.isStale,
+                "soundtrack_title": (o.soundtrackTitle as Any),
+                // Music mix knobs + soundtrack identity (re-applied verbatim on a soundtrack-only re-render).
+                "soundtrack_role": (o.soundtrackRole as Any),
+                "native_audio_priority": (o.nativeAudioPriority as Any),
+                "sound_preference_raw": (o.soundPreferenceRaw as Any),
+                "music_asset_ref": (o.musicAssetRef as Any),
+                // R7-D: the uploaded MP4's media record (nil until backed up). NEVER a local path.
+                "cloud_media_id": (o.cloudMediaId as Any),
                 "cloud_verified": (o.cloudVerifiedAt != nil),
             ]
         }
@@ -286,5 +308,119 @@ extension StoryDocCodec {
         }
         try? context.save()
         return n
+    }
+
+    /// Materialize the Story's GeneratedOutput VERSION ROWS from a pulled doc (R7). This is the decode half the
+    /// earlier R7-C landed WITHOUT: `apply()` restored the Story + Moments, but NOTHING created the output rows,
+    /// so Device B saw zero versions and "Create my Story" started a fresh Story. Here each `outputs[]` entry
+    /// becomes (or updates) a GeneratedOutputModel keyed by its STABLE output_id — idempotent, so repeated pulls
+    /// never duplicate a version (rule 12). Full lineage is preserved (version_id / parent_version_id /
+    /// operation_type), the rendered-MP4 cloud ref is restored (cloud_media_id + cloud_verified -> R6 restores
+    /// bytes on play; NEVER re-rendered), and the exact EditPlanV2 is filled from derived.output_edit_plans.
+    /// NEVER triggers AI planning/rendering. `relative_file_path` from the cloud is a RESTORE HINT only and is
+    /// NOT adopted as authoritative — the local bytes are proven by R6 (size + sha256) before playback.
+    ///
+    /// Returns the number of output rows CREATED (new versions materialized on this device).
+    @MainActor
+    @discardableResult
+    static func applyOutputs(_ doc: [String: Any], storyId: UUID, context: ModelContext) -> Int {
+        guard let outputs = doc["outputs"] as? [[String: Any]] else { return 0 }
+        // The owning Story must exist (apply() inserts it before calling this).
+        var sd = FetchDescriptor<StoryModel>(predicate: #Predicate { $0.id == storyId }); sd.fetchLimit = 1
+        guard let story = (try? context.fetch(sd))?.first else { return 0 }
+        let owner = story.ownerAccountId
+        // Exact edit plans keyed by output_id (restored verbatim onto the row — never re-planned).
+        var planByOutput: [UUID: String] = [:]
+        if let derived = doc["derived"] as? [String: Any],
+           let plans = derived["output_edit_plans"] as? [[String: Any]] {
+            for p in plans {
+                if let oid = (p["output_id"] as? String).flatMap(UUID.init),
+                   let pj = p["edit_plan_json"] as? String, !pj.isEmpty { planByOutput[oid] = pj }
+            }
+        }
+        var created = 0
+        for ref in outputs {
+            guard let oid = (ref["output_id"] as? String).flatMap(UUID.init) else { continue }
+            func uuids(_ key: String) -> [UUID] {
+                ((ref[key] as? [String]) ?? []).compactMap(UUID.init)
+            }
+            let momentIds = uuids("moment_ids")
+            let sourceMomentIds = uuids("source_moment_ids")
+            let versionId = (ref["version_id"] as? String).flatMap(UUID.init) ?? oid
+            let parentVersionId = (ref["parent_version_id"] as? String).flatMap(UUID.init)
+            let operationType = (ref["operation_type"] as? String) ?? "original"
+            let editPlanJSON = planByOutput[oid]
+
+            var od = FetchDescriptor<GeneratedOutputModel>(predicate: #Predicate { $0.id == oid }); od.fetchLimit = 1
+            if let existing = (try? context.fetch(od))?.first {
+                // UPDATE in place (idempotent re-pull): never duplicate, never regress a locally-present plan or
+                // a locally-verified cloud ref. Lineage + cloud metadata are server-authoritative on a clean row.
+                existing.story = existing.story ?? story
+                if existing.ownerAccountId == nil { existing.ownerAccountId = owner }
+                existing.title = (ref["title"] as? String) ?? existing.title
+                existing.durationSeconds = (ref["duration_seconds"] as? NSNumber)?.doubleValue ?? existing.durationSeconds
+                if existing.sourceMomentIds.isEmpty { existing.sourceMomentIds = sourceMomentIds }
+                if existing.momentIds.isEmpty { existing.momentIds = momentIds }
+                existing.sourceFingerprint = (ref["source_fingerprint"] as? String) ?? existing.sourceFingerprint
+                existing.editPlanProvenance = (ref["edit_plan_provenance"] as? String) ?? existing.editPlanProvenance
+                existing.versionId = versionId
+                existing.parentVersionId = parentVersionId ?? existing.parentVersionId
+                existing.operationType = operationType
+                existing.outputFormat = (ref["output_format"] as? String) ?? existing.outputFormat
+                existing.renderWidth = (ref["render_width"] as? NSNumber)?.doubleValue ?? existing.renderWidth
+                existing.renderHeight = (ref["render_height"] as? NSNumber)?.doubleValue ?? existing.renderHeight
+                existing.isStale = (ref["is_stale"] as? Bool) ?? existing.isStale
+                existing.soundtrackTitle = (ref["soundtrack_title"] as? String) ?? existing.soundtrackTitle
+                existing.soundtrackRole = (ref["soundtrack_role"] as? String) ?? existing.soundtrackRole
+                existing.nativeAudioPriority = (ref["native_audio_priority"] as? String) ?? existing.nativeAudioPriority
+                existing.soundPreferenceRaw = (ref["sound_preference_raw"] as? String) ?? existing.soundPreferenceRaw
+                existing.musicAssetRef = (ref["music_asset_ref"] as? String) ?? existing.musicAssetRef
+                // Cloud MP4 ref: adopt from the server only when the local row has none (don't drop a locally
+                // verified ref). cloud_verified timestamp is advisory — R6 re-proves bytes before playback.
+                if existing.cloudMediaId == nil, let cmid = ref["cloud_media_id"] as? String, !cmid.isEmpty {
+                    existing.cloudMediaId = cmid
+                    if (ref["cloud_verified"] as? Bool) ?? false, existing.cloudVerifiedAt == nil {
+                        existing.cloudVerifiedAt = .now
+                    }
+                }
+                if (existing.editPlanJSON ?? "").isEmpty, let pj = editPlanJSON { existing.editPlanJSON = pj }
+            } else {
+                // CREATE the version row (the missing decode path). relative_file_path is intentionally NOT set
+                // from the cloud — the bytes are cloud-only until R6 restores+verifies and mints the local path.
+                let o = GeneratedOutputModel(
+                    id: oid,
+                    title: (ref["title"] as? String) ?? "",
+                    durationSeconds: (ref["duration_seconds"] as? NSNumber)?.doubleValue ?? 0,
+                    momentIds: momentIds,
+                    relativeFilePath: nil,
+                    sourceMomentIds: sourceMomentIds,
+                    sourceFingerprint: (ref["source_fingerprint"] as? String) ?? "",
+                    editPlanProvenance: (ref["edit_plan_provenance"] as? String) ?? "",
+                    outputFormat: (ref["output_format"] as? String) ?? "vertical",
+                    renderWidth: (ref["render_width"] as? NSNumber)?.doubleValue ?? 0,
+                    renderHeight: (ref["render_height"] as? NSNumber)?.doubleValue ?? 0,
+                    isStale: (ref["is_stale"] as? Bool) ?? false,
+                    soundtrackTitle: ref["soundtrack_title"] as? String,
+                    versionId: versionId,
+                    parentVersionId: parentVersionId,
+                    operationType: operationType,
+                    editPlanJSON: editPlanJSON,
+                    soundtrackRole: ref["soundtrack_role"] as? String,
+                    nativeAudioPriority: ref["native_audio_priority"] as? String,
+                    soundPreferenceRaw: ref["sound_preference_raw"] as? String,
+                    musicAssetRef: ref["music_asset_ref"] as? String,
+                    createdAt: (ref["created_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } ?? .now)
+                o.story = story
+                o.ownerAccountId = owner
+                if let cmid = ref["cloud_media_id"] as? String, !cmid.isEmpty {
+                    o.cloudMediaId = cmid
+                    if (ref["cloud_verified"] as? Bool) ?? false { o.cloudVerifiedAt = .now }
+                }
+                context.insert(o)
+                created += 1
+            }
+        }
+        try? context.save()
+        return created
     }
 }
