@@ -227,6 +227,7 @@ describe("P0 Beta Observability construct", () => {
       enableObservability: ctx["observability"] === "true",
       alarmDestination: ctx["alarmDestination"] as string | undefined,
       monthlyBudgetUsd: ctx["monthlyBudgetUsd"] ? Number(ctx["monthlyBudgetUsd"]) : undefined,
+      createBudget: ctx["createBudget"] === "true",
       env: { account: "123456789012", region: "us-east-1" },
     });
     return Template.fromStack(stack);
@@ -263,14 +264,38 @@ describe("P0 Beta Observability construct", () => {
     }));
   });
 
-  test("email alarmDestination creates an SNS subscription AND an AWS Budget with 3 thresholds", () => {
-    const t = synthWith({ environment: "test", observability: "true",
+  test("email alarmDestination + createBudget creates an SNS subscription AND an AWS Budget with 3 thresholds", () => {
+    const t = synthWith({ environment: "test", observability: "true", createBudget: "true",
       alarmDestination: "ops@example.com", monthlyBudgetUsd: "150" });
     t.hasResourceProperties("AWS::SNS::Subscription", Match.objectLike({ Protocol: "email" }));
     t.resourceCountIs("AWS::Budgets::Budget", 1);
     t.hasResourceProperties("AWS::Budgets::Budget", Match.objectLike({
       Budget: Match.objectLike({ BudgetLimit: Match.objectLike({ Amount: 150, Unit: "USD" }) }),
     }));
+    // Exactly the 3 owner-specified thresholds (req 7): 50 / 80 / 100% ACTUAL spend.
+    const budgets = t.findResources("AWS::Budgets::Budget");
+    const subs = (Object.values(budgets)[0] as any).Properties.Budget === undefined
+      ? (Object.values(budgets)[0] as any).Properties.NotificationsWithSubscribers
+      : (Object.values(budgets)[0] as any).Properties.NotificationsWithSubscribers;
+    const thresholds = (subs as any[]).map((n) => n.Notification.Threshold).sort((a, b) => a - b);
+    expect(thresholds).toEqual([50, 80, 100]);
+  });
+
+  test("B0 reconciliation: NO AWS Budget when createBudget is omitted (default), even with a destination", () => {
+    // req 5 — the account-level budget is B0's; this stack must not create a duplicate by default. SNS +
+    // alarms still come up (they do not depend on the budget).
+    const t = synthWith({ environment: "beta", observability: "true", alarmDestination: "alerts@yotale.ai" });
+    t.resourceCountIs("AWS::Budgets::Budget", 0);
+    t.resourceCountIs("AWS::SNS::Topic", 1);
+    t.hasResourceProperties("AWS::SNS::Subscription", Match.objectLike({ Protocol: "email" }));
+  });
+
+  test("MissingModelPricing is surfaced on the AI dashboard (unpriced != free, req 2)", () => {
+    const t = synthWith({ environment: "test", observability: "true" });
+    const dashboards = t.findResources("AWS::CloudWatch::Dashboard");
+    const bodies = (Object.values(dashboards) as any[]).map((d) => d.Properties.DashboardBody);
+    const joined = JSON.stringify(bodies);
+    expect(joined).toContain("MissingModelPricing");
   });
 
   test("resource names are environment-parameterized", () => {

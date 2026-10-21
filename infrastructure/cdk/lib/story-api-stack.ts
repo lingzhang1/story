@@ -25,6 +25,8 @@ export interface StoryApiStackProps extends cdk.StackProps {
   readonly enableObservability?: boolean;
   readonly alarmDestination?: string;
   readonly monthlyBudgetUsd?: number;
+  /** Create the AWS Budget here. Default false so this stack never duplicates B0's account-level budget. */
+  readonly createBudget?: boolean;
 }
 
 /**
@@ -597,7 +599,8 @@ export class StoryApiStack extends cdk.Stack {
         worker,
         apiServiceName: `story-${environment}-api`,
         alarmDestination: props.alarmDestination,
-        monthlyBudgetUsd: props.monthlyBudgetUsd,
+        monthlyBudgetUsd: props.monthlyBudgetUsd ?? (environment === "beta" ? 100 : undefined),
+        createBudget: props.createBudget,
       });
     }
   }

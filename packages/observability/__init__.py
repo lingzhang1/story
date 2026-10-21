@@ -159,11 +159,32 @@ def estimated_cost_usd(
     documented limitation). Image/multimodal cost is included via Bedrock's REPORTED input
     tokens (contact-sheet tiles are counted as input tokens, not re-derived). Unknown model
     -> 0.0 (and the caller should still emit the raw token metrics)."""
+    cost, priced = price_lookup(input_tokens, output_tokens, model_id, pricing)
+    # Backward-compatible: an unpriced model still returns 0.0 here (callers that want to TELL
+    # "unpriced" apart from "genuinely free" call price_lookup directly and read `priced`).
+    return cost
+
+
+def price_lookup(
+    input_tokens: float,
+    output_tokens: float,
+    model_id: str,
+    pricing: dict[str, tuple[float, float]] | None = None,
+) -> tuple[float, bool]:
+    """Like estimated_cost_usd but ALSO reports whether the model was actually PRICED (amendment 2 req 2).
+
+    Returns (cost_usd, priced). `priced` is True only when `model_id` matched a pricing-table entry. This
+    lets a caller distinguish an UNKNOWN/unpriced model (priced=False -> emit a MissingPricing diagnostic so
+    the $0 is visibly an accounting gap, not a free call) from a genuinely zero-cost attempt (priced=True with
+    both token counts 0 -> cost legitimately 0.0). Without this, both collapse to 0.0 and a new/renamed model
+    silently under-reports spend."""
     table = pricing or _DEFAULT_PRICING
     for key, (in_p, out_p) in table.items():
         if key in model_id:
-            return (input_tokens / 1_000_000.0) * in_p + (output_tokens / 1_000_000.0) * out_p
-    return 0.0
+            cost = (input_tokens / 1_000_000.0) * in_p + (output_tokens / 1_000_000.0) * out_p
+            return (cost, True)
+    # No pricing entry matched: cost is unknown (reported as 0.0), and priced=False flags the gap.
+    return (0.0, False)
 
 
 # USD per 1M tokens (in, out). ESTIMATE ONLY — keep in sync with Bedrock pricing; drift is an

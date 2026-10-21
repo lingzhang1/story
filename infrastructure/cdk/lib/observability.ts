@@ -42,8 +42,14 @@ export interface ObservabilityProps {
    * acceptance (design amendment 7). An '@' is treated as email, anything starting with 'https' as a URL.
    */
   readonly alarmDestination?: string;
-  /** Monthly USD budget for the AWS Budgets actual-spend alerts (50/80/100%). Default 100 in dev. */
+  /** Monthly USD budget for the AWS Budgets actual-spend alerts (50/80/100%). Default 100 in beta/dev. */
   readonly monthlyBudgetUsd?: number;
+  /**
+   * Create the AWS Budget resource here. DEFAULT FALSE: B0 provisions the account-level budget, and two
+   * budgets over the same account double-notify (req 5). Enable only when B0 does NOT own the account budget.
+   * The SNS alarm topic, dashboards and alarms are created regardless of this flag.
+   */
+  readonly createBudget?: boolean;
 }
 
 /** Explicit per-environment log retention (privacy + cost; design Phase 1). */
@@ -180,7 +186,9 @@ export class Observability extends Construct {
       new cloudwatch.GraphWidget({ title: "Model latency p50/p95",
         left: [custom("ModelLatencyMs", "p50"), custom("ModelLatencyMs", "p95")], width: 12 }),
       new cloudwatch.GraphWidget({ title: "Throttles / repairs / critiques",
-        left: [throttles, repairs, critiques], width: 12 }),
+        left: [throttles, repairs, critiques], width: 8 }),
+      new cloudwatch.GraphWidget({ title: "Missing model pricing (unpriced attempts — $ gap, NOT free)",
+        left: [custom("MissingModelPricing")], width: 4 }),
     );
 
     // ---- Dashboard 3 — Infra & Async Queue Health (mostly FREE metrics) --------------------------------
@@ -265,11 +273,14 @@ export class Observability extends Construct {
        comparisonOperator: GT });
 
     // ---- AWS Budget — monthly, with 50/80/100% ACTUAL-spend notifications ------------------------------
+    // Beta/dev default = $100 (req 7). GATED on createBudget (default false) so this never duplicates B0's
+    // account-level budget (req 5) — when B0 owns the account budget, leave createBudget off and rely on the
+    // `abnormal-model-cost` CloudWatch alarm (which is independent of AWS Budgets) for cost paging.
     const budget = props.monthlyBudgetUsd ?? (env === "production" ? 500 : 100);
     const notify = props.alarmDestination && props.alarmDestination.includes("@")
       ? [{ subscriptionType: "EMAIL", address: props.alarmDestination }]
       : undefined;
-    if (notify) {
+    if (props.createBudget && notify) {
       new budgets.CfnBudget(this, "MonthlyBudget", {
         budget: { budgetType: "COST", timeUnit: "MONTHLY",
           budgetLimit: { amount: budget, unit: "USD" }, budgetName: `story-${env}-monthly` },
