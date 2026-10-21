@@ -12,8 +12,18 @@ const app = new cdk.App();
 const environment =
   (app.node.tryGetContext("environment") as string) ?? "development";
 
+// P0 Beta Observability — opt-in via context (default OFF). `-c observability=true` adds the dashboards/
+// alarms/SNS/Budget/log-retention construct; `-c alarmDestination=...` (email or https webhook) and
+// `-c monthlyBudgetUsd=...` configure notification + budget. Nothing is provisioned at synth time.
+const enableObservability = app.node.tryGetContext("observability") === "true";
+const alarmDestination = app.node.tryGetContext("alarmDestination") as string | undefined;
+const monthlyBudgetUsdCtx = app.node.tryGetContext("monthlyBudgetUsd") as string | undefined;
+
 new StoryApiStack(app, `story-${environment}-api`, {
   environment,
+  enableObservability,
+  alarmDestination,
+  monthlyBudgetUsd: monthlyBudgetUsdCtx ? Number(monthlyBudgetUsdCtx) : undefined,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,

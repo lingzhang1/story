@@ -13,6 +13,8 @@ import sys
 from observability import (
     emit_metrics,
     estimated_cost_usd,
+    scrub_log_fields,
+    PRICING_VERSION,
     _sanitize_dimensions,
     METRIC_NAMESPACE,
 )
@@ -76,3 +78,29 @@ def test_estimated_cost_sonnet():
 
 def test_estimated_cost_unknown_model_is_zero():
     assert estimated_cost_usd(20_000, 1_000, "some-unmapped-model") == 0.0
+
+
+def test_scrub_redacts_pii_keys_but_keeps_token_counts():
+    scrubbed = scrub_log_fields({
+        "op_type": "revision", "model_id": "opus", "input_tokens": 100, "output_tokens": 20,
+        "soft_direction": "make it warmer", "instruction": "open with moment 1",
+        "gps": "37.3,-122", "authorization": "Bearer abc", "contact_sheet_url": "s3://x",
+        "latency_ms": 820,
+    })
+    # Sensitive keys redacted:
+    assert scrubbed["soft_direction"] == "[redacted]"
+    assert scrubbed["instruction"] == "[redacted]"
+    assert scrubbed["gps"] == "[redacted]"
+    assert scrubbed["authorization"] == "[redacted]"
+    assert scrubbed["contact_sheet_url"] == "[redacted]"
+    # Legitimate low-risk telemetry kept:
+    assert scrubbed["op_type"] == "revision"
+    assert scrubbed["model_id"] == "opus"
+    assert scrubbed["input_tokens"] == 100
+    assert scrubbed["output_tokens"] == 20
+    assert scrubbed["latency_ms"] == 820
+
+
+def test_pricing_version_is_set_and_stringlike():
+    assert isinstance(PRICING_VERSION, str) and PRICING_VERSION
+    assert "/" in PRICING_VERSION   # e.g. "beta-pricing/2026-10-21"

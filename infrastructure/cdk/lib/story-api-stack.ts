@@ -11,10 +11,20 @@ import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as path from "path";
+import { Observability } from "./observability";
 
 export interface StoryApiStackProps extends cdk.StackProps {
   /** Deployment environment name (development | staging | production). */
   readonly environment: string;
+  /**
+   * P0 Beta Observability. When true, add the CloudWatch dashboards/alarms/SNS/Budget/log-retention
+   * construct. Default OFF so a plain synth/deploy is unchanged; the deploy pipeline passes
+   * `-c observability=true` (and optionally `-c alarmDestination=...`, `-c monthlyBudgetUsd=...`) when the
+   * owner is ready to provision it. Nothing is provisioned at synth time.
+   */
+  readonly enableObservability?: boolean;
+  readonly alarmDestination?: string;
+  readonly monthlyBudgetUsd?: number;
 }
 
 /**
@@ -576,5 +586,19 @@ export class StoryApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, "EditPlanJobsQueueUrl", { value: jobsQueue.queueUrl });
     new cdk.CfnOutput(this, "EditPlanStagingBucketName", { value: stagingBucket.bucketName });
     new cdk.CfnOutput(this, "EditPlanWorkerName", { value: worker.functionName });
+
+    // P0 Beta Observability (opt-in via context, default OFF so a plain synth is unchanged). Provisions
+    // nothing at synth time; the owner enables it on deploy after B0 beta infra is accepted.
+    if (props.enableObservability) {
+      new Observability(this, "Observability", {
+        environment,
+        jobsQueue,
+        dlq,
+        worker,
+        apiServiceName: `story-${environment}-api`,
+        alarmDestination: props.alarmDestination,
+        monthlyBudgetUsd: props.monthlyBudgetUsd,
+      });
+    }
   }
 }

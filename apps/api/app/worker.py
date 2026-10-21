@@ -42,10 +42,12 @@ EXEC_DEADLINE_S = int(os.environ.get("STORY_WORKER_DEADLINE_S", "840"))
 # P0 Beta Observability — AI usage/cost metrics from the worker. Import is best-effort so a packaging gap in
 # the Lambda bundle never breaks plan execution (the worker predates observability wiring).
 try:
-    from observability import emit_metrics as _emit_metrics, estimated_cost_usd as _estimated_cost_usd
+    from observability import (emit_metrics as _emit_metrics, estimated_cost_usd as _estimated_cost_usd,
+                               PRICING_VERSION as _PRICING_VERSION)
 except Exception:  # noqa: BLE001
     _emit_metrics = None
     _estimated_cost_usd = None
+    _PRICING_VERSION = "unknown"
 
 _ENV = os.environ.get("STORY_ENVIRONMENT", "development")
 _PRIMARY_MODEL = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
@@ -395,6 +397,7 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                           "input_tokens": diag_out.get("input_tokens"),
                           "output_tokens": diag_out.get("output_tokens"),
                           "model_id": diag_out.get("model_id"),
+                          "pricing_version": _PRICING_VERSION,
                           "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # P0 Beta Observability: emit AI usage/cost + a GenerationCompleted count (EMF, fire-and-forget). The
         # op_type is the revision mode (original|another_version|revision) from the request body.
@@ -484,7 +487,30 @@ def handler(event, context):
         try:
             body = json.loads(record["body"])
             jid = body["job_id"]
+            # P0 Beta Observability: QueueWaitMs = how long this message sat in SQS before the worker picked it
+            # up. Derived from the FREE SQS-provided SentTimestamp attribute (ms since epoch) — no enqueue-ts
+            # change to the API send path, no custom timestamp on the body. Worker-execution time is measured
+            # separately (WorkerProcessingMs below), so queue wait is never conflated with inference time.
+            if _emit_metrics is not None:
+                try:
+                    _op = (body.get("revision_context") or {}).get("mode", "original") \
+                        if isinstance(body.get("revision_context"), dict) else "original"
+                    _emit_metrics({"GenerationStarted": 1.0},
+                                  {"env": _ENV, "service": "worker", "op_type": _op})
+                    _sent = (record.get("attributes") or {}).get("SentTimestamp")
+                    if _sent:
+                        _wait = max(0.0, time.time() * 1000.0 - float(_sent))
+                        _emit_metrics({"QueueWaitMs": _wait}, {"env": _ENV, "service": "worker", "op_type": _op})
+                except Exception:  # noqa: BLE001 — telemetry must never break the batch
+                    pass
+            _t0 = time.time()
             outcome = _run_one(store, jid)
+            if _emit_metrics is not None:
+                try:
+                    _emit_metrics({"WorkerProcessingMs": (time.time() - _t0) * 1000.0},
+                                  {"env": _ENV, "service": "worker"})
+                except Exception:  # noqa: BLE001
+                    pass
             print(json.dumps({"msg": "worker_outcome", "job_id": jid, "outcome": outcome}))
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"msg": "worker_record_error", "error": f"{type(e).__name__}: {e}"[:300]}))
