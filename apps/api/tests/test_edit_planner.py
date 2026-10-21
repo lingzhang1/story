@@ -820,11 +820,11 @@ def test_revision_context_revise_carries_directives_and_soft():
            "soft_direction": "more cinematic",
            "directives": {"must_include": [M1], "exclude": [], "opening": M2}}
     block = _revision_context_block(ctx)
-    assert "REVISE INTENT (soft): more cinematic" in block
+    assert "LATEST REVISE INTENT (soft): more cinematic" in block
     assert "HARD REQUIREMENT" in block
     assert f"MUST include a segment from each of these Moment ids: {M1}" in block
     assert f"the FIRST segment (order 0) MUST be Moment id {M2}" in block
-    assert "PRESERVE unaffected edits" in block
+    assert "LATEST request wins" in block
 
 
 def test_diversity_diagnostics_identical_is_near_identical():
@@ -1587,17 +1587,22 @@ def test_mixed_revise_records_partial_note_and_still_plans():
 
 
 
-    # A soft-only revise the model handles (not a parseable clip target) that comes back having re-picked a
-    # DIFFERENT clip set must be rejected with a clear limitation — never shipped as a silent re-pick.
-    M3 = str(uuid4())
-    base_plan = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+    # A soft-only revise the model handles (not a parseable clip target) that comes back having replaced MOST
+    # of the edit (a wholesale re-pick, below the continuity floor) with no instruction authorizing it must be
+    # rejected with a clear limitation — never shipped as a silent whole-video replacement.
+    M3 = str(uuid4()); M4 = str(uuid4()); M5 = str(uuid4())
+    base_plan = {"target_duration_seconds": 36.0, "feasible": True, "segments": [
         {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
          "output_duration_seconds": 9.0, "native_audio": "keep"},
         {"order": 1, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 2, "asset_id": M4, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 9.0, "native_audio": "keep"},
+        {"order": 3, "asset_id": M5, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
          "output_duration_seconds": 9.0, "native_audio": "keep"}]}
     rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
-          "soft_direction": "make it feel more energetic"}   # no clip-length target => model path
-    # Model drops M2 and introduces M3 — a silent re-pick the gate must reject.
+          "soft_direction": "make it feel more energetic"}   # no clip-length target, no selection authorization
+    # Model keeps only M1 (1 of 4 = 25% continuity, below the 50% floor) and re-picks M3 — a wholesale re-pick.
     repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
         {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
          "output_duration_seconds": 9.0, "native_audio": "keep"},
@@ -1608,9 +1613,12 @@ def test_mixed_revise_records_partial_note_and_still_plans():
         eng.generate(_inputs(revision_context=rc, moments=[
             {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
             {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
-            {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
-    assert "did not ask" in str(ei.value).lower()
+            {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+            {"id": M4, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+            {"id": M5, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert "replacing most of your video" in str(ei.value).lower()
     assert eng.last_diagnostics["final"] == "preservation_violation"
+    assert eng.last_diagnostics["continuity"]["verdict"] == "wholesale"
 
 
 def test_preservation_gate_allows_model_preserving_revise():
@@ -1648,6 +1656,142 @@ def test_broad_replan_flag_bypasses_preservation_gate():
         {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
         {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
     assert eng.last_diagnostics.get("final") != "preservation_violation"
+
+
+# ---- Phase 7: editorial-continuity gate (owner 2026-10-21) ----
+
+def test_continuity_gate_accepts_clip_change_within_floor():
+    # A soft revise where the model keeps 3 of 4 base clips (75% >= 50% floor) and swaps one is now ACCEPTED —
+    # a technically-valid revise is not discarded solely because the clip set changed (owner principle 5).
+    M3 = str(uuid4()); M4 = str(uuid4())
+    base_plan = {"target_duration_seconds": 32.0, "feasible": True, "segments": [
+        {"order": i, "asset_id": a, "source_start_seconds": 0.0, "source_end_seconds": 8.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}
+        for i, a in enumerate([M1, M2, M3, M4])]}
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}
+    M5 = str(uuid4())
+    revised = {"target_duration_seconds": 32.0, "feasible": True, "segments": [
+        {"order": i, "asset_id": a, "source_start_seconds": 0.0, "source_end_seconds": 8.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}
+        for i, a in enumerate([M1, M2, M3, M5])]}   # dropped M4, added M5 -> 3/4 retained = 0.75
+    eng = RealEditPlannerEngine(FakeModelGateway(response=revised))
+    plan = eng.generate(_inputs(revision_context=rc, creative_intent={"target_duration_seconds": 32.0,
+                                "desired_feeling": ["calm"]}, moments=[
+        {"id": m, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]} for m in [M1, M2, M3, M4, M5]]))
+    assert {str(s.asset_id) for s in plan.segments} == {M1, M2, M3, M5}
+    assert eng.last_diagnostics["final"] == "executable"
+    assert eng.last_diagnostics["continuity"]["verdict"] == "ok"
+    assert eng.last_diagnostics["continuity"]["continuity_ratio"] == 0.75
+
+
+def test_continuity_gate_rejects_noop_revise():
+    # A directed revise whose result is byte-identical to the base (same clips AND same order) is a no-op —
+    # an honest "couldn't apply that", never saved as a successful edit (owner principle: no fake success).
+    base_plan = _good_plan()
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it feel more energetic"}
+    identical = json.loads(json.dumps(base_plan))   # model returns the base unchanged
+    eng = RealEditPlannerEngine(FakeModelGateway(response=identical))
+    with pytest.raises(EditPlanInfeasibleError) as ei:
+        eng.generate(_inputs(revision_context=rc, moments=[
+            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert "same as your current version" in str(ei.value).lower()
+    assert eng.last_diagnostics["final"] == "preservation_noop"
+    assert eng.last_diagnostics["continuity"]["verdict"] == "noop"
+
+
+def test_continuity_gate_allows_shorter_duration_to_drop_clips():
+    # A retime/shorter instruction authorizes dropping clips, so even heavy loss is accepted (not wholesale).
+    # Model handles it (not a parseable clip target here) and keeps only 1 of 4; the "shorter" intent lifts the
+    # floor, so it is ACCEPTED rather than rejected as a whole-video replacement.
+    M3 = str(uuid4()); M4 = str(uuid4())
+    base_plan = {"target_duration_seconds": 32.0, "feasible": True, "segments": [
+        {"order": i, "asset_id": a, "source_start_seconds": 0.0, "source_end_seconds": 8.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}
+        for i, a in enumerate([M1, M2, M3, M4])]}
+    rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
+          "soft_direction": "make it much shorter, just the best shots"}
+    shortened = {"target_duration_seconds": 8.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 8.0,
+         "output_duration_seconds": 8.0, "speed": 1.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=shortened))
+    plan = eng.generate(_inputs(revision_context={**rc, "duration_target_source": "ai_recommended"},
+                                creative_intent={"target_duration_seconds": 8.0, "desired_feeling": ["calm"]},
+                                moments=[{"id": m, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}
+                                         for m in [M1, M2, M3, M4]]))
+    assert {str(s.asset_id) for s in plan.segments} == {M1}
+    assert eng.last_diagnostics["final"] == "executable"
+    assert eng.last_diagnostics["continuity"]["authorized_change"] is True
+
+
+def test_directive_authorized_ids_reads_the_directive_dict():
+    # D5 fix: authorized ids come from the directive DICT (opening/ending/include/exclude/order pairs), not a
+    # list-of-dicts. The old code iterated a dict's keys and produced an ALWAYS-EMPTY set.
+    from edit_planner import _directive_authorized_ids
+    a, b, c, d = "aa", "bb", "cc", "dd"
+    directives = {"opening": a.upper(), "ending": b, "exclude": [c], "must_include": [d],
+                  "order_after": [[a, b]], "order_adjacent": [[c, d]]}
+    got = _directive_authorized_ids(directives)
+    assert got == {a, b, c, d}   # lowercased, from the real shape
+    assert _directive_authorized_ids({}) == set()
+    assert _directive_authorized_ids([{"asset_id": "EE"}]) == {"ee"}   # forward-compat list shape
+
+
+def test_revision_context_block_injects_base_plan_for_revise():
+    # D1: the Revise USER-message block must carry the exact base_plan + a preserve/latest-wins objective, and
+    # must NOT render Explore's prior-version summaries.
+    from edit_planner import _revision_context_block
+    base_plan = {"feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "native_audio": "keep"}]}
+    block = _revision_context_block({"mode": "revise", "base_version_id": "v2", "base_plan": base_plan,
+                                     "soft_direction": "make it more cinematic",
+                                     "prior_edit_summaries": [{"version": "v1"}]})
+    assert "BASE PLAN" in block and M1 in block
+    assert "LATEST request wins" in block
+    assert "PREVIOUS VERSION(S)" not in block   # summaries are Explore-only
+
+
+def test_explore_block_unchanged_still_seeks_diversity():
+    # Revise must not inherit Explore's objective; Explore keeps "MEANINGFULLY DIFFERENT".
+    from edit_planner import _revision_context_block
+    block = _revision_context_block({"mode": "explore", "base_version_id": "v2",
+                                     "prior_edit_summaries": [{"version": "v1"}]})
+    assert "MEANINGFULLY DIFFERENT" in block
+    assert "BASE PLAN" not in block
+
+
+def test_mixed_retime_plus_directive_accepts_shorter_total():
+    # Phase 5/7 TMB case: "Start with Moment 1, shorten each clip to ~5s, make it more cinematic" on an ~85s
+    # base. Mixed (opening directive + retime + creative) -> AI path with base_plan injected. The retime intent
+    # relaxes the AI-recommended undershoot floor even WITH a directive, so a shorter total is accepted; all
+    # clips preserved, Moment 1 first.
+    m = [str(uuid4()) for _ in range(6)]
+    base_plan = {"target_duration_seconds": 85.0, "feasible": True, "segments": [
+        {"order": i, "asset_id": a, "source_start_seconds": 0.0, "source_end_seconds": 14.0,
+         "output_duration_seconds": 14.0, "speed": 1.0, "native_audio": "keep"} for i, a in enumerate(m)]}
+    ro = [m[0], m[2], m[1], m[3], m[4], m[5]]
+    revised = {"target_duration_seconds": 30.0, "feasible": True, "segments": [
+        {"order": i, "asset_id": a, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "speed": 1.0, "native_audio": "keep"} for i, a in enumerate(ro)]}
+    rc = {"mode": "revise", "base_version_id": "tmbA", "base_plan": base_plan,
+          "directives": {"opening": m[0]},
+          "soft_direction": "shorten each clip to approximately five seconds, and make the video more cinematic",
+          "duration_target_source": "ai_recommended"}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=revised))
+    plan = eng.generate(_inputs(revision_context=rc,
+                                creative_intent={"target_duration_seconds": 85.0, "desired_feeling": ["cinematic"]},
+                                moments=[{"id": a, "duration_seconds": 15.0, "useful_segments": [[0.0, 15.0]]}
+                                         for a in m]))
+    order = [str(s.asset_id) for s in plan.segments]
+    assert order[0] == m[0]                                   # Moment 1 first
+    assert set(order) == set(m)                               # all clips preserved
+    total = sum(s.output_duration_seconds for s in plan.segments)
+    assert total < 85.0                                       # shorter total allowed (not padded to 85s)
+    assert eng.last_diagnostics["final"] == "executable"
+    assert eng.last_diagnostics["continuity"]["verdict"] == "ok"
 
 
 def test_duration_target_source_defaults_to_user_exact():
