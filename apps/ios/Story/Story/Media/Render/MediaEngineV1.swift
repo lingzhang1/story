@@ -681,6 +681,46 @@ struct RenderOutputStore {
 
     func absoluteURL(for relative: String) -> URL { documentsURL.appendingPathComponent(relative) }
     func exists(relative: String) -> Bool { FileManager.default.fileExists(atPath: absoluteURL(for: relative).path) }
+
+    // MARK: - R7-D generated-MP4 restore support (R6-style)
+
+    private var downloadsDirName: String { "rendered-downloads" }
+    private var downloadsDirURL: URL { documentsURL.appendingPathComponent(downloadsDirName, isDirectory: true) }
+
+    /// A fresh temp URL under <Documents>/rendered-downloads/ for an in-flight generated-MP4 restore. Under
+    /// Documents (not the OS temp dir) so a partial survives relaunch and is deterministically cleaned/retried.
+    func newDownloadTempURL() -> URL {
+        try? FileManager.default.createDirectory(at: downloadsDirURL, withIntermediateDirectories: true)
+        return downloadsDirURL.appendingPathComponent(UUID().uuidString + ".download")
+    }
+
+    /// Discard any leftover partial generated-MP4 downloads (whole-file retry never reuses them). Call at launch.
+    func purgeDownloadTemps() {
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: downloadsDirURL, includingPropertiesForKeys: nil) else { return }
+        for u in items { try? FileManager.default.removeItem(at: u) }
+    }
+
+    /// A fresh relative path for a RESTORED generated MP4 (the original may have carried a different uuid; on
+    /// Device B there is no prior relativeFilePath, so mint one). The caller persists it onto the output.
+    func newRelativePath() -> String { "\(dirName)/\(UUID().uuidString).mp4" }
+
+    /// Atomically INSTALL a verified downloaded generated MP4 at `relativePath` (crash-safe — one rename on the
+    /// same volume). The source is a fully-downloaded+verified temp file (MediaDownloadService verifies size +
+    /// full-file sha256 first). Replaces an absent/old file; never called with an unverified source.
+    @discardableResult
+    func installDownloadedOutput(from verifiedTempURL: URL, to relativePath: String) throws -> Bool {
+        ensureDir()
+        let dest = absoluteURL(for: relativePath)
+        try? FileManager.default.createDirectory(
+            at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            _ = try FileManager.default.replaceItemAt(dest, withItemAt: verifiedTempURL)
+        } else {
+            try FileManager.default.moveItem(at: verifiedTempURL, to: dest)
+        }
+        return true
+    }
 }
 
 struct RenderResult {

@@ -28,7 +28,8 @@ struct StoryApp: App {
             AutoBackupSettingModel.self,   // R4-A.1: account-scoped Auto Backup preference
             MediaDownloadJobModel.self,   // R6: persistent cloud-download/restore state
             OptimizationSettingModel.self,   // R5: account-scoped Optimize-iPhone-Storage preference
-            StorySyncJobModel.self   // R7-C: persistent Story sync state (dirty/revision/conflict)
+            StorySyncJobModel.self,   // R7-C: persistent Story sync state (dirty/revision/conflict)
+            GeneratedOutputBackupJobModel.self   // R7-D: persistent generated-MP4 backup queue state
         ])
         let storeURL = URL.applicationSupportDirectory.appending(path: "default.store")
         do {
@@ -57,6 +58,7 @@ struct StoryApp: App {
         }
         MediaStore.shared.ensureMediaDirectory()
         MediaStore.shared.purgeDownloadTemps()   // R6: discard partial downloads from a prior run (whole-file retry)
+        RenderOutputStore.shared.purgeDownloadTemps()   // R7-D: discard partial generated-MP4 restores (whole-file retry)
         MediaResolver.shared.recoverInterruptedRestores(context: container.mainContext)   // R5: unstick restoring assets
         Self.ensureLocalIdentity(container.mainContext)
         // Milestone D §6-7: recover orphaned RUNNING AU jobs (app killed mid-run) to
@@ -86,6 +88,15 @@ struct StoryApp: App {
                     MediaUploadQueue.sharedAutoEnroll = { moment in
                         let q = makeUploadQueue()
                         if q.autoEnrollIfEnabled(moment: moment) != nil {
+                            Task { await q.drain() }
+                        }
+                    }
+                    // R7-D — the render-completion site calls this after persisting a new GeneratedOutput; it
+                    // auto-enrolls the rendered MP4 for VERIFIED cloud backup + drains ONLY when the active
+                    // account has Auto Backup ON (no-op otherwise). Reuses the R4 multipart pipeline.
+                    GeneratedOutputBackupQueue.sharedAutoEnroll = { output in
+                        let q = makeOutputBackupQueue()
+                        if q.autoEnrollIfEnabled(output: output) != nil {
                             Task { await q.drain() }
                         }
                     }
@@ -141,6 +152,11 @@ struct StoryApp: App {
                         let uq = makeUploadQueue()
                         uq.recoverOrphans()
                         Task { await uq.drain() }
+                        // R7-D: recover orphaned generated-MP4 backups + drain this account's output-backup
+                        // queue (account-scoped, same discipline as the originals queue).
+                        let obq = makeOutputBackupQueue()
+                        obq.recoverOrphans()
+                        Task { await obq.drain() }
                         // R6: reconcile local Moment cloud-state from the SERVER (/v1/media). Restores the
                         // "backed up" truth (badges + on-demand restore eligibility) after a store migration,
                         // reinstall, or on a new device — the server is authoritative about what is verified.
@@ -179,6 +195,10 @@ struct StoryApp: App {
                 let uq = makeUploadQueue()
                 uq.recoverOrphans()
                 Task { await uq.drain() }
+                // R7-D: on foreground, recover + drain the active account's generated-MP4 backup queue.
+                let obq = makeOutputBackupQueue()
+                obq.recoverOrphans()
+                Task { await obq.drain() }
                 // R6: reconcile cloud-state from the server on foreground too, so an ALREADY-signed-in relaunch
                 // (the sign-in onChange does not fire) still restores backup badges after a store migration.
                 if auth.isSignedIn {
@@ -207,6 +227,19 @@ struct StoryApp: App {
     @MainActor
     private func makeUploadQueue() -> MediaUploadQueue {
         MediaUploadQueue(
+            context: container.mainContext,
+            activeOwner: { [weak auth] in auth?.storyUserId },
+            tokenForOwner: { [weak auth] owner in
+                guard let auth, auth.storyUserId == owner else { return nil }
+                return await auth.validAccessToken()
+            })
+    }
+
+    /// R7-D — build a GeneratedOutputBackupQueue bound to the live AuthStore. Same account-scoping as the
+    /// originals queue: the token closure returns a VALID token ONLY for the currently-active account.
+    @MainActor
+    private func makeOutputBackupQueue() -> GeneratedOutputBackupQueue {
+        GeneratedOutputBackupQueue(
             context: container.mainContext,
             activeOwner: { [weak auth] in auth?.storyUserId },
             tokenForOwner: { [weak auth] owner in

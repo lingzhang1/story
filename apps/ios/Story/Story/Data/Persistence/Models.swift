@@ -1260,3 +1260,68 @@ final class StorySyncJobModel {
         self.updatedAt = updatedAt
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// R7-D — persistent GENERATED MP4 backup queue state. One row per (ownerAccountId, outputId). A sibling of
+// MediaUploadJobModel (which backs up captured ORIGINALS, moment-scoped) but keyed to a GeneratedOutput and
+// deliberately WITHOUT the Moment-reservation logic — a rendered output has no shared local-only "claim", it
+// simply belongs to the Story's owner. The upload itself reuses the SAME R4 multipart pipeline (MediaUploading)
+// with media_kind="generated" + source_output_id — there is NO second uploader.
+//
+// IMMUTABLE identity binding (set once at enrollment; never re-derived in a callback — rule 7/10). On server
+// cloud_verified, the queue stamps GeneratedOutputModel.cloudMediaId + cloudVerifiedAt, guarded by owner-match
+// + current claimGeneration so a stale async completion cannot overwrite a newer state. The rendered MP4 is
+// NEVER deleted by the queue (safeguard #8: never remove the only local copy before cloud verification).
+@Model
+final class GeneratedOutputBackupJobModel {
+    @Attribute(.unique) var id: UUID
+
+    var ownerAccountId: String          // canonical story_user_id of the Story/output owner
+    var outputId: UUID                  // GeneratedOutputModel.id this job backs up
+    var storyId: UUID                   // owning Story (for account-scoped recovery without walking the link)
+    var operationId: String             // stable upload idempotency key
+    var relativeFilePath: String        // RenderOutputStore relative path; the MP4 is NEVER deleted by the queue
+
+    var cloudMediaId: String?           // server-assigned once initiate succeeds
+    var contentSha256: String?          // full-file sha256 (hex), computed off the render path
+    var sizeBytes: Int?
+
+    var stateRaw: String = "pending"    // pending|running|verified|failed|cancelled
+    var attempts: Int = 0
+    var lastError: String?
+    var nextEligibleAt: Date = Date.now
+    var progress: Double = 0
+    var claimGeneration: Int = 0
+
+    var createdAt: Date = Date.now
+    var updatedAt: Date = Date.now
+
+    enum State: String { case pending, running, verified, failed, cancelled }
+    var state: State {
+        get { State(rawValue: stateRaw) ?? .pending }
+        set { stateRaw = newValue.rawValue }
+    }
+    /// Terminal for the AUTOMATIC drain (verified or cancelled). `failed` is recoverable by explicit retry.
+    var isAutoTerminal: Bool { state == .verified || state == .cancelled }
+
+    init(id: UUID = UUID(), ownerAccountId: String, outputId: UUID, storyId: UUID,
+         operationId: String, relativeFilePath: String, cloudMediaId: String? = nil,
+         contentSha256: String? = nil, sizeBytes: Int? = nil, state: State = .pending,
+         attempts: Int = 0, claimGeneration: Int = 0, createdAt: Date = .now, updatedAt: Date = .now) {
+        self.id = id
+        self.ownerAccountId = ownerAccountId
+        self.outputId = outputId
+        self.storyId = storyId
+        self.operationId = operationId
+        self.relativeFilePath = relativeFilePath
+        self.cloudMediaId = cloudMediaId
+        self.contentSha256 = contentSha256
+        self.sizeBytes = sizeBytes
+        self.stateRaw = state.rawValue
+        self.attempts = attempts
+        self.claimGeneration = claimGeneration
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}

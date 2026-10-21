@@ -277,42 +277,48 @@ final class MediaUploadQueueTests: XCTestCase {
 private final class FakeService: MediaUploading {
     var initiateCount = 0
     func initiate(accessToken: String, sha256: String, size: Int,
-                  deviceAssetId: String, sourceMomentId: String) async throws -> MediaInitiateResult {
+                  deviceAssetId: String, sourceMomentId: String,
+                  mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MediaInitiateResult {
         initiateCount += 1
         return MediaInitiateResult(cloudMediaId: "cmid-\(sha256.prefix(8))",
                                    uploadURL: URL(string: "https://s3.example/put")!, created: true)
     }
-    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {}
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {}
     func complete(accessToken: String, cloudMediaId: String) async throws {}
     // multipart (small-file fake: not exercised, provide trivial impls)
     func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
-                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+                           sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                           contentType: String) async throws -> MultipartInitiateResult {
         MultipartInitiateResult(cloudMediaId: "cmid-mp", uploadId: "u1", partCount: plan.partCount, created: true)
     }
     func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] {
         Dictionary(uniqueKeysWithValues: partNumbers.map { ($0, URL(string: "https://s3.example/p\($0)")!) })
     }
     func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
-    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {}
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String,
+                 contentType: String) async throws {}
     func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
 }
 
 private final class FailingService: MediaUploading {
     func initiate(accessToken: String, sha256: String, size: Int,
-                  deviceAssetId: String, sourceMomentId: String) async throws -> MediaInitiateResult {
+                  deviceAssetId: String, sourceMomentId: String,
+                  mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MediaInitiateResult {
         MediaInitiateResult(cloudMediaId: "cmid", uploadURL: URL(string: "https://s3.example/put")!, created: true)
     }
-    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {
         throw MediaUploadError.s3PutFailed(500)
     }
     func complete(accessToken: String, cloudMediaId: String) async throws {}
     func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
-                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+                           sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                           contentType: String) async throws -> MultipartInitiateResult {
         MultipartInitiateResult(cloudMediaId: "cmid", uploadId: "u1", partCount: plan.partCount, created: true)
     }
     func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL] { [:] }
     func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { [] }
-    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String,
+                 contentType: String) async throws {
         throw MediaUploadError.s3PutFailed(500)
     }
     func completeMultipart(accessToken: String, cloudMediaId: String) async throws {}
@@ -327,13 +333,15 @@ private final class RecordingMultipartService: MediaUploading {
     private(set) var completedMP = false
     // single-file path unused here
     func initiate(accessToken: String, sha256: String, size: Int, deviceAssetId: String,
-                  sourceMomentId: String) async throws -> MediaInitiateResult {
+                  sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                  contentType: String) async throws -> MediaInitiateResult {
         MediaInitiateResult(cloudMediaId: "x", uploadURL: URL(string: "https://s3.example/put")!, created: true)
     }
-    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {}
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {}
     func complete(accessToken: String, cloudMediaId: String) async throws {}
     func initiateMultipart(accessToken: String, plan: MultipartPlan, deviceAssetId: String,
-                           sourceMomentId: String) async throws -> MultipartInitiateResult {
+                           sourceMomentId: String, mediaKind: String, sourceOutputId: String,
+                           contentType: String) async throws -> MultipartInitiateResult {
         initiateMPCount += 1
         return MultipartInitiateResult(cloudMediaId: "cmid-mp", uploadId: "u1",
                                        partCount: plan.partCount, created: true)
@@ -342,7 +350,8 @@ private final class RecordingMultipartService: MediaUploading {
         Dictionary(uniqueKeysWithValues: partNumbers.map { ($0, URL(string: "https://s3.example/p\($0)")!) })
     }
     func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int> { alreadyUploaded }
-    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String,
+                 contentType: String) async throws {
         putParts.append((offset / (8 * 1024 * 1024)) + 1)
     }
     func completeMultipart(accessToken: String, cloudMediaId: String) async throws { completedMP = true }

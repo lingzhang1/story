@@ -147,6 +147,36 @@ final class StoryResultFlowTests: XCTestCase {
         XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }), .missing)
     }
 
+    // R7-D — a verified cloud backup makes an absent-local output RESTORABLE, not missing (restore, not re-render).
+    func test_resultPlayback_restorableWhenLocalGoneButCloudVerified() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/evicted.mp4")
+        o.cloudMediaId = "cm-1"; o.cloudVerifiedAt = .now
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in false }), .restorable)
+    }
+
+    func test_resultPlayback_restorableOnDeviceBWithNoLocalPath() {
+        let s = newStory()
+        let o = output(s, rel: nil)                 // Device B: never had a local render
+        o.cloudMediaId = "cm-2"; o.cloudVerifiedAt = .now
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }), .restorable)
+    }
+
+    func test_resultPlayback_missingWhenCloudRefButNotVerified() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/gone.mp4")
+        o.cloudMediaId = "cm-3"; o.cloudVerifiedAt = nil   // ref present but not verified -> not restorable
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in false }), .missing)
+    }
+
+    func test_resultPlayback_playableWinsOverCloud() {
+        let s = newStory()
+        let o = output(s, rel: "rendered/ok.mp4")
+        o.cloudMediaId = "cm-4"; o.cloudVerifiedAt = .now   // backed up AND local present -> play local
+        XCTAssertEqual(ResultPlayback.resolve(output: o, fileExists: { _ in true }),
+                       .playable(relativePath: "rendered/ok.mp4"))
+    }
+
     // MARK: - Music presentation (honest copy)
 
     func test_music_noMusic_isCreatedWithoutMusic() {

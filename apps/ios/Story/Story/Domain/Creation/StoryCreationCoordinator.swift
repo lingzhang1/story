@@ -1017,6 +1017,10 @@ final class StoryCreationCoordinator {
         // INVARIANT (02 §): Create != Complete — status is deliberately unchanged.
         // Prior successful outputs are LEFT in place; we only ever ADD a new one once the render succeeds.
         try? context.save()
+        // R7-D: enqueue the rendered MP4 for VERIFIED cloud backup (auto-enroll is a no-op unless the active
+        // account has Auto Backup ON). Fire-and-forget off the render path; the queue reuses the R4 multipart
+        // pipeline and NEVER deletes the local MP4. Stamps cloudMediaId + cloudVerifiedAt once verified.
+        GeneratedOutputBackupQueue.sharedAutoEnroll(output)
         return output
     }
 

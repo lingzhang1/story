@@ -56,16 +56,52 @@ struct MultipartPlan {
 /// Seam so MediaUploadQueue can be driven by a fake in tests (no network/S3).
 protocol MediaUploading {
     func initiate(accessToken: String, sha256: String, size: Int,
-                  deviceAssetId: String, sourceMomentId: String) async throws -> MediaInitiateResult
-    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws
+                  deviceAssetId: String, sourceMomentId: String,
+                  mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MediaInitiateResult
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws
     func complete(accessToken: String, cloudMediaId: String) async throws
     // --- R4-B multipart ---
     func initiateMultipart(accessToken: String, plan: MultipartPlan,
-                           deviceAssetId: String, sourceMomentId: String) async throws -> MultipartInitiateResult
+                           deviceAssetId: String, sourceMomentId: String,
+                           mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MultipartInitiateResult
     func presignParts(accessToken: String, cloudMediaId: String, partNumbers: [Int]) async throws -> [Int: URL]
     func uploadedPartNumbers(accessToken: String, cloudMediaId: String) async throws -> Set<Int>
-    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String, contentType: String) async throws
     func completeMultipart(accessToken: String, cloudMediaId: String) async throws
+}
+
+/// R7-D media kinds (mirror the backend's media_store constants). "moment" = captured original (the R4
+/// default); "generated" = a rendered GeneratedOutput MP4. The upload pipeline is identical for both.
+enum CloudMediaKind {
+    static let moment = "moment"
+    static let generated = "generated"
+}
+
+// Back-compat defaults: existing R4 moment callers keep their exact call shape (moment kind, quicktime,
+// no output id) without passing the new arguments.
+extension MediaUploading {
+    func initiate(accessToken: String, sha256: String, size: Int,
+                  deviceAssetId: String, sourceMomentId: String) async throws -> MediaInitiateResult {
+        try await initiate(accessToken: accessToken, sha256: sha256, size: size,
+                           deviceAssetId: deviceAssetId, sourceMomentId: sourceMomentId,
+                           mediaKind: CloudMediaKind.moment, sourceOutputId: "",
+                           contentType: "video/quicktime")
+    }
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {
+        try await putToS3(uploadURL: uploadURL, fileURL: fileURL, sha256Hex: sha256Hex,
+                          contentType: "video/quicktime")
+    }
+    func initiateMultipart(accessToken: String, plan: MultipartPlan,
+                           deviceAssetId: String, sourceMomentId: String) async throws -> MultipartInitiateResult {
+        try await initiateMultipart(accessToken: accessToken, plan: plan,
+                                    deviceAssetId: deviceAssetId, sourceMomentId: sourceMomentId,
+                                    mediaKind: CloudMediaKind.moment, sourceOutputId: "",
+                                    contentType: "video/quicktime")
+    }
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+        try await putPart(uploadURL: uploadURL, fileURL: fileURL, offset: offset, length: length,
+                          partShaB64: partShaB64, contentType: "video/quicktime")
+    }
 }
 
 struct MediaUploadService: MediaUploading {
@@ -93,15 +129,17 @@ struct MediaUploadService: MediaUploading {
 
     // POST /v1/media/initiate
     func initiate(accessToken: String, sha256: String, size: Int,
-                  deviceAssetId: String, sourceMomentId: String) async throws -> MediaInitiateResult {
+                  deviceAssetId: String, sourceMomentId: String,
+                  mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MediaInitiateResult {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/media/initiate"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "content_sha256": sha256, "size_bytes": size,
-            "content_type": "video/quicktime",
-            "device_asset_id": deviceAssetId, "source_moment_id": sourceMomentId])
+            "content_type": contentType,
+            "device_asset_id": deviceAssetId, "source_moment_id": sourceMomentId,
+            "media_kind": mediaKind, "source_output_id": sourceOutputId])
         let (data, resp) = try await call(req)
         let http = resp as! HTTPURLResponse
         if http.statusCode == 401 { throw MediaUploadError.unauthorized }
@@ -118,10 +156,10 @@ struct MediaUploadService: MediaUploading {
     }
 
     // Presigned PUT of the whole file directly to S3. Sends the ChecksumSHA256 header S3 enforces.
-    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String) async throws {
+    func putToS3(uploadURL: URL, fileURL: URL, sha256Hex: String, contentType: String) async throws {
         var req = URLRequest(url: uploadURL)
         req.httpMethod = "PUT"
-        req.setValue("video/quicktime", forHTTPHeaderField: "Content-Type")
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         // S3 ChecksumSHA256 = base64 of the RAW digest (not the hex).
         if let raw = Data(hexString: sha256Hex) {
             req.setValue(raw.base64EncodedString(), forHTTPHeaderField: "x-amz-checksum-sha256")
@@ -189,15 +227,17 @@ struct MediaUploadService: MediaUploading {
     }
 
     func initiateMultipart(accessToken: String, plan: MultipartPlan,
-                           deviceAssetId: String, sourceMomentId: String) async throws -> MultipartInitiateResult {
+                           deviceAssetId: String, sourceMomentId: String,
+                           mediaKind: String, sourceOutputId: String, contentType: String) async throws -> MultipartInitiateResult {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/media/multipart/initiate"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "content_sha256": plan.fileSha256Hex, "size_bytes": plan.size, "part_shas": plan.partShasB64,
-            "content_type": "video/quicktime", "device_asset_id": deviceAssetId,
-            "source_moment_id": sourceMomentId])
+            "content_type": contentType, "device_asset_id": deviceAssetId,
+            "source_moment_id": sourceMomentId,
+            "media_kind": mediaKind, "source_output_id": sourceOutputId])
         let (data, resp) = try await call(req)
         let http = resp as! HTTPURLResponse
         if http.statusCode == 401 { throw MediaUploadError.unauthorized }
@@ -246,7 +286,8 @@ struct MediaUploadService: MediaUploading {
 
     /// PUT one part: a RANGE of the file [offset, offset+length) via a presigned URL, with the part's
     /// ChecksumSHA256 header. Uses a temp slice file so the transfer is file-based (no whole-file memory copy).
-    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String) async throws {
+    func putPart(uploadURL: URL, fileURL: URL, offset: Int, length: Int, partShaB64: String,
+                 contentType: String) async throws {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))

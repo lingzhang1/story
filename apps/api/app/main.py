@@ -177,6 +177,10 @@ class MediaInitiateRequest(BaseModel):
     content_type: str = Field(default="video/quicktime")
     device_asset_id: str = Field(default="", description="local AssetModel.id (opaque; client reconciliation)")
     source_moment_id: str = Field(default="")
+    # R7-D — "moment" (captured original, default) or "generated" (rendered MP4 backup). A generated upload
+    # carries source_output_id (the GeneratedOutput id) instead of source_moment_id; same pipeline otherwise.
+    media_kind: str = Field(default="moment")
+    source_output_id: str = Field(default="")
 
 
 class MediaMultipartInitiateRequest(BaseModel):
@@ -190,6 +194,8 @@ class MediaMultipartInitiateRequest(BaseModel):
     content_type: str = Field(default="video/quicktime")
     device_asset_id: str = Field(default="")
     source_moment_id: str = Field(default="")
+    media_kind: str = Field(default="moment")       # R7-D: "moment" | "generated"
+    source_output_id: str = Field(default="")       # R7-D: set for a generated-video backup
 
 
 class MediaPresignPartsRequest(BaseModel):
@@ -481,7 +487,8 @@ def create_app() -> FastAPI:
             rec, created = store.initiate_upload(
                 owner=principal.story_user_id, content_sha256=body.content_sha256.strip(),
                 size_bytes=body.size_bytes, content_type=body.content_type,
-                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id)
+                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id,
+                media_kind=body.media_kind, source_output_id=body.source_output_id)
         except _media.MediaOwnershipConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
         presign = store.presign_upload(owner=principal.story_user_id, cloud_media_id=rec["cloud_media_id"])
@@ -512,7 +519,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="media not found")
         return {k: rec.get(k) for k in
                 ("cloud_media_id", "state", "size_bytes", "content_sha256", "s3_key",
-                 "verified_at", "created_at", "updated_at", "device_asset_id", "source_moment_id")}
+                 "verified_at", "created_at", "updated_at", "device_asset_id", "source_moment_id",
+                 "media_kind", "source_output_id")}
 
     @app.get("/v1/media/{cloud_media_id}/download", status_code=200)
     def media_download(cloud_media_id: str, principal: Principal = Depends(require_user)):
@@ -532,7 +540,8 @@ def create_app() -> FastAPI:
         """List the caller's own media records (Query on the owner PK — never a cross-account Scan)."""
         recs = _media_store().list_for_owner(principal.story_user_id)
         return {"media": [{k: r.get(k) for k in ("cloud_media_id", "state", "size_bytes",
-                                                 "verified_at", "device_asset_id", "source_moment_id")}
+                                                 "verified_at", "device_asset_id", "source_moment_id",
+                                                 "media_kind", "source_output_id")}
                           for r in recs]}
 
     # ========================================================================================================
@@ -650,7 +659,8 @@ def create_app() -> FastAPI:
             rec, created = store.initiate_multipart(
                 owner=principal.story_user_id, content_sha256=body.content_sha256.strip(),
                 size_bytes=body.size_bytes, part_shas_b64=body.part_shas, content_type=body.content_type,
-                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id)
+                device_asset_id=body.device_asset_id, source_moment_id=body.source_moment_id,
+                media_kind=body.media_kind, source_output_id=body.source_output_id)
         except _media.MediaOwnershipConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
         return {"cloud_media_id": rec["cloud_media_id"], "state": rec["state"], "created": created,
