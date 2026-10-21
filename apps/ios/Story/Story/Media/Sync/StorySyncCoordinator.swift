@@ -205,7 +205,19 @@ final class StorySyncCoordinator {
                 _ = await UnderstandingSync.shared.restore(momentIds: momentIds, context: context,
                                                            activeOwner: owner, token: token)
                 job.baseRevision = srv.revision
-                job.lastSyncedHash = StoryDocCodec.contentHash(srv.doc)
+                // CRITICAL (cross-device LWW fix): stamp lastSyncedHash with the hash of the LOCAL RE-ENCODE of
+                // what we just adopted — NOT the wire doc's hash. syncAllDirty's dirty check compares
+                // contentHash(encodeFull(localStory)) against lastSyncedHash; decode->encode is NOT byte-identical
+                // (the local models don't round-trip every wire field), so stamping the wire-doc hash makes a
+                // freshly-pulled story look dirty on the very next syncAllDirty, and the device pushes its THINNER
+                // re-encode back up — silently overwriting the other device's richer plans/outputs (observed:
+                // Device B clobbering Device A). Hashing the local re-encode means a cleanly-pulled story is NOT
+                // treated as a local edit; only a genuine user edit (which changes the re-encode) marks it dirty.
+                if let adopted = fetchStory(sid, context: context) {
+                    job.lastSyncedHash = StoryDocCodec.contentHash(StoryDocCodec.encodeFull(story: adopted, context: context))
+                } else {
+                    job.lastSyncedHash = StoryDocCodec.contentHash(srv.doc)
+                }
                 job.dirty = false; job.updatedAt = .now
                 // Hydration of this revision COMPLETE — clear the durable barrier and release the gate.
                 job.hydrationPending = false
@@ -227,6 +239,17 @@ final class StorySyncCoordinator {
                 continue
             }
         }
+    }
+
+    /// Reconcile this account on sign-in / foreground: PULL first (adopt newer server docs), THEN push local
+    /// dirt. These MUST be serialized on one ModelContext — running them as two concurrent Tasks on the shared
+    /// mainContext races the StorySyncJobModel rows (a new story's freshly-upserted adopt job is lost under
+    /// syncAllDirty's concurrent save, so the device never GETs the new story — observed on Device B). Pulling
+    /// first also means syncAllDirty sees the just-adopted (clean, correctly-hashed) rows and does not push a
+    /// stale copy back. Call this instead of launching pull + syncAllDirty separately.
+    func reconcile(context: ModelContext, activeOwner: String?, token: @escaping () async -> String?) async {
+        await pull(context: context, activeOwner: activeOwner, token: token)
+        await syncAllDirty(context: context, activeOwner: activeOwner, token: token)
     }
 
     // MARK: - conflict recovery (C1 / Phase 4)
@@ -258,7 +281,13 @@ final class StorySyncCoordinator {
             StoryDocCodec.applyOutputs(sDoc, storyId: storyId, context: context)
             StoryDocCodec.applyDerived(sDoc, storyId: storyId, context: context, preferCloud: true)
             job.baseRevision = job.conflictServerRevision
-            job.lastSyncedHash = StoryDocCodec.contentHash(sDoc0)   // hash the WIRE doc (what the server holds)
+            // Stamp the LOCAL re-encode hash (see pull): hashing the wire doc would make the adopted story look
+            // dirty on the next syncAllDirty and push the thinner local copy back over the server's.
+            if let adopted = fetchStory(storyId, context: context) {
+                job.lastSyncedHash = StoryDocCodec.contentHash(StoryDocCodec.encodeFull(story: adopted, context: context))
+            } else {
+                job.lastSyncedHash = StoryDocCodec.contentHash(sDoc0)
+            }
         }
         clearConflict(job); job.dirty = false; try? context.save()
         // The clone is a brand-new Story -> it will be pushed on its own next trigger.

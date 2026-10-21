@@ -28,7 +28,7 @@ enum StoryCreativeRefinement {
     static var lastMusicNote: String = ""
     /// TEMPORARY DEBUG build identifier so the device UI proves WHICH source the installed app was built from
     /// (must include the StoryGuide input-wiring fixes a4c6aa5 + 4391b42). Bump on each verification rebuild.
-    static let buildIdentifier: String = "r7-output-sync-1"
+    static let buildIdentifier: String = "r7-sync-reconcile-2"
     /// Diagnostic breadcrumb: exactly what the MusicPlan request carried + what it returned, captured in the
     /// SINGLE resolver construction path. Proves (not assumes) the Guide reached MusicPlan. No media, no creds.
     static var lastMusicPlanInput: String = ""

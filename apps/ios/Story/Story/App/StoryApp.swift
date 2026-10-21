@@ -166,11 +166,10 @@ struct StoryApp: App {
                         Task { await MediaResolver.shared.reconcileCloudState(
                             context: ctx, activeOwner: owner,
                             token: { [weak auth] in await auth?.validAccessToken() }) }
-                        // R7-C: pull account-owned Story docs (clean-apply, dirty preserved, cloud-only shells).
-                        Task { await StorySyncCoordinator.shared.pull(
-                            context: ctx, activeOwner: owner,
-                            token: { [weak auth] in await auth?.validAccessToken() }) }
-                        Task { await StorySyncCoordinator.shared.syncAllDirty(
+                        // R7-C: pull account-owned Story docs (clean-apply, dirty preserved, cloud-only shells)
+                        // then push local dirt — SERIALIZED (pull before push) on one context to avoid the
+                        // concurrent-Task race that dropped a new story's adopt on Device B.
+                        Task { await StorySyncCoordinator.shared.reconcile(
                             context: ctx, activeOwner: owner,
                             token: { [weak auth] in await auth?.validAccessToken() }) }
                         Task { await UnderstandingSync.shared.push(
@@ -207,10 +206,7 @@ struct StoryApp: App {
                     Task { await MediaResolver.shared.reconcileCloudState(
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
-                    Task { await StorySyncCoordinator.shared.pull(
-                        context: ctx, activeOwner: owner,
-                        token: { [weak auth] in await auth?.validAccessToken() }) }
-                    Task { await StorySyncCoordinator.shared.syncAllDirty(
+                    Task { await StorySyncCoordinator.shared.reconcile(
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                     Task { await UnderstandingSync.shared.push(

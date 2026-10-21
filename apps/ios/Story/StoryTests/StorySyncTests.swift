@@ -652,4 +652,52 @@ extension StorySyncTests {
         XCTAssertEqual(outs.count, 1, "version row materialized on Device B")
         XCTAssertEqual(outs.first?.editPlanJSON, plan, "exact externalized plan restored (no re-plan)")
     }
+
+    // ========================================================================================================
+    // Cross-device divergence fix (observed: Device B clobbering Device A; new story never synced).
+    // ========================================================================================================
+
+    // A freshly-pulled story must NOT be seen as a local edit by the subsequent syncAllDirty — otherwise the
+    // device pushes its (thinner) re-encode back and overwrites the other device's richer doc (silent LWW).
+    func test_pulled_story_is_not_repushed_by_syncAllDirty() async throws {
+        let f = FakeSync(); let c = coord(f)
+        let sid = UUID().uuidString
+        // Seed a RICH server doc (derived guide + an output) as if written by Device A.
+        f.rows[sid] = FakeSync.Row(
+            revision: 5,
+            doc: ["schema_version": "story_doc/2",
+                  "story": ["id": sid, "title": "TMB", "status": "active",
+                            "intent": ["raw_text": "r", "theme": "t", "tone": "o", "summary": "s"]],
+                  "moment_refs": [],
+                  "outputs": [["output_id": UUID().uuidString, "title": "v1", "duration_seconds": 30.0,
+                               "operation_type": "original", "version_id": UUID().uuidString]],
+                  "derived": ["guide": ["json": "{\"g\":1}", "schema_version": "story_guide/1"]]],
+            mut: "seed", digest: "seed", deleted: false)
+        await c.pull(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "pull alone performs no PUT")
+        // Now the push pass that runs right after pull on foreground MUST NOT push the just-adopted story.
+        await c.syncAllDirty(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "a cleanly-pulled story must not be re-pushed (no silent LWW over the server)")
+        // And reconcile (pull THEN push) is idempotent — still no spurious PUT on a second cycle.
+        await c.reconcile(context: ctx, activeOwner: "A", token: { "tok" })
+        XCTAssertEqual(f.putCount, 0, "reconcile does not re-push an unchanged, cleanly-pulled story")
+    }
+
+    // reconcile() must adopt a brand-new server story even when a dirty local story exists in the same cycle
+    // (the real foreground case). Serialized pull-before-push; the new story gets a GET+materialize.
+    func test_reconcile_adopts_new_server_story_with_local_dirty_present() async throws {
+        let f = FakeSync(); let c = coord(f)
+        // A dirty local story on this device (never pushed yet).
+        let local = try makeStory(owner: "A", title: "Local Draft")
+        _ = local
+        // A new server story created on another device.
+        let newSid = UUID().uuidString
+        f.seed(storyId: newSid, title: "TMB A", revision: 1)
+        await c.reconcile(context: ctx, activeOwner: "A", token: { "tok" })
+        // The new server story is materialized locally…
+        let got = try ctx.fetch(FetchDescriptor<StoryModel>(predicate: #Predicate { $0.title == "TMB A" }))
+        XCTAssertEqual(got.count, 1, "new server story adopted on this device")
+        // …and the local dirty draft was pushed (its own id), proving push still ran after the pull.
+        XCTAssertGreaterThanOrEqual(f.putCount, 1, "local dirty draft still pushed after the serialized pull")
+    }
 }
