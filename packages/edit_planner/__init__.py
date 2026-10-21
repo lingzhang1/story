@@ -296,6 +296,134 @@ def normalize_plan(plan: dict, inputs: EditPlanInputs) -> tuple[dict, list[str]]
     return out, notes
 
 
+# Error-string prefixes that a DETERMINISTIC reorder can fix (placement only — no content change).
+_ORDER_REPAIRABLE_PREFIXES = (
+    "directive opening:",            # first segment must be X but is Y
+    "directive ending:",             # last segment must be X but is Y
+    "directive order_after:",        # A must come after B but is at position ...
+    "directive order_adjacent:",     # A must immediately follow B ...
+)
+
+
+def _errors_are_order_only(errs: list[str]) -> bool:
+    """True when EVERY error is an opening/ending/order PLACEMENT violation — i.e. fixable by reordering
+    segments without touching content, membership, duration, speed or source ranges. An empty list is False
+    (nothing to repair). A 'references Moment not in the eligible source set' or 'appears in no segment' error
+    is a MEMBERSHIP problem a reorder cannot fix, so it is deliberately NOT in the repairable set."""
+    if not errs:
+        return False
+    return all(any(str(e).startswith(p) for p in _ORDER_REPAIRABLE_PREFIXES) for e in errs)
+
+
+def repair_directive_placement(plan: dict, inputs: EditPlanInputs) -> dict | None:
+    """DETERMINISTIC structural repair: reassign segment `order` so the plan satisfies the hard PLACEMENT
+    directives (opening, ending, order_adjacent, order_after) carried in revision_context['directives'].
+
+    Preserves EVERYTHING else exactly — asset_id, source ranges, output_duration, speed, transition,
+    native_audio, music_alignment — and never adds, drops, duplicates or reselects a segment. It only changes
+    the order in which the SAME segments play. must_include / exclude are membership constraints a reorder
+    cannot satisfy, so they are left to the (unchanged) validator + model-repair path.
+
+    Returns a reordered COPY, or None when the placement constraints are unsatisfiable by reordering alone
+    (opening/ending Moment absent from the plan, or a cyclic/conflicting order graph) — in which case the
+    caller keeps the existing failure path. No model call. No frozen-contract change."""
+    import copy as _copy
+    ctx = inputs.revision_context or {}
+    directives = ctx.get("directives") or {}
+    if not isinstance(directives, dict):
+        return None
+    segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
+    if not segs:
+        return None
+
+    def _aid(s):
+        return str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None
+
+    def _low(v):
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [_low(x) for x in v]
+        return v
+
+    opening = _low(directives.get("opening")) if isinstance(directives.get("opening"), str) else None
+    ending = _low(directives.get("ending")) if isinstance(directives.get("ending"), str) else None
+    adj = [(a, b) for a, b in (_pairs(directives.get("order_adjacent")) or [])]
+    adj = [(a.lower(), b.lower()) for a, b in adj]
+    aft = [(a.lower(), b.lower()) for a, b in (_pairs(directives.get("order_after")) or [])]
+
+    present = [_aid(s) for s in segs]
+    present_set = set(present)
+    # opening/ending must be present to be placeable by reorder; absent => membership issue, not reorderable.
+    if opening is not None and opening not in present_set:
+        return None
+    if ending is not None and ending not in present_set:
+        return None
+
+    # Unique assets in current first-occurrence order.
+    uniq, seen = [], set()
+    for a in present:
+        if a not in seen:
+            seen.add(a); uniq.append(a)
+
+    # Adjacency chains: B -> A (A glued immediately after B). An asset follows at most one B; guard cycles.
+    follow, glued = {}, set()
+    for a, b in adj:
+        if a in present_set and b in present_set and b not in follow and a not in glued and a != b:
+            follow[b] = a; glued.add(a)
+
+    emitted, seq = set(), []
+    def _emit_chain(start):
+        cur = start
+        while cur is not None and cur not in emitted:
+            seq.append(cur); emitted.add(cur)
+            cur = follow.get(cur)
+    if opening is not None:
+        _emit_chain(opening)
+    for a in uniq:
+        if a in emitted or a in glued:
+            continue
+        _emit_chain(a)
+    for a in uniq:                      # defensive: a glued asset whose B was missing
+        if a not in emitted:
+            seq.append(a); emitted.add(a)
+
+    # order_after[A,B]: A after B (by first-occurrence position). Stable bubble with a cycle bound.
+    for _ in range(len(seq) * max(1, len(aft)) + 1):
+        pos = {a: i for i, a in enumerate(seq)}; changed = False
+        for a, b in aft:
+            if a in pos and b in pos and pos[a] < pos[b]:
+                seq.remove(a); seq.insert(seq.index(b) + 1, a); changed = True
+        if not changed:
+            break
+    else:
+        return None  # could not stabilize -> conflicting/cyclic ordering
+
+    # Placement must hold after after-fixups.
+    if opening is not None and (not seq or seq[0] != opening):
+        return None
+    if ending is not None and (not seq or seq[-1] != ending):
+        # ending may conflict with an adjacency chain ending elsewhere -> unrepairable by reorder.
+        return None
+
+    # Expand unique order back to full segments (repeats keep original relative order), renumber 0..N-1.
+    by_asset = {}
+    for s in segs:
+        by_asset.setdefault(_aid(s), []).append(s)
+    out_segs = []
+    for a in seq:
+        for s in by_asset.get(a, []):
+            out_segs.append(_copy.deepcopy(s))
+    placed = set(seq)
+    for s in segs:                      # defensive: anything not placed keeps original tail order
+        if _aid(s) not in placed:
+            out_segs.append(_copy.deepcopy(s))
+    for i, s in enumerate(out_segs):
+        s["order"] = i
+    out = _copy.deepcopy(plan); out["segments"] = out_segs
+    return out
+
+
 @dataclass
 class EditPlanInputs:
     story_id: str
@@ -1400,6 +1528,23 @@ class RealEditPlannerEngine:
             diag["normalized"] = True
             diag["normalize_notes"] = notes
         errs = validate_plan(plan, inputs)
+
+        # 3b: DETERMINISTIC structural directive repair (Part A). When the ONLY failures are opening/ending/
+        # order PLACEMENT violations, reorder the SAME segments to satisfy them — no model call, no content
+        # change, full validate_plan re-run. This fixes the common "model picked the right clips but didn't put
+        # the opening/adjacency Moment in the right position" case (satisfiable directive the model mis-ordered)
+        # without relaxing any constraint. Membership/duration/speed/source errors are NOT order-only, so they
+        # fall through to the model-repair loop unchanged. If the reorder cannot satisfy the constraints
+        # (absent opening/ending, cyclic order) it returns None and we keep the existing path.
+        if errs and _errors_are_order_only(errs):
+            reordered = repair_directive_placement(plan, inputs)
+            if reordered is not None:
+                re_errs = validate_plan(reordered, inputs)
+                if not re_errs:
+                    plan = reordered
+                    errs = []
+                    diag["structural_repair"] = True
+                    diag["structural_repair_kind"] = "directive_placement"
 
         # 4-5: bounded model repair carrying the exact errors.
         for _ in range(self._exec_repairs):

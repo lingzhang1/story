@@ -117,6 +117,89 @@ def test_validator_catches_speed_inconsistency():
     assert any("inconsistent" in e for e in errs)
 
 
+# ---- Part A: deterministic structural directive-placement repair ----
+from edit_planner import repair_directive_placement, _errors_are_order_only  # noqa: E402
+
+
+def _rev(directives):
+    return {"mode": "revise", "directives": directives}
+
+
+def test_structural_repair_fixes_opening_order_only():
+    # Model produced two VALID segments but in the wrong order (M2 first); directive requires M1 opening.
+    # Reorder whole segments (content stays valid) so the ONLY error is placement.
+    gp = _good_plan()
+    s_m1, s_m2 = gp["segments"][0], gp["segments"][1]
+    bad = {**gp, "segments": [{**s_m2, "order": 0}, {**s_m1, "order": 1}]}
+    inp = _inputs(revision_context=_rev({"opening": M1}))
+    errs = validate_plan(bad, inp)
+    assert errs and _errors_are_order_only(errs)
+    fixed = repair_directive_placement(bad, inp)
+    assert fixed is not None and validate_plan(fixed, inp) == []
+    assert str(fixed["segments"][0]["asset_id"]).lower() == M1.lower()
+    key = lambda p: sorted((str(s["asset_id"]).lower(), s["source_start_seconds"], s["source_end_seconds"],
+                            s["output_duration_seconds"]) for s in p["segments"])
+    assert key(bad) == key(fixed)
+
+
+def test_structural_repair_opening_plus_adjacency():
+    bad = _good_plan()  # M1 then M2
+    # require M2 opening AND M1 immediately after M2 -> reorder must produce [M2, M1]
+    inp = _inputs(revision_context=_rev({"opening": M2, "order_adjacent": [[M1, M2]]}))
+    errs = validate_plan(bad, inp)
+    assert errs and _errors_are_order_only(errs)
+    fixed = repair_directive_placement(bad, inp)
+    assert fixed is not None and validate_plan(fixed, inp) == []
+    order = [str(s["asset_id"]).lower() for s in fixed["segments"]]
+    assert order == [M2.lower(), M1.lower()]
+
+
+def test_structural_repair_preserves_transition_and_music_alignment():
+    # A reorder must carry per-segment transition + music_alignment WITH the segment (not positionally).
+    gp = _good_plan()
+    s_m1 = {**gp["segments"][0], "music_alignment": {"anchor": "highlight"}}   # M1 segment owns the alignment
+    s_m2 = {**gp["segments"][1], "transition": {"type": "crossfade", "duration_seconds": 1.0}}
+    bad = {**gp, "segments": [{**s_m2, "order": 0}, {**s_m1, "order": 1}]}     # M2 first; directive wants M1 open
+    inp = _inputs(music=True, revision_context=_rev({"opening": M1}))
+    fixed = repair_directive_placement(bad, inp)
+    assert fixed is not None and validate_plan(fixed, inp) == []
+    m1seg = next(s for s in fixed["segments"] if str(s["asset_id"]).lower() == M1.lower())
+    assert m1seg.get("music_alignment", {}).get("anchor") == "highlight"
+
+
+def test_structural_repair_none_when_opening_absent():
+    # opening references a Moment not in the plan -> membership issue, not reorderable.
+    bad = _good_plan()
+    inp = _inputs(revision_context=_rev({"opening": str(uuid4())}))
+    assert not _errors_are_order_only(validate_plan(bad, inp))   # ref-ineligible is NOT order-only
+    assert repair_directive_placement(bad, inp) is None
+
+
+def test_structural_repair_none_on_cyclic_order():
+    bad = _good_plan()
+    inp = _inputs(revision_context=_rev({"order_after": [[M1, M2], [M2, M1]]}))
+    assert repair_directive_placement(bad, inp) is None
+
+
+def test_must_include_absent_is_not_order_only():
+    # must_include of a Moment that appears in no segment is a membership error the reorder must NOT claim.
+    errs = ["directive must_include: Moment 'x' is required but appears in no segment"]
+    assert _errors_are_order_only(errs) is False
+
+
+def test_engine_structural_repair_end_to_end_no_model_repair():
+    # The model returns a plan with the WRONG opening; the engine's deterministic pass fixes it WITHOUT a
+    # second (repair) model call. FakeModelGateway returns the same response each call, so if the engine had
+    # to model-repair, the opening would stay wrong and generate() would raise. Success proves the reorder ran.
+    bad = _good_plan()
+    s_m1, s_m2 = bad["segments"][0], bad["segments"][1]
+    bad = {**bad, "segments": [{**s_m2, "order": 0}, {**s_m1, "order": 1}]}   # M2 first; directive wants M1 open
+    eng = RealEditPlannerEngine(FakeModelGateway(response=bad))
+    plan = eng.generate(_inputs(revision_context=_rev({"opening": M1})))
+    assert str(plan.segments[0].asset_id).lower() == M1.lower()
+    assert getattr(eng, "last_diagnostics", {}).get("structural_repair") is True
+
+
 # ---- endpoint ----
 def _client(engine):
     app = create_app()
