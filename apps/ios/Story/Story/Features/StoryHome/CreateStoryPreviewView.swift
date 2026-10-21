@@ -260,6 +260,20 @@ struct CreateStoryPreviewView: View {
         for pair in dirs.orderAfter + dirs.orderAdjacent { ids.formUnion(pair) }
         guard !ids.isEmpty else { return }
         let owner = auth.storyUserId
+
+        // Phase 1 (PRIMARY): HYDRATE server-side AU for every referenced Moment that lacks a LOCAL AU. The
+        // Edit Planner payload needs AU (useful_segments/summary) + duration, NOT original bytes — so this is
+        // what actually makes a cloud-only referenced Moment (e.g. TMB Moment 2) eligible. UnderstandingSync.
+        // restore is a metadata batch-get gated on content-sha / cloud-backed reuse: NO bytes, NO Bedrock.
+        // Only fetches ids missing locally, so it is a no-op when AU is already present. A failure leaves the
+        // directive intact and the eligibility preflight then surfaces an honest pending/recovery state.
+        _ = await UnderstandingSync.shared.restore(
+            momentIds: Array(ids), context: context, activeOwner: owner,
+            token: { [weak auth] in await auth?.validAccessToken() })
+
+        // SECONDARY (best-effort): pre-restore original BYTES for referenced cloud-only Moments. Not required
+        // for PLANNING (cloud-aware eligibility covers that) but gives RENDER a head start so the post-plan R6
+        // restore of selected Moments is faster. A failure is harmless — render restores on demand via R6.
         for m in story.moments where ids.contains(m.id) {
             guard let rel = m.asset?.relativePath else { continue }
             if MediaStore.shared.fileExists(relativePath: rel) { continue }   // already local

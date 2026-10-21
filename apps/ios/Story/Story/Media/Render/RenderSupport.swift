@@ -52,6 +52,32 @@ enum MomentResolver {
         return (resolve(moments: moments), unavailable.map { ($0.0, $0.1) })
     }
 
+    /// CLOUD-AWARE PLANNER DURATION (Phase 2). The Edit Planner payload needs a Moment's duration but NOT its
+    /// original bytes: duration is content metadata that `AssetModel.durationSeconds` already persists for every
+    /// Moment (populated at capture/import and carried in the synced Story doc's moment_refs). So planner
+    /// eligibility must NOT require a local file — a cloud-only Moment (bytes evicted/not-yet-restored) whose
+    /// AssetModel still has a positive duration is fully plannable. Prefer a FRESH local probe when the original
+    /// is on disk (authoritative), else fall back to the persisted/cloud `AssetModel.durationSeconds`. Returns
+    /// 0 when neither is known (caller treats 0 as "no usable duration" and drops honestly, never inventing one).
+    static func plannerDuration(for moment: MomentModel) -> Double {
+        if let rel = moment.asset?.relativePath, MediaStore.shared.fileExists(relativePath: rel) {
+            let probed = AVURLAsset(url: MediaStore.shared.absoluteURL(for: rel)).duration.seconds
+            if probed.isFinite && probed > 0 { return probed }
+        }
+        let meta = moment.asset?.durationSeconds ?? 0
+        return (meta.isFinite && meta > 0) ? meta : 0
+    }
+
+    /// Can this Moment's ORIGINAL bytes be obtained for RENDER — either they are on disk now, OR they are
+    /// cloud-backed and restorable on demand via R6? Planner eligibility requires this (in addition to AU +
+    /// duration): planning a Moment whose bytes are gone forever (no local file AND not cloud-backed) would
+    /// select footage that can never render. A cloud-only-but-backed Moment IS renderable (R6 restores it
+    /// before render), so it stays eligible — that is exactly the R7 regression fix.
+    static func isRenderableSource(_ moment: MomentModel) -> Bool {
+        if let rel = moment.asset?.relativePath, MediaStore.shared.fileExists(relativePath: rel) { return true }
+        return (moment.cloudMediaId ?? "").isEmpty == false && moment.cloudStateRaw == "cloud_verified"
+    }
+
     /// A Media-Engine URL resolver closure keyed by the Moment id STRING (matches EditSegmentV2.assetId).
     /// UUIDs are case-insensitive: the Edit Planner round-trips the id through the model, which may normalize
     /// its hex case (Swift's `uuidString` is UPPERCASE; the planner returns it lowercased), so we lowercase
@@ -265,14 +291,27 @@ enum EditPlanRequestBuilder {
         let hasAU = Set(allMUs.map { $0.momentId })
         for id in ids {
             guard let m = momentById[id] else { out.ineligibleUnknown.append(id); continue }
+            // CLOUD-AWARE eligibility (Phase 1/2): the planner payload needs AU + a known duration, NOT local
+            // bytes. So a Moment is ELIGIBLE for a directive reference as soon as its AU is present AND a
+            // duration is known (local probe OR AssetModel cloud metadata) — even if its original is evicted.
+            // We only report ineligibility when the planner genuinely cannot place it:
+            //   • AU present + duration>0                         -> eligible (nothing appended).
+            //   • AU MISSING, AU restorable from cloud (backed up) -> needsRestore (hydrate server AU, no bytes).
+            //   • AU MISSING, local file present (will be analyzed) -> needsAU (genuine analysis delay).
+            //   • no AU and not restorable / no duration            -> unknown (cannot satisfy).
+            let auPresent = hasAU.contains(id)
+            let dur = MomentResolver.plannerDuration(for: m)
+            let renderable = MomentResolver.isRenderableSource(m)
+            if auPresent && dur > 0 && renderable { continue }      // eligible — in the payload
+            let cloudBacked = (m.cloudMediaId ?? "").isEmpty == false
             let hasFile = (m.asset?.relativePath).map { MediaStore.shared.fileExists(relativePath: $0) } ?? false
-            if !hasFile {
-                if m.cloudMediaId != nil { out.ineligibleNeedsRestore.append(id) }   // restorable on demand
-                else { out.ineligibleUnknown.append(id) }                             // no bytes, not backed up
-            } else if !hasAU.contains(id) {
-                out.ineligibleNeedsAU.append(id)   // local but not analyzed yet -> planner would drop it
+            if !auPresent && cloudBacked {
+                out.ineligibleNeedsRestore.append(id)   // server AU restorable via UnderstandingSync (metadata, no bytes, no Bedrock)
+            } else if !auPresent && hasFile {
+                out.ineligibleNeedsAU.append(id)        // local but not analyzed yet -> wait, cannot force
+            } else {
+                out.ineligibleUnknown.append(id)        // not analyzed & not restorable, no duration, or bytes gone -> honest block
             }
-            // else: eligible (file + AU) — will be in the payload.
         }
         return out
     }
@@ -293,10 +332,16 @@ enum EditPlanRequestBuilder {
             allMUs.filter { momentIds.contains($0.momentId) }.map { ($0.momentId, $0) })
         var out: [NumberedMoment] = []
         for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
-            guard let md = mediaById[m.id], muByMoment[m.id] != nil else { continue }  // same drop rule as build()
+            // CLOUD-AWARE: same eligibility as build() — AU + a known duration (local probe OR cloud metadata),
+            // NOT local-file presence. Keeps "Moment N" 1:1 with the planner's eligible set even for a
+            // cloud-only Moment, so an opening/ending/adjacency reference to it is satisfiable (R7 regression fix).
+            guard muByMoment[m.id] != nil else { continue }          // same AU gate as build()
+            let dur = MomentResolver.plannerDuration(for: m)
+            guard dur > 0, MomentResolver.isRenderableSource(m) else { continue }
             out.append(NumberedMoment(number: 0, id: m.id,
-                                      durationSeconds: md.durationSeconds > 0 ? md.durationSeconds : (m.asset?.durationSeconds ?? 0),
-                                      relativePath: md.relativePath))
+                                      durationSeconds: dur,
+                                      relativePath: mediaById[m.id]?.relativePath ?? m.asset?.relativePath,
+                                      localAvailable: mediaById[m.id] != nil))
         }
         return out
     }
@@ -307,16 +352,18 @@ enum EditPlanRequestBuilder {
     /// a target: creative_intent carries the Story's EXPLICIT target_duration_seconds only when one is set.
     static func momentsPayload(for story: StoryModel, context: ModelContext)
         -> (moments: [JSONValue], creativeIntent: JSONValue)? {
-        let media = MomentResolver.resolve(moments: story.moments)
-        let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
         let momentIds = Set(story.moments.map { $0.id })
         let allMUs = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>())) ?? []
         let muByMoment = Dictionary(uniqueKeysWithValues:
             allMUs.filter { momentIds.contains($0.momentId) }.map { ($0.momentId, $0) })
         var moments: [JSONValue] = []
         for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
-            guard let media = mediaById[m.id], let mu = muByMoment[m.id] else { continue }
-            let dur = media.durationSeconds > 0 ? media.durationSeconds : (m.asset?.durationSeconds ?? 0)
+            // CLOUD-AWARE: identical eligibility to build() — AU + a known duration (local probe OR cloud
+            // metadata), independent of local bytes — so the Duration Planner recommends against EXACTLY the
+            // footage the Edit Planner will see, including cloud-only Moments.
+            guard let mu = muByMoment[m.id] else { continue }
+            let dur = MomentResolver.plannerDuration(for: m)
+            guard dur > 0, MomentResolver.isRenderableSource(m) else { continue }
             let understanding = JSONValue.object(fromJSONString: mu.understandingJSON)
             moments.append(.object([
                 "id": .string(m.id.uuidString),
@@ -343,7 +390,8 @@ enum EditPlanRequestBuilder {
                       musicAssetId: String? = nil,
                       musicAnalysis: JSONValue? = nil,
                       revisionContext: JSONValue? = nil) throws -> Build {
-        // Resolvable local media, keyed by Moment id.
+        // Resolvable local media, keyed by Moment id (the ORIGINAL bytes on THIS device right now). Used for
+        // the render-time URL resolver + diagnostics — NOT as the planner-eligibility gate (see below).
         let media = MomentResolver.resolve(moments: story.moments)
         let mediaById = Dictionary(uniqueKeysWithValues: media.map { ($0.momentId, $0) })
 
@@ -357,11 +405,27 @@ enum EditPlanRequestBuilder {
         var included: [MomentMedia] = []
         var excluded: [UUID] = []
 
+        // CLOUD-AWARE PLANNER ELIGIBILITY (Phase 2, owner P0). A Moment participates in PLANNING iff it has a
+        // completed/synced AU AND a known duration — INDEPENDENT of whether its original bytes are on this
+        // device. The planner payload needs only {id, duration_seconds, useful_segments, summary, evidence},
+        // all of which come from AssetModel.durationSeconds (cloud metadata) + the AU JSON — never the bytes.
+        // This closes the R7 regression where a cloud-only Moment (e.g. TMB Moment 2) with server-side AU was
+        // silently dropped because its file was not local, making a directive that named it fail
+        // directive_ref_ineligible. Original bytes are restored through R6 before RENDERING, not for planning.
+        //   • has AU + duration  -> eligible: added to moments[]. If also local, added to includedMedia.
+        //   • has file, no AU     -> excluded (genuine analysis delay; readiness surfaces it honestly).
+        //   • no file, no AU      -> excluded (nothing to plan from).
         for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
-            guard let media = mediaById[m.id], let mu = muByMoment[m.id] else {
-                excluded.append(m.id); continue                 // no local file OR no completed AU -> drop, never invent
+            guard let mu = muByMoment[m.id] else {
+                excluded.append(m.id); continue                 // no completed AU -> drop, never invent
             }
-            let dur = media.durationSeconds > 0 ? media.durationSeconds : (m.asset?.durationSeconds ?? 0)
+            let dur = MomentResolver.plannerDuration(for: m)    // local probe OR cloud metadata; 0 = unknown
+            guard dur > 0 else {
+                excluded.append(m.id); continue                 // no usable duration anywhere -> drop honestly
+            }
+            guard MomentResolver.isRenderableSource(m) else {
+                excluded.append(m.id); continue                 // bytes neither local nor cloud-restorable -> cannot render -> drop
+            }
             let understanding = JSONValue.object(fromJSONString: mu.understandingJSON)
             // Transform AU observed.useful_segments [{start_time,end_time,...}] -> [[a,b], ...] number pairs
             // (the shape the backend validator reads: a source range must overlap a useful_segment).
@@ -373,10 +437,16 @@ enum EditPlanRequestBuilder {
                 // Pass the understanding summary through so the planner has narrative grounding (optional).
                 "summary": understandingSummary(understanding),
             ].merging(Self.evidenceField(understanding)) { _, new in new }))
-            included.append(media)
+            // includedMedia is the LOCAL render set: only Moments whose bytes are on disk NOW. A cloud-only
+            // eligible Moment is in moments[] (planner) but NOT here — R6 restores it before render.
+            if let localMedia = mediaById[m.id] { included.append(localMedia) }
         }
 
-        guard !included.isEmpty else { throw BuildError.noUsableMoments }
+        // Plannable iff >=1 Moment reached the planner payload (has AU + duration). This is the CLOUD-AWARE
+        // set: a fully cloud-only Story (every eligible Moment's bytes evicted) is still plannable — the
+        // originals are restored through R6 before render. (Was `included` (local-only), which wrongly made a
+        // cloud-only Story unplannable even when every Moment had synced AU — the R7 regression.)
+        guard !moments.isEmpty else { throw BuildError.noUsableMoments }
 
         // R-d.2: the Story target is AUTHORITATIVE and must be chosen upstream (explicit CreativeIntent or an
         // accepted Duration recommendation). NO blind numeric fallback on the normal path — an unset target is a

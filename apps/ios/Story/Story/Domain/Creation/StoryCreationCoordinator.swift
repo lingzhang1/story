@@ -737,11 +737,31 @@ final class StoryCreationCoordinator {
         }
         if cancelRequested { return finishCancelled() }
 
+        // ---- PRE-RENDER RESTORE (Phase 2, owner req): the planner is now CLOUD-AWARE and may SELECT a Moment
+        // whose original bytes are not on this device (it was eligible via synced AU + cloud duration). The
+        // renderer DOES need the bytes, so restore (R6) the originals for exactly the Moments the plan selected
+        // BEFORE validating/resolving — never a bulk download, only the chosen set. A Moment that cannot be
+        // restored is reported by validate() below as an unresolved asset (honest failure), never a silent skip.
+        let selectedAssetIds = Set(plan.segments.map { $0.assetId.lowercased() })
+        let selectedMoments = story.moments.filter { selectedAssetIds.contains($0.id.uuidString.lowercased()) }
+        let restoreResult = await MomentResolver.resolveEnsuringLocal(
+            moments: selectedMoments, context: context,
+            activeOwner: AuthStore.shared?.storyUserId,
+            token: { await AuthStore.shared?.validAccessToken() })
+        // The render media set = whatever is now LOCAL for the selected Moments (post-restore), unioned with
+        // build.includedMedia (Moments that were already local). Keyed by id so there are no duplicates.
+        var renderMediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+        for md in restoreResult.media { renderMediaById[md.momentId] = md }
+        let renderMedia = Array(renderMediaById.values)
+        if !restoreResult.unavailable.isEmpty {
+            MediaEngineV1.beacon("pre-render restore: \(restoreResult.unavailable.count) selected Moment(s) could not be restored")
+        }
+
         // ---- validating: deterministic, BEFORE AVFoundation; renderer never runs on an invalid plan ----
         planningSubstatus = nil   // planning is done; drop the backend-status sub-line
         state = .validating
-        let resolver = MomentResolver.urlResolver(for: build.includedMedia)
-        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
+        let resolver = MomentResolver.urlResolver(for: renderMedia)
+        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: renderMedia) {
             return finishFailed(.invalidPlan(reason))
         }
         if cancelRequested { return finishCancelled() }
@@ -754,7 +774,7 @@ final class StoryCreationCoordinator {
         // a valid result. Gate: StoryCreativeRefinement.enabled (default false until device-accepted).
         if StoryCreativeRefinement.enabled {
             let sourceDur: (String) -> Double? = { aid in
-                build.includedMedia.first { $0.momentId.uuidString.lowercased() == aid.lowercased() }?.durationSeconds
+                renderMedia.first { $0.momentId.uuidString.lowercased() == aid.lowercased() }?.durationSeconds
             }
             let outcome = CreativeRefinementV2b.refine(
                 plan: plan, enabled: true, resolveURL: resolver,
@@ -1251,9 +1271,21 @@ extension StoryCreationCoordinator {
         catch { return finishFailed(.planUnavailable) }
 
         let plan = plan0
+        // PRE-RENDER RESTORE (same as the fresh path): a recovered plan may reference a cloud-only Moment the
+        // cloud-aware planner selected. Restore the selected Moments' originals via R6 before resolving.
+        let selectedAssetIds = Set(plan.segments.map { $0.assetId.lowercased() })
+        let selectedMoments = story.moments.filter { selectedAssetIds.contains($0.id.uuidString.lowercased()) }
+        let restoreResult = await MomentResolver.resolveEnsuringLocal(
+            moments: selectedMoments, context: context,
+            activeOwner: AuthStore.shared?.storyUserId,
+            token: { await AuthStore.shared?.validAccessToken() })
+        var renderMediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+        for md in restoreResult.media { renderMediaById[md.momentId] = md }
+        let renderMedia = Array(renderMediaById.values)
+
         state = .validating
-        let resolver = MomentResolver.urlResolver(for: build.includedMedia)
-        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: build.includedMedia) {
+        let resolver = MomentResolver.urlResolver(for: renderMedia)
+        if let reason = Self.validate(plan: plan, resolver: resolver, includedMedia: renderMedia) {
             return finishFailed(.invalidPlan(reason))
         }
         state = .rendering(progress: 0)
