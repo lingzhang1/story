@@ -211,6 +211,48 @@ describe("StoryApiStack (Milestone A)", () => {
     expect(names).toEqual(expect.arrayContaining(["STORY_MEDIA_TABLE", "STORY_MEDIA_BUCKET", "STORY_STORIES_TABLE", "STORY_UNDERSTANDING_TABLE"]));
   });
 
+  test("P0-Phase4: App Runner carries the AI quota env (usage table + observe-default mode)", () => {
+    const svc = Object.values(template.findResources("AWS::AppRunner::Service"))[0] as any;
+    const vars = svc.Properties.SourceConfiguration.ImageRepository.ImageConfiguration
+      .RuntimeEnvironmentVariables as Array<{ Name: string; Value: string }>;
+    const byName = Object.fromEntries(vars.map((e) => [e.Name, e.Value]));
+    expect(byName["STORY_USER_USAGE_TABLE"]).toBe("story-test-user-usage");
+    expect(byName["STORY_QUOTA_MODE"]).toBe("observe");                // beta rollout default = observe
+    expect(byName["STORY_QUOTA_GLOBAL_MONTHLY_USD"]).toBe("60");       // breaker below the $100 budget alert
+    expect(Object.keys(byName)).toEqual(expect.arrayContaining(
+      ["STORY_QUOTA_USER_MONTHLY_USD", "STORY_QUOTA_USER_DAILY_GENS", "STORY_QUOTA_MAX_ACTIVE_JOBS"]));
+  });
+
+  test("P0-Phase4: instance + worker roles can reserve/settle on UserUsage (Get/Update/Transact, NO PutItem)", () => {
+    // Both the API instance role (reserve at submit / sync) and the worker role (settle/release on terminal)
+    // get a scoped UserQuota statement on story-test-user-usage. Least-privilege: NO PutItem (the quota module
+    // only ever UpdateItem/GetItem/TransactWriteItems — it never creates a bare item), NO wildcard table.
+    const policies = Object.values(template.findResources("AWS::IAM::Policy")) as any[];
+    const quotaStmts: any[] = [];
+    for (const p of policies) {
+      for (const s of p.Properties.PolicyDocument.Statement) {
+        if (s.Sid === "UserQuotaReserve" || s.Sid === "UserQuotaSettle") quotaStmts.push(s);
+      }
+    }
+    expect(quotaStmts.length).toBe(2);  // one on the instance role, one on the worker role
+    for (const s of quotaStmts) {
+      const actions: string[] = Array.isArray(s.Action) ? s.Action : [s.Action];
+      expect(actions).toEqual(expect.arrayContaining(
+        ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"]));
+      expect(actions.some((a) => a.toLowerCase().includes("putitem"))).toBe(false);
+      expect(actions.some((a) => a === "dynamodb:*")).toBe(false);
+      // scoped to the single user-usage table ARN
+      expect(JSON.stringify(s.Resource)).toContain("story-test-user-usage");
+    }
+  });
+
+  test("P0-Phase4: worker Lambda carries the UserUsage table env for settlement", () => {
+    const fns = Object.values(template.findResources("AWS::Lambda::Function")) as any[];
+    const worker = fns.find((f) => f.Properties?.FunctionName === "story-test-edit-plan-worker");
+    expect(worker).toBeDefined();
+    expect(worker.Properties.Environment.Variables.STORY_USER_USAGE_TABLE).toBe("story-test-user-usage");
+  });
+
   test("instance role media grant is least-privilege: object RW on media/* but NO s3:DeleteObject", () => {
     // Find the MediaObjectAccess statement specifically (the staging bucket's auto-delete helper has its OWN
     // s3:DeleteObject* on a DIFFERENT role, so assert against THIS statement, not the whole policy blob).

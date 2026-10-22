@@ -287,6 +287,11 @@ export class StoryApiStack extends cdk.Stack {
         STORY_WORKER_DEADLINE_S: "840",
         STORY_EDIT_PLAN_VERSION: "5.2",
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
+        // P0 Beta Security Phase 4: the worker settles/releases the AI quota reservation on terminal. It
+        // needs the UserUsage table name; STORY_QUOTA_MODE is carried for parity (settle/release behave the
+        // same in observe/enforce — they only reverse what reserve recorded).
+        STORY_USER_USAGE_TABLE: `story-${environment}-user-usage`,
+        STORY_QUOTA_MODE: process.env.STORY_QUOTA_MODE ?? "observe",
       },
     });
     worker.addEventSource(new lambdaEventSources.SqsEventSource(jobsQueue, {
@@ -359,6 +364,23 @@ export class StoryApiStack extends cdk.Stack {
       ],
     }));
 
+    // P0 Beta Security Phase 4 — AI quota reserve/settle/release on the UserUsage table (owned by the
+    // SEPARATE story-<env>-auth stack). Referenced by NAME (cross-stack string) like the identity tables, so
+    // the api stack has no hard dependency on the auth stack. Least-privilege: GetItem + UpdateItem +
+    // TransactWriteItems (the quota module uses a transaction to apply the per-user AND global reservation
+    // deltas atomically). The API instance role reserves at submit / sync inference; the WORKER role settles
+    // + releases on terminal. Overridable via -c userUsageTable.
+    const userUsageTableName =
+      (this.node.tryGetContext("userUsageTable") as string) ?? `story-${environment}-user-usage`;
+    const quotaActions = ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"];
+    const userUsageArn = `arn:aws:dynamodb:${this.region}:${this.account}:table/${userUsageTableName}`;
+    instanceRole.addToPolicy(new iam.PolicyStatement({
+      sid: "UserQuotaReserve", effect: iam.Effect.ALLOW, actions: quotaActions, resources: [userUsageArn],
+    }));
+    worker.addToRolePolicy(new iam.PolicyStatement({
+      sid: "UserQuotaSettle", effect: iam.Effect.ALLOW, actions: quotaActions, resources: [userUsageArn],
+    }));
+
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
       serviceName: `story-${environment}-api`,
@@ -397,6 +419,17 @@ export class StoryApiStack extends cdk.Stack {
               // metrics, never 429; enforce = return 429). Default observe for the beta rollout window.
               { name: "STORY_RATE_LIMIT_TABLE", value: rateLimitTable.tableName },
               { name: "STORY_THROTTLE_MODE", value: process.env.STORY_THROTTLE_MODE ?? "observe" },
+              // P0 Beta Security Phase 4: AI quota + spend protection. STORY_USER_USAGE_TABLE points the
+              // reserve/settle/release at the (auth-stack-owned) durable UserUsage table; STORY_QUOTA_MODE
+              // defaults observe (emit QuotaWouldDeny, never deny) for the beta rollout — enforcement is a
+              // later env flip after observing real traffic, like the throttle. The $60 GLOBAL breaker is a
+              // PROPOSAL (below the $100 beta AWS Budget alert), overridable per env.
+              { name: "STORY_USER_USAGE_TABLE", value: userUsageTableName },
+              { name: "STORY_QUOTA_MODE", value: process.env.STORY_QUOTA_MODE ?? "observe" },
+              { name: "STORY_QUOTA_USER_MONTHLY_USD", value: process.env.STORY_QUOTA_USER_MONTHLY_USD ?? "5" },
+              { name: "STORY_QUOTA_USER_DAILY_GENS", value: process.env.STORY_QUOTA_USER_DAILY_GENS ?? "40" },
+              { name: "STORY_QUOTA_MAX_ACTIVE_JOBS", value: process.env.STORY_QUOTA_MAX_ACTIVE_JOBS ?? "5" },
+              { name: "STORY_QUOTA_GLOBAL_MONTHLY_USD", value: process.env.STORY_QUOTA_GLOBAL_MONTHLY_USD ?? "60" },
               // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },

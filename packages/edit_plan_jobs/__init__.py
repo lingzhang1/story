@@ -420,8 +420,59 @@ class JobStore:
                                    "error": f"{type(e).__name__}: {e}"[:300]}))
         return reenq
 
+    def sweep_quota_orphans(self, limit: int = 50) -> list[dict]:
+        """P0 Beta Security Phase 4 crash-recovery (concern 12). Find jobs whose AI-quota reservation + active-
+        job slot may be LEAKED and need releasing, EXACTLY ONCE, driven by a `quota_released` flag on the row:
 
-# --- minimal DynamoDB (de)serialization for the nested maps we store ---------------------------------
+          (a) a job stuck non-terminal PAST its expires_at — a worker that CRASHED mid-run (it never reached the
+              terminal settle/release). We mark it failed(category=orphaned) here so its reservation is released
+              as a failure (allowance refunded, no incurred spend recorded — the crashed attempt's cost is an
+              accepted under-count, never an over-charge).
+          (b) a job already TERMINAL but not yet `quota_released` — the worker died AFTER the store transition
+              but BEFORE the quota settle/release.
+
+        Returns [{job_id, owner, operation_id, terminal_status}] for the worker to release idempotently; the
+        row is stamped `quota_released=1` so a later sweep skips it (exactly-once). Only scans rows that are
+        NOT already quota_released. Bounded scan (dev volume); a GSI would replace it at scale.
+        """
+        now = _now()
+        resp = self._ddb_c().scan(
+            TableName=self.cfg.table,
+            FilterExpression="attribute_not_exists(quota_released) AND owner <> :dev",
+            ExpressionAttributeValues={":dev": {"S": "dev"}},
+            Limit=limit)
+        out: list[dict] = []
+        for raw in resp.get("Items", []):
+            d = _deser(raw)
+            jid = d["job_id"]
+            owner = d.get("owner")
+            op = d.get("operation_id")
+            status = d.get("status")
+            expires = int(d.get("expires_at", 0) or 0)
+            if not owner or owner == "dev" or not op:
+                continue  # legacy/dev job never held a reservation
+            # (a) crashed mid-run: non-terminal but past expiry -> finalize failed(orphaned)
+            if status not in TERMINAL and status != "cancel_requested" and now > expires:
+                self.fail(jid, "orphaned", "job expired without terminal transition (worker crash)")
+                status = "failed"
+            # Only release quota once the job is actually terminal (or we just made it so).
+            cur = self.get(jid)
+            if not cur or cur.get("status") not in TERMINAL:
+                continue
+            # stamp quota_released EXACTLY ONCE (conditional) so the worker releases once and later sweeps skip.
+            try:
+                self._ddb_c().update_item(
+                    TableName=self.cfg.table, Key={"job_id": {"S": jid}},
+                    UpdateExpression="SET quota_released = :one, updated_at = :u",
+                    ConditionExpression="attribute_not_exists(quota_released)",
+                    ExpressionAttributeValues={":one": {"N": "1"}, ":u": {"N": str(now)}})
+            except Exception as e:  # noqa: BLE001
+                if "ConditionalCheckFailed" in type(e).__name__ or "ConditionalCheckFailed" in str(e):
+                    continue  # another sweep already claimed this one
+                raise
+            out.append({"job_id": jid, "owner": owner, "operation_id": op,
+                        "terminal_status": cur.get("status")})
+        return out
 def _ser(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _ser_val(v) for k, v in obj.items()}
