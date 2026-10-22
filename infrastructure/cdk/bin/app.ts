@@ -3,6 +3,7 @@ import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { StoryApiStack } from "../lib/story-api-stack";
 import { StoryAuthStack } from "../lib/story-auth-stack";
+import { StoryBetaWafStack } from "../lib/story-beta-waf-stack";
 
 const app = new cdk.App();
 
@@ -54,6 +55,30 @@ if (app.node.tryGetContext("deployAuth") === "true") {
       region: process.env.CDK_DEFAULT_REGION,
     },
     tags: { Project: "Story", Environment: environment, ManagedBy: "CDK", Component: "auth" },
+  });
+}
+
+// P0 Beta Security Phase 2 — WAF. DESIGN/REVIEW ONLY: instantiated ONLY with `-c deployWaf=true`. Requires
+// the App Runner service ARN to protect and the EXISTING Observability SNS topic ARN to reuse for alarms
+// (never a duplicate topic; a missing topic fails synth loudly rather than creating action-less alarms).
+if (app.node.tryGetContext("deployWaf") === "true") {
+  const appRunnerServiceArn = app.node.tryGetContext("appRunnerServiceArn") as string | undefined;
+  const alarmTopicArn = app.node.tryGetContext("wafAlarmTopicArn") as string | undefined;
+  if (!appRunnerServiceArn) {
+    throw new Error("deployWaf=true requires -c appRunnerServiceArn=<beta App Runner service ARN>");
+  }
+  if (!alarmTopicArn) {
+    throw new Error(
+      "deployWaf=true requires -c wafAlarmTopicArn=<existing Observability SNS topic ARN " +
+        `(story-${environment}-observability-alarms)> — WAF alarms REUSE it; no duplicate topic is created.`
+    );
+  }
+  new StoryBetaWafStack(app, `story-${environment}-waf`, {
+    environment,
+    appRunnerServiceArn,
+    alarmTopicArn,
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: "us-east-1" },
+    tags: { Project: "Story", Environment: environment, ManagedBy: "CDK", Component: "waf" },
   });
 }
 
