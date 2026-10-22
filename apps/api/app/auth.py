@@ -287,7 +287,18 @@ def _principal_from_token(request: Request, token: str) -> Principal:
 
 def require_user(request: Request) -> Principal:
     """Protected-endpoint dependency. Always requires a VALID access token (prod + any endpoint that must
-    never run unauthenticated). A present-but-invalid token fails; a missing token fails."""
+    never run unauthenticated). A present-but-invalid token fails; a missing token fails.
+
+    Reuses the principal already resolved by the central `auth_boundary` middleware for THIS request when
+    present (verify-once: no second JWT verification or identity-store lookup). Falls back to resolving
+    directly if the middleware did not run (e.g. a unit test calling the dependency in isolation)."""
+    cached = getattr(request.state, "principal", None)
+    if cached is not None:
+        if cached.is_legacy:
+            # The boundary admitted a legacy principal only in the dev optional-auth window; a require_user
+            # route must still reject it.
+            raise AuthError("authentication required")
+        return cached
     token = _bearer(request)
     if not token:
         raise AuthError("authentication required")
@@ -297,7 +308,12 @@ def require_user(request: Request) -> Principal:
 def optional_user(request: Request) -> Principal:
     """Dev-only optional-auth window. A MISSING token -> legacy principal (only when auth is not required).
     A PRESENT token MUST be valid (invalid never downgrades). An authenticated user is NEVER downgraded. In
-    production (or whenever auth_required()), this is identical to require_user — fail closed."""
+    production (or whenever auth_required()), this is identical to require_user — fail closed.
+
+    Reuses the principal resolved by the central `auth_boundary` middleware when present (verify-once)."""
+    cached = getattr(request.state, "principal", None)
+    if cached is not None:
+        return cached
     token = _bearer(request)
     if token:
         # Present token: must verify. Never silently fall back on an invalid token.
@@ -306,3 +322,65 @@ def optional_user(request: Request) -> Principal:
         raise AuthError("authentication required")
     # No token + optional-auth window: the explicitly permitted legacy path.
     return Principal(story_user_id=LEGACY_PRINCIPAL, cognito_sub=None, is_legacy=True)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Central deny-by-default authentication boundary (P0 Beta Security Phase 1)
+# ---------------------------------------------------------------------------------------------------------
+# The ONE place that decides "is this request allowed through unauthenticated?". Every route that is NOT on
+# the explicit public allowlist is protected here, so a new endpoint cannot ship unauthenticated by a
+# forgotten per-route dependency (req 1, 7, 10). The dependencies above REUSE the principal this resolves,
+# so a protected request verifies its JWT and resolves its story_user_id exactly once (req 3, 12).
+
+# Always-public paths (exact match). Health is the only customer-facing public route.
+PUBLIC_PATHS_ALWAYS = frozenset({"/health"})
+# Interactive API docs — public ONLY in development. Disabled (treated as protected) in beta/gamma/prod
+# unless an operator explicitly opts in via STORY_DOCS_PUBLIC=1 (req 4).
+DOCS_PATHS = frozenset({"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"})
+
+
+def _docs_public() -> bool:
+    if _env() == "development":
+        return True
+    return os.environ.get("STORY_DOCS_PUBLIC", "0") == "1"
+
+
+def is_public_path(path: str) -> bool:
+    if path in PUBLIC_PATHS_ALWAYS:
+        return True
+    if path in DOCS_PATHS:
+        return _docs_public()
+    return False
+
+
+def _boundary_auth_required() -> bool:
+    """At the central boundary, beta/gamma/production FAIL CLOSED regardless of STORY_REQUIRE_AUTH (req 8).
+    Development may run the optional-auth window (req 9); STORY_REQUIRE_AUTH=1 opts dev into fail-closed too."""
+    if _env() == "development":
+        return os.environ.get("STORY_REQUIRE_AUTH", "0") == "1"
+    return True  # every non-development environment is always fail-closed
+
+
+async def auth_boundary(request: Request, call_next):
+    """ASGI middleware: deny-by-default. Public allowlist passes through untouched. For every other path,
+    resolve the principal ONCE and stash it on request.state.principal; reject when auth is required and no
+    valid principal can be established. Dependencies downstream reuse request.state.principal."""
+    path = request.url.path
+    if is_public_path(path):
+        return await call_next(request)
+
+    try:
+        token = _bearer(request)
+        if token:
+            request.state.principal = _principal_from_token(request, token)
+        elif _boundary_auth_required():
+            raise AuthError("authentication required")
+        else:
+            # dev optional-auth window, no token: the explicitly permitted legacy principal
+            request.state.principal = Principal(
+                story_user_id=LEGACY_PRINCIPAL, cognito_sub=None, is_legacy=True)
+    except HTTPException as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+
+    return await call_next(request)

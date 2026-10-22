@@ -35,13 +35,17 @@ jobs:
           # CI runs those suites as written rather than erroring on a missing import.
       - name: Run pytest (packages + contracts)
         env:
-          PYTHONPATH: ${{ github.workspace }}/packages:${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/packages:${{ github.workspace }}:${{ github.workspace }}/apps/api
         run: |
           # Discovery over the package + contract trees: collects whatever test suites exist on THIS
           # branch (the baseline has edit_plan_jobs/music_provider/contracts; the feature PR adds
           # observability). Passing explicit dirs would hard-fail (pytest exit 4) on a branch that does
           # not yet contain one of them — discovery runs the real suites present without weakening them.
-          pytest -q packages contracts
+          #
+          # apps/api is included so the API auth guardrails ACTUALLY run in CI: the central deny-by-default
+          # auth-boundary test and the paid-endpoint-protection route-introspection test are the guardrails
+          # that fail the build if a new private route ships unauthenticated (P0 Beta Security Phase 1).
+          pytest -q packages contracts apps/api/tests
       - name: Contract compatibility (OpenAPI + schemas present and parseable)
         run: |
           python - <<'PY'

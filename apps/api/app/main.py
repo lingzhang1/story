@@ -119,7 +119,9 @@ from app.deps import (
     get_duration_planner_engine,
 )
 from app.store import InMemoryStoryStore
-from app.auth import optional_user, require_user, Principal  # P0 Beta Auth Increment 2: trusted-identity dependency
+from app.auth import (  # P0 Beta Auth: trusted-identity dependencies + central deny-by-default boundary
+    optional_user, require_user, Principal, auth_boundary, _docs_public,
+)
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -442,7 +444,21 @@ SERVICE_VERSION = "0.1.0"  # Milestone A
 def create_app() -> FastAPI:
     """Construct the FastAPI app. A factory so tests get a fresh instance
     (and a fresh in-memory store) per app."""
-    app = FastAPI(title="Story API", version=SERVICE_VERSION)
+    # Docs endpoints (/docs, /redoc, /openapi.json) are PUBLIC only in development (or with an explicit
+    # STORY_DOCS_PUBLIC=1 opt-in); in beta/gamma/prod they are disabled so the schema is not exposed
+    # unauthenticated (req 4). Disabling at construction time means FastAPI never registers the routes.
+    _docs_on = _docs_public()
+    app = FastAPI(
+        title="Story API",
+        version=SERVICE_VERSION,
+        docs_url="/docs" if _docs_on else None,
+        redoc_url="/redoc" if _docs_on else None,
+        openapi_url="/openapi.json" if _docs_on else None,
+    )
+    # Central deny-by-default authentication boundary (P0 Beta Security Phase 1). Every non-allowlisted route
+    # is protected here; the per-route require_user/optional_user dependencies reuse the principal this
+    # resolves (verify-once). Registered via the HTTP-middleware decorator form.
+    app.middleware("http")(auth_boundary)
     log = get_logger("story-api")
 
     # Non-persistent demo store (see app/store.py). One per app instance.
@@ -1093,6 +1109,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/music-direction", response_model=MusicDirectionContract, status_code=200)
     def music_direction(
         body: MusicDirectionRequest,
+        principal: Principal = Depends(optional_user),
         engine: MusicDirectionEngine = Depends(get_music_direction_engine),
     ) -> MusicDirectionContract:
         """Infer the intended soundtrack CHARACTER from CreativeIntent (+ optional Guide framing),
@@ -1918,15 +1935,23 @@ def create_app() -> FastAPI:
     @app.post("/v1/stories", response_model=StoryDTO, status_code=201)
     def create_story(
         body: CreateStoryRequest,
+        principal: Principal = Depends(optional_user),
         story_engine: StoryEngine = Depends(get_story_engine),
     ) -> StoryDTO:
-        """Derive a CreativeIntent from raw_text and create a Story."""
+        """Derive a CreativeIntent from raw_text and create a Story.
+
+        P0 Beta Security Phase 1: now carries the shared auth dependency — previously it had NONE and accepted
+        anonymous writes. `optional_user` means dev keeps the legacy window (req 9) while beta/gamma/prod FAIL
+        CLOSED at the central boundary regardless of flag (req 8). iOS does NOT call POST /v1/stories (it
+        persists via PUT /v1/stories/{id}); this is a legacy demo route over the in-memory store. Ownership is
+        the verified story_user_id — never a client-supplied owner."""
         intent = story_engine.derive_creative_intent(body.raw_text)
         story = story_engine.create_story(body.title, intent)
         store.put(story)
         log.info(
             "story_created",
-            extra={"operation": "create_story", "story_id": str(story.id)},
+            extra={"operation": "create_story", "story_id": str(story.id),
+                   "owner": principal.story_user_id},
         )
         return StoryDTO.from_domain(story)
 
