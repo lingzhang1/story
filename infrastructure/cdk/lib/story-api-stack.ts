@@ -374,9 +374,13 @@ export class StoryApiStack extends cdk.Stack {
               // tables. These are non-secret resource identifiers (NOT credentials), read from context so prod
               // supplies its own; dev defaults match the provisioned story-development-auth stack.
               { name: "STORY_ENVIRONMENT", value: environment },
-              // Dev stays in optional-auth so existing iOS builds keep working; prod is fail-closed in code
-              // regardless of this value.
-              { name: "STORY_REQUIRE_AUTH", value: environment === "production" ? "1" : "0" },
+              // Auth posture: DEVELOPMENT (and the unit-test synth env) stay in optional-auth
+              // (STORY_REQUIRE_AUTH=0) so existing iOS builds keep working during local iteration. EVERY
+              // REAL deploy environment (beta/gamma/production) is FAIL-CLOSED (=1): unauthenticated writes
+              // are rejected, required for account isolation once real testers exist. Production is also
+              // fail-closed in code regardless. Durable across CDK deploys — a redeploy will not silently
+              // reopen beta to anonymous writes.
+              { name: "STORY_REQUIRE_AUTH", value: (environment === "development" || environment === "test") ? "0" : "1" },
               { name: "STORY_COGNITO_USER_POOL_ID",
                 // beta/gamma/prod: guaranteed non-null by the release-input guard above. dev: keep the known
                 // dev pool as a local-synth convenience.
