@@ -18,6 +18,8 @@ struct StoryApp: App {
         // empty) keeps the same backend instead of reverting to the dev defaults. MUST run before any
         // StoryAuthConfig / StoryBackend value is read.
         StoryLaunchConfig.captureLaunchOverrides()
+        // Visible one-line resolved-backend banner: what account/API this launch will ACTUALLY use.
+        print("STORY_ACTIVE_BACKEND pool=\(StoryAuthConfig.userPoolId) domain=\(StoryAuthConfig.domainPrefix) api=\(StoryBackend.baseURL.absoluteString)")
         let schema = Schema([
             StoryModel.self, MomentModel.self, StoryMomentLink.self,
             AssetModel.self, GeneratedOutputModel.self,

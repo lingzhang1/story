@@ -40,6 +40,24 @@ enum StoryLaunchConfig {
                 defaults.set(v, forKey: storePrefix + k)
             }
         }
+        logResolved(defaults)
+    }
+
+    /// DIAGNOSTIC: print, per key, the env value, the persisted value, and which SOURCE won
+    /// (env / persisted / default). This is the fast way to tell apart "the scheme env vars never reached
+    /// the app" (all keys show env=nil → the Run was not actually injecting them) from "they reached it and
+    /// were persisted" (env=<beta> → source=env). Printed once at launch; grep the Xcode console for
+    /// `STORY_LAUNCH_CONFIG`.
+    static func logResolved(_ defaults: UserDefaults = .standard) {
+        let envv = ProcessInfo.processInfo.environment
+        for k in keys {
+            let e = envv[k].map { $0.isEmpty ? "<empty>" : $0 } ?? "nil"
+            let p = defaults.string(forKey: storePrefix + k) ?? "nil"
+            let source = (envv[k]?.isEmpty == false) ? "env"
+                : (defaults.string(forKey: storePrefix + k)?.isEmpty == false) ? "persisted"
+                : "default"
+            print("STORY_LAUNCH_CONFIG \(k) source=\(source) env=\(e) persisted=\(p)")
+        }
     }
 
     /// Resolve a config value: env var (attached launch / explicit override) → persisted value → nil.
