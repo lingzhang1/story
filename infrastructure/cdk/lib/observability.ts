@@ -261,16 +261,22 @@ export class Observability extends Construct {
     // 7. Bedrock sustained throttling (not a single spike): 15 min window, 3 datapoints.
     mk("bedrock-throttling", throttles, { threshold: 3, evaluationPeriods: 3, datapointsToAlarm: 3,
        comparisonOperator: GT });
-    // 8. Quota ENFORCEMENT error (distinct from a normal denial) — alarms on any error. Schema now.
+    // 8. Quota ENFORCEMENT error (distinct from a normal denial) — alarms on any error. UNWIRED until the
+    //    auth/quota milestone emits QuotaEnforcementError. treatMissingData=MISSING so an unmeasured metric
+    //    sits in INSUFFICIENT_DATA ("not measured yet"), NOT OK — an unwired metric must never read as a
+    //    healthy zero. Flips to a real OK/ALARM signal automatically once the emitter ships.
     mk("quota-enforcement-error", custom("QuotaEnforcementError"), { threshold: 0, evaluationPeriods: 1,
-       comparisonOperator: GT });
+       comparisonOperator: GT }, cloudwatch.TreatMissingData.MISSING);
     // 9. Abnormal daily model cost over the budget line.
     mk("abnormal-model-cost", estCost.with({ statistic: "Sum", period: cdk.Duration.days(1) }),
        { threshold: props.monthlyBudgetUsd ? props.monthlyBudgetUsd / 15 : 20, evaluationPeriods: 1,
          comparisonOperator: GT });
-    // 10. Unauthorized-access anomaly (possible probing). Schema now (auth milestone populates it).
+    // 10. Unauthorized-access anomaly (possible probing). UNWIRED until the auth/quota milestone emits
+    //     AuthorizationDenials. treatMissingData=MISSING so no data shows INSUFFICIENT_DATA ("not measured
+    //     yet"), NOT a green OK — a security metric with no emitter must not look like "no unauthorized
+    //     access". Becomes a live OK/ALARM once the emitter ships.
     mk("unauthorized-access-anomaly", custom("AuthorizationDenials"), { threshold: 20, evaluationPeriods: 1,
-       comparisonOperator: GT });
+       comparisonOperator: GT }, cloudwatch.TreatMissingData.MISSING);
 
     // ---- AWS Budget — monthly, with 50/80/100% ACTUAL-spend notifications ------------------------------
     // Beta/dev default = $100 (req 7). GATED on createBudget (default false) so this never duplicates B0's
