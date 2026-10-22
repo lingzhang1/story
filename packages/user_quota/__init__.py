@@ -70,9 +70,9 @@ class QuotaConfig:
         f = lambda k, d: float(os.environ.get(k, d))     # noqa: E731
         i = lambda k, d: int(os.environ.get(k, d))       # noqa: E731
         return cls(
-            user_monthly_usd=f("STORY_QUOTA_USER_MONTHLY_USD", "5"),
-            user_daily_gens=i("STORY_QUOTA_USER_DAILY_GENS", "40"),
-            max_active_jobs=i("STORY_QUOTA_MAX_ACTIVE_JOBS", "5"),
+            user_monthly_usd=f("STORY_QUOTA_USER_MONTHLY_USD", "8"),
+            user_daily_gens=i("STORY_QUOTA_USER_DAILY_GENS", "20"),
+            max_active_jobs=i("STORY_QUOTA_MAX_ACTIVE_JOBS", "2"),
             # Correction 5: start the GLOBAL Bedrock breaker BELOW the $100 beta AWS Budget (budgets are
             # ALERTS, not caps) — default $60 so the breaker trips before the budget alert. PROPOSAL only.
             global_monthly_usd=f("STORY_QUOTA_GLOBAL_MONTHLY_USD", "60"),
@@ -231,7 +231,19 @@ class UserQuota:
             TableName=self.usage_table, Key=self._key(story_user_id, period)).get("Item") or {}
         if marker in again:
             return Reservation(rid, story_user_id, estimate_usd, gens, state="reserved")
-        raise QuotaDenied("user_monthly_usd")
+        # Determine WHICH per-user bound the conditional breached, so the denial scope (and the app's message)
+        # is accurate. Daily-gens is checked before monthly-usd so "you've hit today's limit" wins when both
+        # would trip. (A global breach is raised earlier by the pre-check, never here.)
+        c = self.cfg
+        cur_gens = float(again.get("gens_used", {}).get("N", "0"))
+        cur_res = float(again.get("reserved_usd", {}).get("N", "0"))
+        cur_set = float(again.get("settled_usd", {}).get("N", "0"))
+        if cur_gens + gens > c.user_daily_gens:
+            raise QuotaDenied("user_daily_gens")
+        if cur_res + cur_set + estimate_usd > c.user_monthly_usd:
+            raise QuotaDenied("user_monthly_usd")
+        # Neither per-user bound explains it -> the global transaction leg failed (global breaker).
+        raise QuotaDenied("global_monthly_usd")
 
     def _global_add(self, period: str, rid: str, estimate_usd: float) -> None:
         """Best-effort idempotent global reserve add (fallback path only). Marker gres#<rid> keeps it
