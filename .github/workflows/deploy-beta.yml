@@ -4,6 +4,14 @@ name: Deploy (beta)
 # scoped to the protected `beta` Environment with a concurrency guard so two beta deploys never
 # overlap. Beta MEMBER account (224033508028) only — separate from dev (989088054552).
 # NO production, NO auto-prod, NO mutable :latest authority — the image is pinned by DIGEST.
+#
+# REQUIRED `beta` GitHub Environment VARIABLES (Settings → Environments → beta → Variables; all are
+# non-secret identifiers/ARNs, not credentials):
+#   BETA_DEPLOY_ROLE_ARN        = arn:aws:iam::224033508028:role/story-beta-github-deploy
+#   CFN_EXEC_ROLE_ARN           = arn:aws:iam::224033508028:role/story-beta-cfn-exec
+#   BETA_COGNITO_USER_POOL_ID   = us-east-1_3cPNfbrUl
+#   BETA_COGNITO_APP_CLIENT_ID  = 4f3dtn9d0nk5uq1hcvbdc7m73c
+# (The deploy + cfn-exec roles are CfnOutputs of the already-deployed story-beta-api stack.)
 
 on:
   workflow_dispatch:
@@ -84,8 +92,21 @@ jobs:
           npm ci || npm install
           # Drive CloudFormation through Story's dedicated scoped exec role, NOT the admin bootstrap role.
           # CFN_EXEC_ROLE_ARN is set in the beta Environment (the CfnExecRoleArn stack output).
+          #
+          # Context passed:
+          #  - imageDigest: the immutable image built above (no :latest).
+          #  - cognitoUserPoolId / cognitoAppClientId: the beta auth pool + client. REQUIRED by the stack's
+          #    fail-closed release-input guard for beta (synthesis halts without them); set as non-secret
+          #    Environment VARIABLES (identifiers, not credentials) in the `beta` GitHub Environment.
+          #  - observability + alarmDestination: deploy the single authoritative monitoring stack (owned by
+          #    the observability thread) into beta, alarming to alerts@yotale.ai. createBudget is left UNSET
+          #    (=false) — the account-level $100 beta budget is owned by B0's org-foundation, not duplicated here.
           npx cdk deploy -c environment=beta --require-approval never \
             -c imageDigest="${{ steps.image.outputs.digest }}" \
+            -c cognitoUserPoolId="${{ vars.BETA_COGNITO_USER_POOL_ID }}" \
+            -c cognitoAppClientId="${{ vars.BETA_COGNITO_APP_CLIENT_ID }}" \
+            -c observability=true \
+            -c alarmDestination=alerts@yotale.ai \
             --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
 
       - name: Upload release manifest artifact
