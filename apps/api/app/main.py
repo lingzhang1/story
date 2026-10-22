@@ -16,7 +16,7 @@ import json
 import time
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -123,6 +123,7 @@ from app.auth import (  # P0 Beta Auth: trusted-identity dependencies + central 
     optional_user, require_user, Principal, auth_boundary, _docs_public,
 )
 from app.throttle import throttle_middleware  # P0 Beta Security Phase 3: per-user rate limiting
+from app import quota_gate  # P0 Beta Security Phase 4: per-user AI quota + spend protection
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -463,6 +464,11 @@ def create_app() -> FastAPI:
     # Middleware runs in REVERSE registration order, so register throttle FIRST and auth LAST: auth_boundary
     # is then the OUTERMOST layer (runs before throttle), so request.state.principal is resolved before the
     # throttle middleware reads it. P0 Beta Security Phase 3.
+    # Middleware runs in REVERSE registration order, so register quota FIRST (innermost, closest to the
+    # handler), throttle next, and auth LAST (outermost). Auth resolves request.state.principal first; then
+    # throttle (rate per minute); then quota (cumulative AI spend/allowance + active-job slots). P0 Beta
+    # Security Phases 3 (throttle) + 4 (quota).
+    app.middleware("http")(quota_gate.quota_middleware)
     app.middleware("http")(throttle_middleware)
     app.middleware("http")(auth_boundary)
     log = get_logger("story-api")
@@ -477,6 +483,12 @@ def create_app() -> FastAPI:
             _emit_metrics({name: 1}, {"op_type": f"throttle_{cls}"})
 
         app.state._throttle_metric_hook = _throttle_metric
+
+        # Phase 4: quota metrics on the SAME low-cardinality op_type dimension (quota_<class>), never a uid.
+        def _quota_metric(name: str, cls: str) -> None:
+            _emit_metrics({name: 1}, {"op_type": f"quota_{cls}"})
+
+        app.state._quota_metric_hook = _quota_metric
     except Exception:  # noqa: BLE001 — observability optional; middleware no-ops without the hook
         pass
 
@@ -1396,6 +1408,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/edit-plan-jobs", status_code=202)
     async def submit_edit_plan_job(
+        request: Request,  # FastAPI injects; first param (no default) so it is excluded from the OpenAPI schema
         operation_id: str = Form(..., description="client idempotency key; a NEW version uses a NEW id"),
         owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON EditPlanRequest body (same shape as /v1/edit-plan)"),
@@ -1466,6 +1479,12 @@ def create_app() -> FastAPI:
                 sheet_order=order, payload_fingerprint=fp)
         except _jobs.PayloadConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
+        # P0 Beta Security Phase 4: reserve the AI allowance + an active-job slot EXACTLY ONCE for a newly
+        # created job (a recovered duplicate reserves nothing new — idempotent on scoped_op/job slot). In
+        # enforce mode an over-quota submit is short-circuited 429 BEFORE enqueue; observe never denies.
+        denied = quota_gate.submit_reserve(request, principal.story_user_id, scoped_op, job_id, created=created)
+        if denied is not None:
+            return denied
         if created:
             store.enqueue(job_id)
         log.info("edit_plan_job_submitted", extra={"operation": "edit_plan_job", "job_id": job_id,
@@ -1518,6 +1537,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/story-coverage/v2/jobs", status_code=202)
     def submit_coverage_job(
+        request: Request,  # FastAPI injects; first param (no default) so it is excluded from the OpenAPI schema
         operation_id: str = Form(..., description="canonical coverage op-id (see coverage_operation_id); a changed snapshot uses a new id"),
         owner: str = Form(default="dev", description="IGNORED — ownership derives from the authenticated principal (Increment 2)"),
         body: str = Form(..., description="JSON StoryCoverageV2Request body (same shape as POST /v1/story-coverage/v2)"),
@@ -1559,6 +1579,10 @@ def create_app() -> FastAPI:
                 payload_fingerprint=fp, staging_prefix=staging_prefix)
         except _jobs.PayloadConflict as e:
             raise HTTPException(status_code=409, detail=str(e))
+        # P0 Beta Security Phase 4: reserve AI allowance + active-job slot exactly once (same as edit-plan).
+        denied = quota_gate.submit_reserve(request, principal.story_user_id, scoped_op, job_id, created=created)
+        if denied is not None:
+            return denied
         if created:
             store.enqueue(job_id)
         log.info("coverage_job_submitted", extra={"operation": "coverage_job", "job_id": job_id,

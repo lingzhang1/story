@@ -54,6 +54,74 @@ except Exception:  # noqa: BLE001
     _PRICING_VERSION = "unknown"
 
 _ENV = os.environ.get("STORY_ENVIRONMENT", "development")
+
+# P0 Beta Security Phase 4 — worker-side AI quota settlement. Import is best-effort (the worker predates
+# quota wiring and a packaging gap must never break plan execution). user_quota is a bundled package; the
+# worker CANNOT import app.* (FastAPI not bundled), so it uses the pure module directly.
+try:
+    from user_quota import UserQuota as _UserQuota
+except Exception:  # noqa: BLE001
+    _UserQuota = None
+
+
+def _quota_usage_table() -> str:
+    return os.environ.get("STORY_USER_USAGE_TABLE", "")
+
+
+def _job_cost_usd(diag: dict) -> float:
+    """Actual incurred Bedrock spend for this job from its diagnostics tokens (correction 3/8: ALL billable
+    attempts — retries, repairs, critiques, fallback — are summed into input/output_tokens by the engine)."""
+    if _price_lookup is None:
+        return 0.0
+    in_tok = int(diag.get("input_tokens") or 0)
+    out_tok = int(diag.get("output_tokens") or 0)
+    model_id = _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
+    try:
+        cost, _priced = _price_lookup(in_tok, out_tok, model_id)
+        return float(cost)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _quota_settle_job(job: dict, *, actual_usd: float) -> None:
+    """A job COMPLETED: settle the actual incurred spend + release the active-job slot, each EXACTLY ONCE
+    (idempotent on the reservation + slot markers — safe on an SQS redelivery). No-op when quota is not
+    provisioned or the job predates quota (no owner/operation_id)."""
+    if _UserQuota is None or not _quota_usage_table():
+        return
+    uid = job.get("owner")
+    scoped_op = job.get("operation_id")
+    job_id = job.get("job_id")
+    if not uid or not scoped_op or uid == "dev":
+        return  # legacy/dev job — never had a reservation
+    try:
+        q = _UserQuota(usage_table=_quota_usage_table())
+        try:
+            q.settle(uid, scoped_op, actual_usd=actual_usd)
+        finally:
+            q.release_slot(uid, job_id)
+    except Exception:  # noqa: BLE001 — settlement drift is reconcilable; never break the worker
+        pass
+
+
+def _quota_release_job(job: dict, *, incurred_usd: float = 0.0) -> None:
+    """A job FAILED / CANCELLED: refund the user allowance, KEEP any incurred Bedrock spend (correction 3/4),
+    release the active-job slot. Idempotent. No-op for legacy/dev or unprovisioned quota."""
+    if _UserQuota is None or not _quota_usage_table():
+        return
+    uid = job.get("owner")
+    scoped_op = job.get("operation_id")
+    job_id = job.get("job_id")
+    if not uid or not scoped_op or uid == "dev":
+        return
+    try:
+        q = _UserQuota(usage_table=_quota_usage_table())
+        try:
+            q.release_allowance(uid, scoped_op, gens=1, incurred_usd=incurred_usd)
+        finally:
+            q.release_slot(uid, job_id)
+    except Exception:  # noqa: BLE001
+        pass
 _PRIMARY_MODEL = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
 _FALLBACK_MODEL = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
 
@@ -226,12 +294,23 @@ def _run_one(store: _jobs.JobStore, job_id: str) -> str:
         return "missing"
     op = job.get("operation_type", _jobs.OP_EDIT_PLAN)
     if op == _jobs.OP_COVERAGE_V2:
-        return _run_coverage(store, job_id, job)
-    if op == _jobs.OP_EDIT_PLAN:
-        return _run_edit_plan(store, job_id, job)
-    # Unknown operation: fail the job safely (never execute an unrecognized payload against any engine).
-    store.fail(job_id, "unknown_operation", f"operation_type={op!r} not in {sorted(_jobs.KNOWN_OPERATIONS)}")
-    return f"failed:unknown_operation"
+        result = _run_coverage(store, job_id, job)
+    elif op == _jobs.OP_EDIT_PLAN:
+        result = _run_edit_plan(store, job_id, job)
+    else:
+        # Unknown operation: fail the job safely (never execute an unrecognized payload against any engine).
+        store.fail(job_id, "unknown_operation",
+                   f"operation_type={op!r} not in {sorted(_jobs.KNOWN_OPERATIONS)}")
+        _quota_release_job(job, incurred_usd=0.0)
+        return "failed:unknown_operation"
+    # Phase 4: a CANCELLED terminal (any of the several cancel return points in the run paths) refunds the
+    # user allowance + releases the active-job slot, each EXACTLY ONCE. Idempotent, so this is safe even if a
+    # run path already released — completions settle (with real cost) inside the run path; failures release
+    # inside; only the cancel outcomes are finalized here. No incurred spend is recorded for a cancel (the
+    # engine did not publish a billed result; any mid-run spend is a reconcilable under-count, not a charge).
+    if isinstance(result, str) and result.startswith("cancelled"):
+        _quota_release_job(job, incurred_usd=0.0)
+    return result
 
 
 def _run_coverage(store: _jobs.JobStore, job_id: str, job: dict) -> str:
@@ -300,10 +379,16 @@ def _run_coverage(store: _jobs.JobStore, job_id: str, job: dict) -> str:
             "mapper_prompt_version": os.environ.get("STORY_COVERAGE_MAPPER_VERSION", "story_coverage/mapper-v1"),
         }
         ok = store.complete_coverage(job_id, result, diag, token)
+        if ok:
+            # Phase 4: coverage spend is two Opus calls; settle the actual + release the slot (exactly once).
+            _quota_settle_job(job, actual_usd=_job_cost_usd({
+                "input_tokens": diag.get("input_tokens"), "output_tokens": diag.get("output_tokens"),
+                "any_fallback": diag.get("any_fallback")}))
         return "completed" if ok else "publish_lost_lease"
     except Exception as exc:  # noqa: BLE001
         cat, detail = _classify_coverage(exc)
         store.fail(job_id, cat, detail, token)
+        _quota_release_job(job, incurred_usd=0.0)
         return f"failed:{cat}"
 
 
@@ -441,6 +526,9 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         # complete is conditional on running + our lease_token -> a stale worker can't publish over us.
         ok = store.complete(job_id, _plan_to_dict(plan), diag_out, token)
         store.delete_staging(prefix)
+        if ok:
+            # Phase 4: settle the ACTUAL incurred Bedrock spend + release the active-job slot (exactly once).
+            _quota_settle_job(job, actual_usd=_job_cost_usd(diag_out))
         return "completed" if ok else "publish_lost_lease"
     except Exception as exc:  # noqa: BLE001 — classify everything into a terminal failure
         cat, detail = _classify(exc, locals().get("inputs"))
@@ -494,6 +582,14 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                 pass
         store.fail(job_id, cat, detail, token)
         store.delete_staging(prefix)
+        # Phase 4: FAILED generation refunds the user allowance but KEEPS incurred Bedrock spend (correction
+        # 3/4). Release the active-job slot (exactly once).
+        _incurred = 0.0
+        try:
+            _incurred = _job_cost_usd(getattr(_eng, "last_diagnostics", {}) or {})
+        except Exception:  # noqa: BLE001
+            _incurred = 0.0
+        _quota_release_job(job, incurred_usd=_incurred)
         return f"failed:{cat}"
 
 
