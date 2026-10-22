@@ -99,7 +99,7 @@ describe("StoryApiStack (Milestone A)", () => {
     // (main + DLQ), the worker (+ the S3 auto-delete helper), the staging bucket, an SQS event source,
     // and the reconcile rule. API Gateway / Cognito / Fargate remain forbidden (separate tests below).
     // R2/R3 (owner-approved) adds the media ownership table -> 2 DynamoDB tables total.
-    template.resourceCountIs("AWS::DynamoDB::Table", 4);  // jobs + media + R7 stories + R7-E understanding
+    template.resourceCountIs("AWS::DynamoDB::Table", 5);  // jobs + media + R7 stories + R7-E understanding + P0-P3 rate-limits
     template.resourceCountIs("AWS::SQS::Queue", 2);          // jobs + DLQ
     template.resourceCountIs("AWS::Lambda::EventSourceMapping", 1);
     template.resourceCountIs("AWS::Events::Rule", 1);         // reconcile tick
@@ -190,6 +190,18 @@ describe("StoryApiStack (Milestone A)", () => {
       { AttributeName: "moment_id", KeyType: "RANGE" },
     ]);
     expect(u.DeletionPolicy).toBe("Retain");
+  });
+
+  test("provisions the P0-Phase3 rate-limit table (composite key, TTL on ttl, ephemeral)", () => {
+    const tables = template.findResources("AWS::DynamoDB::Table");
+    const rl = Object.values(tables).find((t: any) => t.Properties?.TableName === "story-test-rate-limits") as any;
+    expect(rl).toBeDefined();
+    expect(rl.Properties.KeySchema).toEqual([
+      { AttributeName: "story_user_id", KeyType: "HASH" },
+      { AttributeName: "rl_key", KeyType: "RANGE" },
+    ]);
+    expect(rl.Properties.TimeToLiveSpecification).toEqual({ AttributeName: "ttl", Enabled: true });
+    expect(rl.Properties.BillingMode).toBe("PAY_PER_REQUEST");
   });
 
   test("App Runner carries the media table + bucket env", () => {
