@@ -231,6 +231,19 @@ export class StoryApiStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // P0 Beta Security Phase 3 — per-user rate-limit counters. EPHEMERAL (TTL-expiring fixed-window
+    // counters), kept SEPARATE from the durable UserUsage quota table. PK story_user_id, SK rl_key
+    // ("rl#<class>#<window>"). PAY_PER_REQUEST + TTL => near-zero cost and self-cleaning. DESTROY is correct
+    // (nothing durable here — losing it just resets windows).
+    const rateLimitTable = new dynamodb.Table(this, "RateLimitTable", {
+      tableName: `story-${environment}-rate-limits`,
+      partitionKey: { name: "story_user_id", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "rl_key", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // Worker Lambda — DOCKER-FREE zip asset (the sandbox cannot run Docker). scripts/build_worker_asset.sh
     // pre-stages app/ + packages/ + contracts/ + prompts/ + the Linux cp312 pydantic wheels into
     // infrastructure/cdk/.worker-asset (boto3 is in the Lambda runtime). The planner resolves prompts at
@@ -306,6 +319,7 @@ export class StoryApiStack extends cdk.Stack {
     mediaTable.grantReadWriteData(instanceRole);
     storiesTable.grantReadWriteData(instanceRole); // R7: account-owned Story documents RW
     understandingTable.grantReadWriteData(instanceRole); // R7-E: account-level Moment Understanding RW
+    rateLimitTable.grantReadWriteData(instanceRole); // P0 Phase 3: per-user throttle counters (UpdateItem)
     instanceRole.addToPolicy(new iam.PolicyStatement({
       sid: "MediaObjectAccess",
       effect: iam.Effect.ALLOW,
@@ -364,6 +378,10 @@ export class StoryApiStack extends cdk.Stack {
               { name: "STORY_MEDIA_BUCKET", value: mediaBucket.bucketName },
               { name: "STORY_STORIES_TABLE", value: storiesTable.tableName }, // R7
               { name: "STORY_UNDERSTANDING_TABLE", value: understandingTable.tableName }, // R7-E
+              // P0 Beta Security Phase 3: per-user throttle counters table + rollout mode (observe = emit
+              // metrics, never 429; enforce = return 429). Default observe for the beta rollout window.
+              { name: "STORY_RATE_LIMIT_TABLE", value: rateLimitTable.tableName },
+              { name: "STORY_THROTTLE_MODE", value: process.env.STORY_THROTTLE_MODE ?? "observe" },
               // Music provider (Epidemic) — without these the provider is disabled and /v1/music/candidates 404s.
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },

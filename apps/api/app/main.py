@@ -122,6 +122,7 @@ from app.store import InMemoryStoryStore
 from app.auth import (  # P0 Beta Auth: trusted-identity dependencies + central deny-by-default boundary
     optional_user, require_user, Principal, auth_boundary, _docs_public,
 )
+from app.throttle import throttle_middleware  # P0 Beta Security Phase 3: per-user rate limiting
 
 # Scene Understanding multipart limits (04-aws-infrastructure.md §32/§44).
 _SU_MAX_FRAMES = 6
@@ -458,6 +459,11 @@ def create_app() -> FastAPI:
     # Central deny-by-default authentication boundary (P0 Beta Security Phase 1). Every non-allowlisted route
     # is protected here; the per-route require_user/optional_user dependencies reuse the principal this
     # resolves (verify-once). Registered via the HTTP-middleware decorator form.
+    #
+    # Middleware runs in REVERSE registration order, so register throttle FIRST and auth LAST: auth_boundary
+    # is then the OUTERMOST layer (runs before throttle), so request.state.principal is resolved before the
+    # throttle middleware reads it. P0 Beta Security Phase 3.
+    app.middleware("http")(throttle_middleware)
     app.middleware("http")(auth_boundary)
     log = get_logger("story-api")
 
