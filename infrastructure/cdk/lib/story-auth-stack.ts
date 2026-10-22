@@ -62,15 +62,50 @@ export class StoryAuthStack extends cdk.Stack {
     const cfnPool = this.userPool.node.defaultChild as cognito.CfnUserPool;
     // Essentials feature plan — REQUIRED for native passwordless EMAIL_OTP.
     cfnPool.addPropertyOverride("UserPoolTier", "ESSENTIALS");
+
+    // ---- Same-account SES email sending (beta+, DEVELOPER mode) ---------------------------------------
+    // Cross-account Cognito<->SES is NOT supported: a pool in account X must use an SES verified identity
+    // in the SAME account X + region. For beta, Cognito OTP sends via the beta-account SES identity
+    // (beta.yotale.ai), set to DEVELOPER mode with SourceArn = that identity's ARN + a custom From address.
+    // GATED on `-c sesFromEmail=...` so dev/test/synth (no context) keep Cognito's default sender unchanged
+    // and every existing test stays green. The SES identity must be VERIFIED in-account before deploy
+    // (DKIM/MAIL-FROM SUCCESS) — a provisioning prerequisite, enforced at the final-review STOP, not here.
+    const sesFromEmail = this.node.tryGetContext("sesFromEmail") as string | undefined;
+    if (sesFromEmail) {
+      // Derive the SES identity domain from the From address (user@domain -> domain) for the SourceArn.
+      const sesIdentityDomain =
+        (this.node.tryGetContext("sesIdentityDomain") as string | undefined) ??
+        sesFromEmail.split("@").pop()!;
+      // CROSS-ACCOUNT SAFETY: the SES identity MUST live in the SAME account as this pool. We build the
+      // SourceArn from the deploy-time account (`AWS::AccountId` ref, i.e. whatever account CloudFormation
+      // runs in), NOT a synth-time string — so it can never be frozen to the wrong account by an ambient
+      // credential during synth. When `-c sesAccountId=` is given we ALSO assert it equals the resolved
+      // deploy account via a stack guard, so a deploy into the wrong account fails fast instead of silently
+      // pointing Cognito at another account's SES identity.
+      const expectedSesAccountId = this.node.tryGetContext("sesAccountId") as string | undefined;
+      if (expectedSesAccountId && !cdk.Token.isUnresolved(this.account) && this.account !== expectedSesAccountId) {
+        throw new Error(
+          `SES same-account guard: pool account ${this.account} != sesAccountId ${expectedSesAccountId}. ` +
+            `Cognito<->SES must be same-account; deploy with the beta credential (account ${expectedSesAccountId}).`
+        );
+      }
+      cfnPool.addPropertyOverride("EmailConfiguration", {
+        EmailSendingAccount: "DEVELOPER",
+        From: sesFromEmail,
+        // Deploy-account ref — resolves to the account CloudFormation deploys into (beta: 224033508028).
+        SourceArn: cdk.Fn.sub(
+          `arn:aws:ses:${this.region}:\${AWS::AccountId}:identity/${sesIdentityDomain}`
+        ),
+      });
+    }
     // Correction 3 (passwordless): Story exposes NO password UI. Cognito REQUIRES `PASSWORD` to appear in
     // AllowedFirstAuthFactors (an EMAIL_OTP-only list is rejected: "PASSWORD should be configured as one of
     // the allowed first auth factors"), so PASSWORD stays here at the POOL level — but NO password auth flow
     // is enabled on the app client (no ALLOW_USER_PASSWORD_AUTH / ALLOW_USER_SRP_AUTH below), so a client can
     // never actually perform a password sign-in. EMAIL_OTP is the real first factor; Apple is federated.
     cfnPool.addPropertyOverride("Policies.SignInPolicy.AllowedFirstAuthFactors", ["PASSWORD", "EMAIL_OTP"]);
-    // Cognito sends the OTP email via its default sender (SES later for branded/high-volume). Documented
-    // in the design: SES is in SANDBOX today — default Cognito email is rate-limited and NOT for production
-    // beta volume; SES production access is a provisioning prerequisite (NOT enabled here).
+    // OTP email sender: Cognito's DEFAULT sender in dev/test (no sesFromEmail context); the same-account
+    // SES identity in beta+ (set via the EmailConfiguration override above when `-c sesFromEmail=` is given).
 
     // ---- Sign in with Apple (federated IdP) -----------------------------------------------------------
     // Raw Cfn because 2.160.0 has no Apple L2. Credentials are passed at provision time (context/Secrets),

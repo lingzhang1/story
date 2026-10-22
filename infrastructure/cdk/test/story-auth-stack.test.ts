@@ -127,4 +127,37 @@ describe("StoryAuthStack (P0 Beta Auth, Increment 1)", () => {
     const pool = Object.values(template.findResources("AWS::Cognito::UserPool"))[0] as any;
     expect(pool.DeletionPolicy).toBe("Retain");
   });
+
+  test("DEFAULT (dev/test): Cognito uses its default email sender — NO DEVELOPER SES EmailConfiguration", () => {
+    const pool = Object.values(template.findResources("AWS::Cognito::UserPool"))[0] as any;
+    const emailCfg = pool.Properties.EmailConfiguration;
+    // Either absent entirely, or present without DEVELOPER sending account.
+    if (emailCfg) {
+      expect(emailCfg.EmailSendingAccount).not.toBe("DEVELOPER");
+    } else {
+      expect(emailCfg).toBeUndefined();
+    }
+  });
+
+  test("beta: same-account SES wired in DEVELOPER mode with correct From + deploy-account SourceArn (point 7)", () => {
+    const betaSes = synth({ sesFromEmail: "no-reply@beta.yotale.ai" });
+    betaSes.hasResourceProperties("AWS::Cognito::UserPool", {
+      EmailConfiguration: Match.objectLike({
+        EmailSendingAccount: "DEVELOPER",
+        From: "no-reply@beta.yotale.ai",
+        // SourceArn is built from the DEPLOY-time account ref (Fn::Sub ${AWS::AccountId}), never a
+        // synth-time literal — so it cannot be frozen to the wrong account by ambient credentials.
+        SourceArn: {
+          "Fn::Sub": "arn:aws:ses:us-east-1:${AWS::AccountId}:identity/beta.yotale.ai",
+        },
+      }),
+    });
+  });
+
+  test("beta SES same-account guard THROWS when the synth account != sesAccountId", () => {
+    // synth() builds the stack with account 123456789012; a mismatching sesAccountId must fail fast.
+    expect(() =>
+      synth({ sesFromEmail: "no-reply@beta.yotale.ai", sesAccountId: "224033508028" })
+    ).toThrow(/SES same-account guard/);
+  });
 });
