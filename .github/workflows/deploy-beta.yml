@@ -1,0 +1,95 @@
+name: Deploy (beta)
+
+# Beta deployment — Option B. MANUAL DISPATCH ONLY. Keyless via GitHub OIDC (no static keys),
+# scoped to the protected `beta` Environment with a concurrency guard so two beta deploys never
+# overlap. Beta MEMBER account (224033508028) only — separate from dev (989088054552).
+# NO production, NO auto-prod, NO mutable :latest authority — the image is pinned by DIGEST.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'deploy-beta' to confirm a beta deployment"
+        required: true
+        default: ""
+
+permissions:
+  id-token: write      # required to request the OIDC token
+  contents: read
+
+concurrency:
+  group: deploy-beta                 # never two concurrent beta deploys
+  cancel-in-progress: false          # let an in-flight deploy finish rather than abort mid-way
+
+jobs:
+  deploy-beta:
+    name: Build immutable artifacts + deploy to beta
+    runs-on: ubuntu-latest
+    environment: beta                 # protected GitHub Environment (approvals/vars live here)
+    if: ${{ github.event.inputs.confirm == 'deploy-beta' }}
+    env:
+      AWS_REGION: us-east-1
+      ENVIRONMENT: beta
+      ECR_REPO: story-beta-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC (no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.BETA_DEPLOY_ROLE_ARN }}   # Environment VARIABLE (an ARN is not a secret); set in the `beta` Environment after the beta api stack is first deployed
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin \
+              "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+          echo "registry=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Login to public ECR (authenticated base-image pull — avoids anonymous 429 rate limit)
+        run: |
+          # The Dockerfile pulls public.ecr.aws/docker/library/python; anonymous pulls hit a strict
+          # data limit (429). An AUTHENTICATED pull via the OIDC creds gets a much higher quota.
+          aws ecr-public get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Build + push IMMUTABLE API image (tagged by git SHA), capture digest
+        id: image
+        run: |
+          IMG="${{ steps.ecr.outputs.registry }}/${ECR_REPO}"
+          SHA="${GITHUB_SHA::12}"
+          docker build -f apps/api/Dockerfile -t "$IMG:git-$SHA" .
+          docker push "$IMG:git-$SHA"
+          # The IMMUTABLE identifier is the digest, not the tag.
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPO" \
+            --image-ids imageTag="git-$SHA" --query 'imageDetails[0].imageDigest' --output text)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=$IMG@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Build reproducible worker asset + hash
+        id: worker
+        run: |
+          bash scripts/build_worker_asset.sh
+          ( cd infrastructure/cdk/.worker-asset && zip -qr -X "$GITHUB_WORKSPACE/worker.zip" . )
+          echo "sha256=$(shasum -a 256 worker.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Write release manifest
+        run: bash scripts/release-manifest.sh "$ENVIRONMENT" "${{ steps.image.outputs.digest }}" worker.zip
+
+      - name: CDK deploy (beta) by digest, through the SCOPED cfn-exec role
+        working-directory: infrastructure/cdk
+        run: |
+          npm ci || npm install
+          # Drive CloudFormation through Story's dedicated scoped exec role, NOT the admin bootstrap role.
+          # CFN_EXEC_ROLE_ARN is set in the beta Environment (the CfnExecRoleArn stack output).
+          npx cdk deploy -c environment=beta --require-approval never \
+            -c imageDigest="${{ steps.image.outputs.digest }}" \
+            --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
+
+      - name: Upload release manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-beta-${{ github.sha }}
+          path: release-manifests/*.json

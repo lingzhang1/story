@@ -52,6 +52,27 @@ export class StoryApiStack extends cdk.Stack {
     // Immutable deploy: the pipeline passes `-c imageDigest=sha256:...` so App Runner is pinned to an
     // exact digest (auto-deploy off). Absent (legacy/local synth) -> mutable :latest fallback.
     const imageDigest = this.node.tryGetContext("imageDigest") as string | undefined;
+    const cognitoUserPoolId = this.node.tryGetContext("cognitoUserPoolId") as string | undefined;
+    const cognitoAppClientId = this.node.tryGetContext("cognitoAppClientId") as string | undefined;
+
+    // --- Non-dev deploy safety: FAIL SYNTHESIS on missing release inputs -------------------------------
+    // development may fall back to :latest + the known dev Cognito pool for local/iterative synth. beta,
+    // gamma and production are real environments with their OWN accounts and credentials: a missing image
+    // digest or Cognito pool/client id must HALT synthesis, never silently fall back to a mutable :latest
+    // image or the dev pool (which would point a member account at dev's auth). Each required input is
+    // listed explicitly so the error names exactly what the pipeline forgot to pass.
+    const REQUIRES_EXPLICIT_RELEASE_INPUTS = ["beta", "gamma", "production"];
+    if (REQUIRES_EXPLICIT_RELEASE_INPUTS.includes(environment)) {
+      const missing: string[] = [];
+      if (!imageDigest) missing.push("-c imageDigest=sha256:<digest> (no :latest fallback allowed)");
+      if (!cognitoUserPoolId) missing.push("-c cognitoUserPoolId=<env pool> (no dev-pool fallback allowed)");
+      if (!cognitoAppClientId) missing.push("-c cognitoAppClientId=<env client> (no dev-client fallback allowed)");
+      if (missing.length) {
+        throw new Error(
+          `StoryApiStack(${environment}): refusing to synthesize without explicit release inputs — ${missing.join("; ")}.`
+        );
+      }
+    }
 
     // --- ECR repository for the App Runner image -------------------------
     // Stable, deterministic name so the image can be built + pushed (via
@@ -222,7 +243,14 @@ export class StoryApiStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, "..", ".worker-asset")),
       timeout: cdk.Duration.seconds(900),
       memorySize: 2048,
-      reservedConcurrentExecutions: Number(process.env.STORY_WORKER_CONCURRENCY ?? "2"),
+      // Reserved concurrency is OPT-IN, driven by STORY_WORKER_CONCURRENCY. Unset or "0" => NO reservation
+      // (worker runs from the shared unreserved pool). This reproduces the ACTUAL deployed beta worker,
+      // which has no reserved concurrency (a fresh account's Lambda limit of 10 forbids reserving any, since
+      // AWS requires >=10 unreserved to remain). Dev/prod set a positive value to cap concurrency. Changing
+      // the deployed beta value requires separate approval — this reconciliation only reproduces it.
+      ...(Number(process.env.STORY_WORKER_CONCURRENCY ?? "0") > 0
+        ? { reservedConcurrentExecutions: Number(process.env.STORY_WORKER_CONCURRENCY) }
+        : {}),
       environment: {
         PYTHONPATH: "/var/task:/var/task/packages",
         STORY_JOBS_TABLE: jobsTable.tableName,
@@ -350,9 +378,11 @@ export class StoryApiStack extends cdk.Stack {
               // regardless of this value.
               { name: "STORY_REQUIRE_AUTH", value: environment === "production" ? "1" : "0" },
               { name: "STORY_COGNITO_USER_POOL_ID",
-                value: (this.node.tryGetContext("cognitoUserPoolId") as string) ?? "us-east-1_AzfHOEdA5" },
+                // beta/gamma/prod: guaranteed non-null by the release-input guard above. dev: keep the known
+                // dev pool as a local-synth convenience.
+                value: cognitoUserPoolId ?? "us-east-1_AzfHOEdA5" },
               { name: "STORY_COGNITO_APP_CLIENT_ID",
-                value: (this.node.tryGetContext("cognitoAppClientId") as string) ?? "5rnvp7oq6d7crbt01ldpe89tkh" },
+                value: cognitoAppClientId ?? "5rnvp7oq6d7crbt01ldpe89tkh" },
               { name: "STORY_IDENTITY_CLAIMS_TABLE", value: identityClaimsTableName },
               { name: "STORY_USERS_TABLE", value: storyUsersTableName },
             ],
@@ -409,10 +439,14 @@ export class StoryApiStack extends cdk.Stack {
           {
             StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
             // GitHub may emit a numeric-id-qualified sub (repo:owner@<id>/repo@<id>:environment:...);
-            // match it with a StringLike that still pins owner + repo name + the development environment.
+            // match it with a StringLike that pins owner + repo name + THIS environment. The owner/repo
+            // pattern (lingzhang1*/story*) is UNCHANGED — it already tolerates the numeric repository-id
+            // qualifier GitHub appends — and only the environment segment is parameterized, so a beta role
+            // trusts exactly environment:beta and the dev role exactly environment:development. Trust is
+            // NOT broadened: each env's role matches its own single GitHub Environment, never a wildcard.
             StringLike: {
               "token.actions.githubusercontent.com:sub":
-                "repo:lingzhang1*/story*:environment:development",
+                `repo:lingzhang1*/story*:environment:${environment}`,
             },
           }
         ),

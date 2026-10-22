@@ -221,7 +221,17 @@ describe("StoryApiStack (Milestone A)", () => {
 
 describe("P0 Beta Observability construct", () => {
   function synthWith(ctx: Record<string, unknown>): Template {
-    const app = new cdk.App({ context: ctx });
+    // Non-dev environments now REQUIRE explicit release inputs (imageDigest + cognito ids) or synthesis
+    // fails by design. Tests that don't care about those inputs get harmless defaults so they exercise the
+    // behavior they actually assert (observability, naming, etc.) without tripping the release-input guard.
+    // A test that specifically asserts the guard passes its own context and overrides these.
+    const withReleaseDefaults = {
+      imageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      cognitoUserPoolId: "us-east-1_TESTPOOL0",
+      cognitoAppClientId: "testclient0000000000000000",
+      ...ctx,
+    };
+    const app = new cdk.App({ context: withReleaseDefaults });
     const stack = new StoryApiStack(app, "story-test-api", {
       environment: (ctx["environment"] as string) ?? "test",
       enableObservability: ctx["observability"] === "true",
@@ -303,5 +313,61 @@ describe("P0 Beta Observability construct", () => {
     t.hasResourceProperties("AWS::SNS::Topic", Match.objectLike({
       TopicName: "story-gamma-observability-alarms",
     }));
+  });
+
+  // --- B0 beta-config reconciliation regression tests ------------------------------------------------
+  test("issue 1: OIDC deploy-role sub-claim is scoped to THIS environment, not hardcoded development", () => {
+    const t = synthWith({ environment: "beta", observability: "false" });
+    const roles = t.findResources("AWS::IAM::Role");
+    const trustSubs = JSON.stringify(Object.values(roles).map((r: any) => r.Properties.AssumeRolePolicyDocument));
+    // beta role trusts environment:beta ...
+    expect(trustSubs).toContain("repo:lingzhang1*/story*:environment:beta");
+    // ... and NOT environment:development (no cross-environment trust)
+    expect(trustSubs).not.toContain("repo:lingzhang1*/story*:environment:development");
+  });
+
+  test("issue 1: owner/repo pattern is preserved unchanged (numeric-id tolerant, trust not broadened)", () => {
+    const t = synthWith({ environment: "beta", observability: "false" });
+    const roles = t.findResources("AWS::IAM::Role");
+    const trust = JSON.stringify(Object.values(roles).map((r: any) => r.Properties.AssumeRolePolicyDocument));
+    // The exact verified owner/repo glob is intact — only the environment segment changed.
+    expect(trust).toContain("repo:lingzhang1*/story*:environment:");
+    // No wildcard environment (would broaden trust to every GitHub Environment).
+    expect(trust).not.toContain("repo:lingzhang1*/story*:environment:*");
+  });
+
+  test("issue 2: beta synthesis FAILS without an explicit image digest (no :latest fallback)", () => {
+    expect(() =>
+      // deliberately omit imageDigest by passing it empty; cognito ids present
+      new StoryApiStack(new cdk.App({ context: {
+        environment: "beta",
+        cognitoUserPoolId: "us-east-1_X", cognitoAppClientId: "c",
+      } }), "s", { environment: "beta", env: { account: "123456789012", region: "us-east-1" } })
+    ).toThrow(/imageDigest/);
+  });
+
+  test("issue 2: beta synthesis FAILS without explicit cognito pool/client (no dev-credential fallback)", () => {
+    expect(() =>
+      new StoryApiStack(new cdk.App({ context: {
+        environment: "beta",
+        imageDigest: "sha256:abc",
+      } }), "s", { environment: "beta", env: { account: "123456789012", region: "us-east-1" } })
+    ).toThrow(/cognitoUserPoolId|cognitoAppClientId/);
+  });
+
+  test("issue 2: development MAY fall back to :latest + dev pool (local-synth convenience preserved)", () => {
+    // The default synth() uses environment 'test' (not a release env) — proves dev-style synth still works
+    // with no release inputs, i.e. the guard is scoped to beta/gamma/production only.
+    expect(() => synth()).not.toThrow();
+  });
+
+  test("issue 3: beta worker has NO reserved concurrency (reproduces the deployed unreserved setting)", () => {
+    // STORY_WORKER_CONCURRENCY is unset in the test env => no reservation, matching live beta (Concurrency=null).
+    const t = synthWith({ environment: "beta", observability: "false" });
+    const fns = t.findResources("AWS::Lambda::Function");
+    const worker = Object.values(fns).find((f: any) =>
+      JSON.stringify(f.Properties.Environment ?? {}).includes("STORY_JOBS_QUEUE_URL")) as any;
+    expect(worker).toBeDefined();
+    expect(worker.Properties.ReservedConcurrentExecutions).toBeUndefined();
   });
 });
