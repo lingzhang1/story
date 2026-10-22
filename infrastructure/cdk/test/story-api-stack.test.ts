@@ -370,4 +370,16 @@ describe("P0 Beta Observability construct", () => {
     expect(worker).toBeDefined();
     expect(worker.Properties.ReservedConcurrentExecutions).toBeUndefined();
   });
+
+  test("beta is fail-closed: STORY_REQUIRE_AUTH=1 (account isolation); development stays optional (0)", () => {
+    function requireAuthFor(env: string): string {
+      const t = synthWith({ environment: env, observability: "false" });
+      const svc = Object.values(t.findResources("AWS::AppRunner::Service"))[0] as any;
+      const vars: any[] = svc.Properties.SourceConfiguration.ImageRepository.ImageConfiguration.RuntimeEnvironmentVariables;
+      return (vars.find((v) => v.Name === "STORY_REQUIRE_AUTH") || {}).Value;
+    }
+    expect(requireAuthFor("beta")).toBe("1");
+    expect(requireAuthFor("gamma")).toBe("1");
+    expect(requireAuthFor("development")).toBe("0");
+  });
 });
