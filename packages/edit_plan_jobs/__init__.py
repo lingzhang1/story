@@ -438,7 +438,10 @@ class JobStore:
         now = _now()
         resp = self._ddb_c().scan(
             TableName=self.cfg.table,
-            FilterExpression="attribute_not_exists(quota_released) AND owner <> :dev",
+            # `owner` is a DynamoDB RESERVED KEYWORD — it must be referenced via an ExpressionAttributeNames
+            # alias, or the Scan fails ValidationException ('Attribute name is a reserved keyword: owner').
+            FilterExpression="attribute_not_exists(quota_released) AND #own <> :dev",
+            ExpressionAttributeNames={"#own": "owner"},
             ExpressionAttributeValues={":dev": {"S": "dev"}},
             Limit=limit)
         out: list[dict] = []
