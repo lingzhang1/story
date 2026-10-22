@@ -16,8 +16,10 @@ enum StoryBackend {
     /// App Runner service. Configuration-driven; no provider assumptions on
     /// the client.
     static var baseURL: URL {
-        if let s = ProcessInfo.processInfo.environment["STORY_API_BASE_URL"],
-           let u = URL(string: s) { return u }
+        // Durable resolution (env var → persisted UserDefaults → dev default). ProcessInfo.environment is
+        // EMPTY on a detached/TestFlight launch, so reading it directly reverted a beta build to the dev API
+        // below; StoryLaunchConfig persists the beta URL from an attached launch so detached stays on beta.
+        if let s = StoryLaunchConfig.value("STORY_API_BASE_URL"), let u = URL(string: s) { return u }
         return URL(string: "https://ydmju5wdps.us-east-1.awsapprunner.com")!
     }
 

@@ -41,7 +41,10 @@ enum StoryAuthConfig {
     }
 
     private static func env(_ k: String) -> String? {
-        let v = ProcessInfo.processInfo.environment[k]
-        return (v?.isEmpty ?? true) ? nil : v
+        // Durable resolution: env var (attached launch) → persisted UserDefaults (sticky from a prior attached
+        // launch) → nil (caller's default). This keeps a DETACHED / TestFlight beta build on beta instead of
+        // silently reverting to the dev defaults below, because ProcessInfo.environment is empty when the app
+        // is not launched attached to Xcode. An env var still wins when present.
+        return StoryLaunchConfig.value(k)
     }
 }
