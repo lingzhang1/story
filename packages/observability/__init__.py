@@ -159,11 +159,32 @@ def estimated_cost_usd(
     documented limitation). Image/multimodal cost is included via Bedrock's REPORTED input
     tokens (contact-sheet tiles are counted as input tokens, not re-derived). Unknown model
     -> 0.0 (and the caller should still emit the raw token metrics)."""
+    cost, priced = price_lookup(input_tokens, output_tokens, model_id, pricing)
+    # Backward-compatible: an unpriced model still returns 0.0 here (callers that want to TELL
+    # "unpriced" apart from "genuinely free" call price_lookup directly and read `priced`).
+    return cost
+
+
+def price_lookup(
+    input_tokens: float,
+    output_tokens: float,
+    model_id: str,
+    pricing: dict[str, tuple[float, float]] | None = None,
+) -> tuple[float, bool]:
+    """Like estimated_cost_usd but ALSO reports whether the model was actually PRICED (amendment 2 req 2).
+
+    Returns (cost_usd, priced). `priced` is True only when `model_id` matched a pricing-table entry. This
+    lets a caller distinguish an UNKNOWN/unpriced model (priced=False -> emit a MissingPricing diagnostic so
+    the $0 is visibly an accounting gap, not a free call) from a genuinely zero-cost attempt (priced=True with
+    both token counts 0 -> cost legitimately 0.0). Without this, both collapse to 0.0 and a new/renamed model
+    silently under-reports spend."""
     table = pricing or _DEFAULT_PRICING
     for key, (in_p, out_p) in table.items():
         if key in model_id:
-            return (input_tokens / 1_000_000.0) * in_p + (output_tokens / 1_000_000.0) * out_p
-    return 0.0
+            cost = (input_tokens / 1_000_000.0) * in_p + (output_tokens / 1_000_000.0) * out_p
+            return (cost, True)
+    # No pricing entry matched: cost is unknown (reported as 0.0), and priced=False flags the gap.
+    return (0.0, False)
 
 
 # USD per 1M tokens (in, out). ESTIMATE ONLY — keep in sync with Bedrock pricing; drift is an
@@ -173,3 +194,41 @@ _DEFAULT_PRICING: dict[str, tuple[float, float]] = {
     "sonnet-4": (3.0, 15.0),
     "haiku": (0.80, 4.0),
 }
+
+# Versioned pricing assumptions (Phase 1 requirement "versioned pricing assumptions"). Bump this whenever
+# _DEFAULT_PRICING changes so a cost figure in CloudWatch is traceable to the assumption that produced it.
+# Emitted on the AI metric line as `pricing_version` (a LOG field, not a metric dimension — it is not
+# low-cardinality-bounded the way a dimension must be, and cost is already dimensioned by model_id).
+PRICING_VERSION = "beta-pricing/2026-10-21"
+
+
+# PII / sensitive keys that must NEVER appear in a structured log line (amendment 5 + Phase 2 "do not emit raw
+# user instructions, media, GPS, or credentials"). Substring match, case-insensitive, against the field key.
+_PII_KEY_MARKERS = (
+    "instruction", "soft_direction", "prompt", "brief", "caption", "transcript",
+    "gps", "latitude", "longitude", "location", "coordinate",
+    "token", "secret", "password", "credential", "authorization", "cookie", "api_key", "apikey",
+    "contact_sheet", "image", "frame_jpeg", "media_bytes", "thumbnail",
+    "email", "phone",
+)
+# Keys that LOOK sensitive by substring but are legitimate low-risk telemetry — kept.
+_PII_ALLOW = ("input_tokens", "output_tokens", "token_count", "model_id")
+
+
+def scrub_log_fields(fields: dict[str, object]) -> dict[str, object]:
+    """Return a copy of `fields` with any PII/sensitive key REDACTED to '[redacted]'. Used on the structured
+    LOG envelope (never the metric line, which already enforces the dimension allow-list). A key is redacted
+    when it contains a sensitive marker AND is not on the explicit allow-list (so `input_tokens` survives but
+    `authorization` / `soft_direction` / `gps` do not). Value-level scrubbing of free text is out of scope —
+    the rule is simpler and safer: those fields are not logged at all."""
+    out: dict[str, object] = {}
+    for k, v in fields.items():
+        kl = str(k).lower()
+        if any(a in kl for a in _PII_ALLOW):
+            out[k] = v
+            continue
+        if any(m in kl for m in _PII_KEY_MARKERS):
+            out[k] = "[redacted]"
+        else:
+            out[k] = v
+    return out

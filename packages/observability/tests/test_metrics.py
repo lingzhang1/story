@@ -13,6 +13,9 @@ import sys
 from observability import (
     emit_metrics,
     estimated_cost_usd,
+    price_lookup,
+    scrub_log_fields,
+    PRICING_VERSION,
     _sanitize_dimensions,
     METRIC_NAMESPACE,
 )
@@ -76,3 +79,59 @@ def test_estimated_cost_sonnet():
 
 def test_estimated_cost_unknown_model_is_zero():
     assert estimated_cost_usd(20_000, 1_000, "some-unmapped-model") == 0.0
+
+
+def test_scrub_redacts_pii_keys_but_keeps_token_counts():
+    scrubbed = scrub_log_fields({
+        "op_type": "revision", "model_id": "opus", "input_tokens": 100, "output_tokens": 20,
+        "soft_direction": "make it warmer", "instruction": "open with moment 1",
+        "gps": "37.3,-122", "authorization": "Bearer abc", "contact_sheet_url": "s3://x",
+        "latency_ms": 820,
+    })
+    # Sensitive keys redacted:
+    assert scrubbed["soft_direction"] == "[redacted]"
+    assert scrubbed["instruction"] == "[redacted]"
+    assert scrubbed["gps"] == "[redacted]"
+    assert scrubbed["authorization"] == "[redacted]"
+    assert scrubbed["contact_sheet_url"] == "[redacted]"
+    # Legitimate low-risk telemetry kept:
+    assert scrubbed["op_type"] == "revision"
+    assert scrubbed["model_id"] == "opus"
+    assert scrubbed["input_tokens"] == 100
+    assert scrubbed["output_tokens"] == 20
+    assert scrubbed["latency_ms"] == 820
+
+
+def test_pricing_version_is_set_and_stringlike():
+    assert isinstance(PRICING_VERSION, str) and PRICING_VERSION
+    assert "/" in PRICING_VERSION   # e.g. "beta-pricing/2026-10-21"
+
+
+def test_price_lookup_flags_known_vs_unknown_model():
+    # req 2: a priced model reports priced=True with a real cost...
+    cost, priced = price_lookup(20_000, 1_000, "us.anthropic.claude-opus-4-6-v1")
+    assert priced is True and cost > 0
+    # ...an UNKNOWN model reports priced=False (cost 0.0 is an accounting GAP, not a free call)...
+    cost_u, priced_u = price_lookup(20_000, 1_000, "some-unmapped-model")
+    assert priced_u is False and cost_u == 0.0
+    # ...and a genuinely zero-token attempt on a KNOWN model is priced=True, cost 0.0 (distinct case).
+    cost_z, priced_z = price_lookup(0, 0, "us.anthropic.claude-opus-4-6-v1")
+    assert priced_z is True and cost_z == 0.0
+
+
+def test_estimated_cost_usd_matches_price_lookup_cost():
+    # Backward-compatibility: the scalar helper returns exactly price_lookup's cost.
+    model = "us.anthropic.claude-sonnet-4-6-v1"
+    assert estimated_cost_usd(5_000, 500, model) == price_lookup(5_000, 500, model)[0]
+
+
+def test_story_user_id_survives_scrub_for_attribution():
+    # req 1: the trusted backend-minted story_user_id is an opaque id, NOT PII — it must pass the scrubber so
+    # per-user cost attribution works, while any sensitive sibling field is still redacted on the same line.
+    scrubbed = scrub_log_fields({
+        "story_user_id": "su-9f3a2b", "estimated_cost_usd": 0.0123, "model_id": "opus",
+        "input_tokens": 4200, "pricing_known": True, "soft_direction": "warmer",
+    })
+    assert scrubbed["story_user_id"] == "su-9f3a2b"   # kept — this is the attribution key
+    assert scrubbed["estimated_cost_usd"] == 0.0123
+    assert scrubbed["soft_direction"] == "[redacted]"  # sensitive sibling still redacted

@@ -217,3 +217,91 @@ describe("StoryApiStack (Milestone A)", () => {
     expect(actions.some((a) => a.toLowerCase().includes("delete"))).toBe(false);
   });
 });
+
+
+describe("P0 Beta Observability construct", () => {
+  function synthWith(ctx: Record<string, unknown>): Template {
+    const app = new cdk.App({ context: ctx });
+    const stack = new StoryApiStack(app, "story-test-api", {
+      environment: (ctx["environment"] as string) ?? "test",
+      enableObservability: ctx["observability"] === "true",
+      alarmDestination: ctx["alarmDestination"] as string | undefined,
+      monthlyBudgetUsd: ctx["monthlyBudgetUsd"] ? Number(ctx["monthlyBudgetUsd"]) : undefined,
+      createBudget: ctx["createBudget"] === "true",
+      env: { account: "123456789012", region: "us-east-1" },
+    });
+    return Template.fromStack(stack);
+  }
+
+  test("default OFF: no dashboards, alarms, SNS topic, or budget", () => {
+    const t = synthWith({ environment: "test" });
+    t.resourceCountIs("AWS::CloudWatch::Dashboard", 0);
+    t.resourceCountIs("AWS::CloudWatch::Alarm", 0);
+    t.resourceCountIs("AWS::SNS::Topic", 0);
+    t.resourceCountIs("AWS::Budgets::Budget", 0);
+  });
+
+  test("enabled: 4 dashboards, 10 alarms, 1 SNS topic", () => {
+    const t = synthWith({ environment: "test", observability: "true" });
+    t.resourceCountIs("AWS::CloudWatch::Dashboard", 4);
+    t.resourceCountIs("AWS::CloudWatch::Alarm", 10);
+    t.resourceCountIs("AWS::SNS::Topic", 1);
+    // Every alarm wires an SNS action (no silent alarm).
+    const alarms = t.findResources("AWS::CloudWatch::Alarm");
+    for (const a of Object.values(alarms) as any[]) {
+      expect(Array.isArray(a.Properties.AlarmActions)).toBe(true);
+      expect(a.Properties.AlarmActions.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("DLQ alarm fires on a single visible message (treatMissingData not breaching)", () => {
+    const t = synthWith({ environment: "test", observability: "true" });
+    t.hasResourceProperties("AWS::CloudWatch::Alarm", Match.objectLike({
+      AlarmName: "story-test-dlq-non-empty",
+      Threshold: 1,
+      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      TreatMissingData: "notBreaching",
+    }));
+  });
+
+  test("email alarmDestination + createBudget creates an SNS subscription AND an AWS Budget with 3 thresholds", () => {
+    const t = synthWith({ environment: "test", observability: "true", createBudget: "true",
+      alarmDestination: "ops@example.com", monthlyBudgetUsd: "150" });
+    t.hasResourceProperties("AWS::SNS::Subscription", Match.objectLike({ Protocol: "email" }));
+    t.resourceCountIs("AWS::Budgets::Budget", 1);
+    t.hasResourceProperties("AWS::Budgets::Budget", Match.objectLike({
+      Budget: Match.objectLike({ BudgetLimit: Match.objectLike({ Amount: 150, Unit: "USD" }) }),
+    }));
+    // Exactly the 3 owner-specified thresholds (req 7): 50 / 80 / 100% ACTUAL spend.
+    const budgets = t.findResources("AWS::Budgets::Budget");
+    const subs = (Object.values(budgets)[0] as any).Properties.Budget === undefined
+      ? (Object.values(budgets)[0] as any).Properties.NotificationsWithSubscribers
+      : (Object.values(budgets)[0] as any).Properties.NotificationsWithSubscribers;
+    const thresholds = (subs as any[]).map((n) => n.Notification.Threshold).sort((a, b) => a - b);
+    expect(thresholds).toEqual([50, 80, 100]);
+  });
+
+  test("B0 reconciliation: NO AWS Budget when createBudget is omitted (default), even with a destination", () => {
+    // req 5 — the account-level budget is B0's; this stack must not create a duplicate by default. SNS +
+    // alarms still come up (they do not depend on the budget).
+    const t = synthWith({ environment: "beta", observability: "true", alarmDestination: "alerts@yotale.ai" });
+    t.resourceCountIs("AWS::Budgets::Budget", 0);
+    t.resourceCountIs("AWS::SNS::Topic", 1);
+    t.hasResourceProperties("AWS::SNS::Subscription", Match.objectLike({ Protocol: "email" }));
+  });
+
+  test("MissingModelPricing is surfaced on the AI dashboard (unpriced != free, req 2)", () => {
+    const t = synthWith({ environment: "test", observability: "true" });
+    const dashboards = t.findResources("AWS::CloudWatch::Dashboard");
+    const bodies = (Object.values(dashboards) as any[]).map((d) => d.Properties.DashboardBody);
+    const joined = JSON.stringify(bodies);
+    expect(joined).toContain("MissingModelPricing");
+  });
+
+  test("resource names are environment-parameterized", () => {
+    const t = synthWith({ environment: "gamma", observability: "true" });
+    t.hasResourceProperties("AWS::SNS::Topic", Match.objectLike({
+      TopicName: "story-gamma-observability-alarms",
+    }));
+  });
+});

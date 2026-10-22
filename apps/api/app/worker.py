@@ -42,22 +42,33 @@ EXEC_DEADLINE_S = int(os.environ.get("STORY_WORKER_DEADLINE_S", "840"))
 # P0 Beta Observability — AI usage/cost metrics from the worker. Import is best-effort so a packaging gap in
 # the Lambda bundle never breaks plan execution (the worker predates observability wiring).
 try:
-    from observability import emit_metrics as _emit_metrics, estimated_cost_usd as _estimated_cost_usd
+    from observability import (emit_metrics as _emit_metrics, estimated_cost_usd as _estimated_cost_usd,
+                               price_lookup as _price_lookup, scrub_log_fields as _scrub,
+                               get_logger as _get_logger, PRICING_VERSION as _PRICING_VERSION)
 except Exception:  # noqa: BLE001
     _emit_metrics = None
     _estimated_cost_usd = None
+    _price_lookup = None
+    _scrub = None
+    _get_logger = None
+    _PRICING_VERSION = "unknown"
 
 _ENV = os.environ.get("STORY_ENVIRONMENT", "development")
 _PRIMARY_MODEL = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
 _FALLBACK_MODEL = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
 
 
-def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan") -> None:
+def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan", story_user_id: str | None = None) -> None:
     """Emit the Phase-2 AI metrics for one logical generation from the worker's diagnostics, via EMF.
     Fire-and-forget: never raises into the worker. `diag` is the engine's last_diagnostics (carries token
     accumulations + fallback + repair counts). The billed model is the FALLBACK model when a fallback fired,
     else the primary — this is the physical attempt the tokens were spent on. Dimensions stay low-cardinality
-    (env/service/op_type/stage/model_id); correlation/job id are NEVER passed as dimensions."""
+    (env/service/op_type/stage/model_id); correlation/job id are NEVER passed as dimensions.
+
+    `story_user_id` (the TRUSTED, backend-minted owner from the job row — never client-supplied) is attributed
+    via a privacy-safe structured LOG line (`bedrock_usage`), NOT a metric dimension: per-user is high-
+    cardinality and the EMF allow-list would drop it anyway. Per-user cost is reconstructed from that log
+    stream (Logs Insights), keeping CloudWatch metric cardinality bounded (req 1)."""
     if _emit_metrics is None:
         return
     try:
@@ -74,9 +85,29 @@ def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan") -> N
             "CritiqueCount": float(1 if diag.get("critique_attempted") else 0),
             "ModelFallbacks": float(1 if any_fallback else 0),
         }
-        if _estimated_cost_usd is not None and (in_tok or out_tok):
-            metrics["EstimatedModelCostUSD"] = float(_estimated_cost_usd(in_tok, out_tok, model_id))
+        cost = 0.0
+        priced = True
+        if _price_lookup is not None and (in_tok or out_tok):
+            cost, priced = _price_lookup(in_tok, out_tok, model_id)
+            metrics["EstimatedModelCostUSD"] = float(cost)
+            # req 2: an UNPRICED model is NOT a free call — surface it as its own metric so a $0 cost that is
+            # really an accounting gap is visible (and alarmable), distinct from a genuine zero-token attempt.
+            metrics["MissingModelPricing"] = float(0 if priced else 1)
         _emit_metrics(metrics, dims)
+        # req 1: trusted per-user cost attribution on a PRIVACY-SAFE log line (story_user_id is an opaque
+        # backend id, not PII; scrub_log_fields guarantees no instruction/gps/token field rides along).
+        if story_user_id and _scrub is not None:
+            _log_cost = _get_logger("story.worker.cost") if _get_logger is not None else None
+            if _log_cost is not None:
+                _log_cost.info("bedrock_usage", extra=_scrub({
+                    "msg": "bedrock_usage", "story_user_id": story_user_id,
+                    "op_type": op_type, "stage": stage, "model_id": model_id,
+                    "model_calls": float(diag.get("model_calls") or diag.get("calls") or 0),
+                    "input_tokens": in_tok, "output_tokens": out_tok,
+                    "repairs": float(diag.get("executability_repairs_used") or 0),
+                    "fallback": any_fallback, "estimated_cost_usd": round(cost, 6),
+                    "pricing_version": _PRICING_VERSION, "pricing_known": priced,
+                }))
     except Exception:  # noqa: BLE001 — observability must never break the worker
         pass
 
@@ -395,11 +426,12 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                           "input_tokens": diag_out.get("input_tokens"),
                           "output_tokens": diag_out.get("output_tokens"),
                           "model_id": diag_out.get("model_id"),
+                          "pricing_version": _PRICING_VERSION,
                           "repairs": diag_out.get("executability_repairs_used")})[:1500])
         # P0 Beta Observability: emit AI usage/cost + a GenerationCompleted count (EMF, fire-and-forget). The
         # op_type is the revision mode (original|another_version|revision) from the request body.
         _op = (b.get("revision_context") or {}).get("mode", "original") if isinstance(b.get("revision_context"), dict) else "original"
-        _emit_ai_metrics(diag_out, op_type=_op)
+        _emit_ai_metrics(diag_out, op_type=_op, story_user_id=job.get("owner"))
         if _emit_metrics is not None:
             try: _emit_metrics({"GenerationCompleted": 1.0}, {"env": _ENV, "service": "worker", "op_type": _op})
             except Exception: pass
@@ -484,7 +516,30 @@ def handler(event, context):
         try:
             body = json.loads(record["body"])
             jid = body["job_id"]
+            # P0 Beta Observability: QueueWaitMs = how long this message sat in SQS before the worker picked it
+            # up. Derived from the FREE SQS-provided SentTimestamp attribute (ms since epoch) — no enqueue-ts
+            # change to the API send path, no custom timestamp on the body. Worker-execution time is measured
+            # separately (WorkerProcessingMs below), so queue wait is never conflated with inference time.
+            if _emit_metrics is not None:
+                try:
+                    _op = (body.get("revision_context") or {}).get("mode", "original") \
+                        if isinstance(body.get("revision_context"), dict) else "original"
+                    _emit_metrics({"GenerationStarted": 1.0},
+                                  {"env": _ENV, "service": "worker", "op_type": _op})
+                    _sent = (record.get("attributes") or {}).get("SentTimestamp")
+                    if _sent:
+                        _wait = max(0.0, time.time() * 1000.0 - float(_sent))
+                        _emit_metrics({"QueueWaitMs": _wait}, {"env": _ENV, "service": "worker", "op_type": _op})
+                except Exception:  # noqa: BLE001 — telemetry must never break the batch
+                    pass
+            _t0 = time.time()
             outcome = _run_one(store, jid)
+            if _emit_metrics is not None:
+                try:
+                    _emit_metrics({"WorkerProcessingMs": (time.time() - _t0) * 1000.0},
+                                  {"env": _ENV, "service": "worker"})
+                except Exception:  # noqa: BLE001
+                    pass
             print(json.dumps({"msg": "worker_outcome", "job_id": jid, "outcome": outcome}))
         except Exception as e:  # noqa: BLE001
             print(json.dumps({"msg": "worker_record_error", "error": f"{type(e).__name__}: {e}"[:300]}))
