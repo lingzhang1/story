@@ -67,6 +67,16 @@ export class StoryApiStack extends cdk.Stack {
       if (!imageDigest) missing.push("-c imageDigest=sha256:<digest> (no :latest fallback allowed)");
       if (!cognitoUserPoolId) missing.push("-c cognitoUserPoolId=<env pool> (no dev-pool fallback allowed)");
       if (!cognitoAppClientId) missing.push("-c cognitoAppClientId=<env client> (no dev-client fallback allowed)");
+      // Observability lives as a construct INSIDE this stack, gated on enableObservability. A beta/gamma/prod
+      // deploy that OMITS it would silently DESTROY the live monitoring (SNS topic, dashboards, alarms,
+      // log-retention). Require it explicitly so a forgotten `-c observability=true` fails LOUDLY at synth
+      // rather than tearing down monitoring (release-safety guard, owner req 6/9). To intentionally run an
+      // environment without observability, pass `-c allowNoObservability=true`.
+      const allowNoObs = this.node.tryGetContext("allowNoObservability") === "true";
+      if (!props.enableObservability && !allowNoObs) {
+        missing.push("-c observability=true -c alarmDestination=<addr> (omitting it DESTROYS live monitoring; " +
+                     "pass -c allowNoObservability=true only if that teardown is intended)");
+      }
       if (missing.length) {
         throw new Error(
           `StoryApiStack(${environment}): refusing to synthesize without explicit release inputs — ${missing.join("; ")}.`
