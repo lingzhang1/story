@@ -210,6 +210,52 @@ def test_valid_request_resolves_identity_exactly_once():
     assert store.calls - before == 1
 
 
+# --- req 2: account status + beta eligibility enforced beyond JWT validity ------------------------------
+
+class StatusIdentityStore(IdentityStore):
+    """Resolves to a fixed id but runs the REAL _enforce_status against injected account/beta status."""
+    def __init__(self, account_status="active", beta_status="eligible"):
+        super().__init__(claims_table="t", users_table="u")
+        self._as = account_status
+        self._bs = beta_status
+
+    def _read_claim(self, claim_key):
+        return "story-fixed"  # account already exists -> resolve() takes the _enforce_status path
+
+    def _account_status(self, story_user_id):
+        return self._as, self._bs
+
+
+def _app_with_store(store, env="beta"):
+    import os
+    os.environ["STORY_ENVIRONMENT"] = env
+    os.environ["STORY_REQUIRE_AUTH"] = "0"
+    os.environ["STORY_COGNITO_USER_POOL_ID"] = POOL
+    os.environ["STORY_COGNITO_APP_CLIENT_ID"] = CLIENT_ID
+    app = create_app()
+    app.state._jwt_verifier_override = FakeVerifier()
+    app.state._identity_store_override = store
+    return app
+
+
+def test_valid_jwt_but_suspended_account_rejected():
+    c = TestClient(_app_with_store(StatusIdentityStore(account_status="suspended")))
+    r = c.get("/v1/me", headers={"Authorization": f"Bearer {_tok(sub='sus')}"})
+    assert r.status_code == 403
+
+
+def test_valid_jwt_but_beta_ineligible_rejected_in_beta():
+    c = TestClient(_app_with_store(StatusIdentityStore(beta_status="revoked")))
+    r = c.get("/v1/me", headers={"Authorization": f"Bearer {_tok(sub='rev')}"})
+    assert r.status_code == 403
+
+
+def test_invited_beta_user_allowed():
+    c = TestClient(_app_with_store(StatusIdentityStore(beta_status="invited")))
+    r = c.get("/v1/me", headers={"Authorization": f"Bearer {_tok(sub='inv')}"})
+    assert r.status_code == 200
+
+
 # --- req 4: docs gating ----------------------------------------------------------------------------------
 
 def test_docs_disabled_in_beta():

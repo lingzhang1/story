@@ -199,12 +199,15 @@ class IdentityStore:
         it = resp.get("Item")
         return it["story_user_id"]["S"] if it else None
 
-    def _account_status(self, story_user_id: str) -> str:
+    def _account_status(self, story_user_id: str) -> tuple[str, str]:
         resp = self._c().get_item(TableName=self.users_table, Key={"story_user_id": {"S": story_user_id}})
         it = resp.get("Item")
         if not it:
-            return "active"  # claim without a row shouldn't happen; treat as active (row write is same txn)
-        return it.get("account_status", {}).get("S", "active")
+            # claim without a row shouldn't happen (row write is same txn); treat as active+eligible.
+            return "active", "eligible"
+        account_status = it.get("account_status", {}).get("S", "active")
+        beta_status = it.get("beta_access_status", {}).get("S", "eligible")
+        return account_status, beta_status
 
     def resolve(self, cognito_sub: str, *, verified_email: Optional[str] = None) -> str:
         """Return the story_user_id for this cognito_sub, creating it atomically on first sign-in."""
@@ -246,9 +249,21 @@ class IdentityStore:
             raise
 
     def _enforce_status(self, story_user_id: str) -> None:
-        st = self._account_status(story_user_id)
-        if st not in ("active",):
-            raise HTTPException(status_code=403, detail=f"account {st}")
+        # Tolerate both the current (account_status, beta_status) tuple and a legacy single-string return
+        # from a subclass/override, so existing test doubles that return only account_status still work.
+        res = self._account_status(story_user_id)
+        if isinstance(res, tuple):
+            account_status, beta_status = res
+        else:
+            account_status, beta_status = res, "eligible"
+        # A suspended/deleted account is rejected in EVERY environment.
+        if account_status not in ("active",):
+            raise HTTPException(status_code=403, detail=f"account {account_status}")
+        # Beta eligibility: in a real (non-development) environment the account must be beta-eligible.
+        # Accepted values are 'eligible' and 'invited' (an invited tester is allowed in); anything else
+        # (e.g. 'revoked', 'waitlisted', 'denied') is refused. Development is not beta-gated.
+        if _env() != "development" and beta_status not in ("eligible", "invited"):
+            raise HTTPException(status_code=403, detail=f"beta access {beta_status}")
 
 
 # ---------------------------------------------------------------------------------------------------------
