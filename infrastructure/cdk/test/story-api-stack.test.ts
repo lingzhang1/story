@@ -241,6 +241,9 @@ describe("P0 Beta Observability construct", () => {
       imageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
       cognitoUserPoolId: "us-east-1_TESTPOOL0",
       cognitoAppClientId: "testclient0000000000000000",
+      // Default-bypass the observability-required guard for focused tests that don't assert observability;
+      // the dedicated guard test passes allowNoObservability:undefined to exercise the refusal.
+      allowNoObservability: "true",
       ...ctx,
     };
     const app = new cdk.App({ context: withReleaseDefaults });
@@ -410,5 +413,23 @@ describe("P0 Beta Observability construct", () => {
     expect(requireAuthFor("beta")).toBe("1");
     expect(requireAuthFor("gamma")).toBe("1");
     expect(requireAuthFor("development")).toBe("0");
+  });
+
+  // --- Release-safety: observability cannot be silently dropped from a beta/gamma/prod deploy (req 6/7/9) ---
+  test("beta synth FAILS if observability is omitted (prevents silent monitoring teardown)", () => {
+    expect(() => synthWith({ environment: "beta", observability: "false", allowNoObservability: undefined }))
+      .toThrow(/observability=true|DESTROYS live monitoring/);
+  });
+
+  test("beta synth with observability provisions monitoring (SNS topic + dashboards + alarms)", () => {
+    const t = synthWith({ environment: "beta", observability: "true", alarmDestination: "alerts@yotale.ai" });
+    t.resourceCountIs("AWS::SNS::Topic", 1);
+    expect(Object.keys(t.findResources("AWS::CloudWatch::Dashboard")).length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(t.findResources("AWS::CloudWatch::Alarm")).length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("explicit allowNoObservability=true opt-out is honored (intentional teardown only)", () => {
+    const t = synthWith({ environment: "beta", observability: "false", allowNoObservability: "true" });
+    t.resourceCountIs("AWS::SNS::Topic", 0);
   });
 });

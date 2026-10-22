@@ -467,6 +467,19 @@ def create_app() -> FastAPI:
     app.middleware("http")(auth_boundary)
     log = get_logger("story-api")
 
+    # Wire the throttle metric hook to the Observability EMF emitter (reuse, no new infra). The throttle
+    # class is carried on the allow-listed low-cardinality `op_type` dimension (<=6 values) — NEVER a
+    # story_user_id. Fire-and-forget: a metric failure never breaks a request.
+    try:
+        from observability import emit_metrics as _emit_metrics
+
+        def _throttle_metric(name: str, cls: str) -> None:
+            _emit_metrics({name: 1}, {"op_type": f"throttle_{cls}"})
+
+        app.state._throttle_metric_hook = _throttle_metric
+    except Exception:  # noqa: BLE001 — observability optional; middleware no-ops without the hook
+        pass
+
     # Non-persistent demo store (see app/store.py). One per app instance.
     store = InMemoryStoryStore()
 
