@@ -608,8 +608,22 @@ def handler(event, context):
     store = _jobs.JobStore()
     if isinstance(event, dict) and event.get("reconcile") is True:
         reenq = store.reconcile_lost_enqueue()
-        print(json.dumps({"msg": "worker_reconcile", "reenqueued": reenq}))
-        return {"reenqueued": reenq}
+        # P0 Beta Security Phase 4 crash-recovery: release AI-quota reservations + active-job slots leaked by a
+        # worker that crashed mid-run or died between the store terminal-transition and the quota settle/release.
+        # sweep_quota_orphans stamps each row quota_released=1 (exactly-once); we release conservatively (refund
+        # allowance, free the slot, record 0 incurred — a crashed attempt's cost is an accepted under-count, per
+        # the design's failure-window table, never an over-charge).
+        orphans = []
+        try:
+            orphans = store.sweep_quota_orphans()
+            for o in orphans:
+                _quota_release_job({"owner": o["owner"], "operation_id": o["operation_id"],
+                                    "job_id": o["job_id"]}, incurred_usd=0.0)
+        except Exception as e:  # noqa: BLE001 — sweep is best-effort; never break the reconcile tick
+            print(json.dumps({"msg": "worker_quota_sweep_error", "error": f"{type(e).__name__}: {e}"[:300]}))
+        print(json.dumps({"msg": "worker_reconcile", "reenqueued": reenq,
+                          "quota_orphans_released": len(orphans)}))
+        return {"reenqueued": reenq, "quota_orphans_released": len(orphans)}
     failures = []
     for record in event.get("Records", []):
         try:

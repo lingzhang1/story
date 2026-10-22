@@ -20,7 +20,10 @@ class FakeDDB:
         def sval(ph): return v.get(ph,{}).get("S")
         if ConditionExpression:
             ce=ConditionExpression; ok=True
-            if ":q" in v and ":r" in v and "lease_until < :now" in ce:
+            if "attribute_not_exists(quota_released)" in ce:
+                ok = "quota_released" not in it
+                if not ok: raise Exception("ConditionalCheckFailedException")
+            elif ":q" in v and ":r" in v and "lease_until < :now" in ce:
                 now=int(v[":now"]["N"]); lease=int(it.get("lease_until",{}).get("N","0"))
                 ok=(cur==sval(":q")) or (cur==sval(":r") and lease<now)
             else:
@@ -37,6 +40,7 @@ class FakeDDB:
         if ":lu" in v: it["lease_until"]={"N":v[":lu"]["N"]}
         if ":tok" in v: it["lease_token"]={"S":v[":tok"]["S"]}
         if ":nc" in v: it["reconcile_count"]={"N":v[":nc"]["N"]}
+        if "SET quota_released = :one" in UpdateExpression: it["quota_released"]={"N":"1"}
         if "ADD attempt_count :one" in UpdateExpression:
             it["attempt_count"]={"N":str(int(it.get("attempt_count",{}).get("N","0"))+1)}
         names=ExpressionAttributeNames or {}
@@ -46,6 +50,14 @@ class FakeDDB:
     def scan(self, TableName, FilterExpression=None, ExpressionAttributeNames=None,
              ExpressionAttributeValues=None, Limit=None):
         v=ExpressionAttributeValues or {}; out=[]
+        fe=FilterExpression or ""
+        if "quota_released" in fe:
+            # sweep_quota_orphans filter: not-yet-released AND owner != dev
+            for it in self.items.values():
+                if ("quota_released" not in it
+                    and it.get("owner",{}).get("S")!=v.get(":dev",{}).get("S")):
+                    out.append(it)
+            return {"Items":out[:Limit or 50]}
         for it in self.items.values():
             if (it.get("status",{}).get("S")=="queued"
                 and int(it.get("attempt_count",{}).get("N","0"))==0
@@ -158,5 +170,26 @@ ep_row=js.get(j1); assert ep_row["operation_type"]==OP_EDIT_PLAN
 # C10 UNKNOWN operation set is closed; worker dispatch rejects anything outside KNOWN_OPERATIONS
 assert KNOWN_OPERATIONS=={OP_EDIT_PLAN,OP_COVERAGE_V2}
 assert "coverage_v3" not in KNOWN_OPERATIONS
+
+# ============================ PHASE 4 QUOTA-ORPHAN SWEEP (crash recovery, correction 12) ===================
+js3=mk()
+# (a) a job stuck RUNNING past its expires_at = worker crashed mid-run -> swept, failed(orphaned), returned
+jo,_=js3.create_or_get(operation_id="ORPH",owner="story-u1",approach="storytelling",critique_requested=False,
+                       staging_prefix="jobs/ORPH/",sheet_order=[],payload_fingerprint="x")
+js3.claim_lease(jo)                                  # now running
+js3._ddb.items[jo]["expires_at"]={"N":"1"}           # force expiry (crashed, never terminated)
+orphans=js3.sweep_quota_orphans()
+assert any(o["job_id"]==jo for o in orphans), "crashed running job swept for quota release"
+assert js3.get(jo)["status"]=="failed", "orphan finalized failed"
+o=[x for x in orphans if x["job_id"]==jo][0]
+assert o["owner"]=="story-u1" and o["operation_id"]=="ORPH"
+# (b) exactly-once: a second sweep does NOT return the same job again (quota_released stamped)
+orphans2=js3.sweep_quota_orphans()
+assert all(x["job_id"]!=jo for x in orphans2), "already-released orphan skipped (exactly-once)"
+# (c) a legacy/dev job is NEVER swept (never held a reservation)
+jd,_=js3.create_or_get(operation_id="DEVJOB",owner="dev",approach="storytelling",critique_requested=False,
+                       staging_prefix="jobs/DEVJOB/",sheet_order=[],payload_fingerprint="x")
+js3._ddb.items[jd]["expires_at"]={"N":"1"}
+assert all(x["job_id"]!=jd for x in js3.sweep_quota_orphans()), "dev job never swept"
 
 print("ALL AMENDED JOBSTORE TESTS PASSED")
