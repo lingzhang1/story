@@ -99,8 +99,11 @@ def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan", stor
         if story_user_id and _scrub is not None:
             _log_cost = _get_logger("story.worker.cost") if _get_logger is not None else None
             if _log_cost is not None:
+                # NB: 'msg' is a RESERVED LogRecord attribute — putting it in `extra` raises KeyError
+                # ("Attempt to overwrite 'msg'"), which the outer except swallows, so the attribution line
+                # silently never emits. The event name is already the first positional arg below.
                 _log_cost.info("bedrock_usage", extra=_scrub({
-                    "msg": "bedrock_usage", "story_user_id": story_user_id,
+                    "story_user_id": story_user_id,
                     "op_type": op_type, "stage": stage, "model_id": model_id,
                     "model_calls": float(diag.get("model_calls") or diag.get("calls") or 0),
                     "input_tokens": in_tok, "output_tokens": out_tok,

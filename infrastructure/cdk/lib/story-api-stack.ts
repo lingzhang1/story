@@ -253,6 +253,11 @@ export class StoryApiStack extends cdk.Stack {
         : {}),
       environment: {
         PYTHONPATH: "/var/task:/var/task/packages",
+        // The worker emits all AI usage/cost EMF (observability.py reads STORY_ENVIRONMENT for the `env`
+        // dimension, defaulting to "development"). Without this the beta worker's metrics are mislabeled
+        // env=development even though they live in the beta account — so dashboards/alarms/cost filtered on
+        // env=beta miss them. Must match the API service's STORY_ENVIRONMENT above.
+        STORY_ENVIRONMENT: environment,
         STORY_JOBS_TABLE: jobsTable.tableName,
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,

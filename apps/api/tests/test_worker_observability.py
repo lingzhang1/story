@@ -58,3 +58,32 @@ def test_worker_ai_metrics_zero_tokens_omits_cost_but_still_emits():
     # No token data -> no cost metric, but usage counts still emit (never silently nothing).
     assert "EstimatedModelCostUSD" not in obj
     assert obj["InputTokens"] == 0 and obj["ModelInvocations"] == 1
+
+
+def test_bedrock_usage_attribution_log_emits_with_trusted_user():
+    """req 1: a privacy-safe bedrock_usage line carrying the trusted story_user_id MUST emit.
+
+    Regression: 'msg' is a reserved LogRecord attribute — passing it in `extra` raised KeyError, which the
+    helper's outer except swallowed, so the attribution line silently never appeared even though the EMF
+    metrics did. Capture ALL stdout lines and assert the bedrock_usage line is present with the user id.
+    """
+    cap = io.StringIO()
+    old = sys.stdout
+    sys.stdout = cap
+    try:
+        W._emit_ai_metrics({"input_tokens": 15_164, "output_tokens": 1_273, "model_calls": 1,
+                            "any_fallback": False}, op_type="original",
+                           story_user_id="61310227-0e51-4755-8f2d-5f1ac9f7a103")
+    finally:
+        sys.stdout = old
+    lines = [json.loads(l) for l in cap.getvalue().strip().splitlines() if l.strip().startswith("{")]
+    usage = [o for o in lines if o.get("msg") == "bedrock_usage" or o.get("message") == "bedrock_usage"
+             or "story_user_id" in o]
+    assert usage, f"expected a bedrock_usage attribution line; got {[o.get('msg') or o.get('message') for o in lines]}"
+    u = usage[-1]
+    assert u.get("story_user_id") == "61310227-0e51-4755-8f2d-5f1ac9f7a103"
+    assert u.get("input_tokens") == 15_164 and u.get("output_tokens") == 1_273
+    assert u.get("pricing_known") is True and u.get("estimated_cost_usd") > 0
+    # privacy: no raw instruction / gps / credential field rode along.
+    for banned in ("soft_direction", "instruction", "gps", "prompt", "token"):
+        assert banned not in u
