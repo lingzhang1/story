@@ -44,6 +44,8 @@ enum EditPlanJobError: Error, LocalizedError {
     case badStatus(Int)
     case decoding(Error)
     case pollTimeout                    // bounded polling elapsed without a terminal state (job may still run)
+    case quotaExceeded(scope: String, retryAfter: Int?)   // 429 quota_exceeded — user hit an allowance cap
+    case quotaStoreUnavailable(retryAfter: Int?)          // 503 quota_store_unavailable — accounting outage
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +54,22 @@ enum EditPlanJobError: Error, LocalizedError {
         case .badStatus(let c): return "Unexpected response (\(c))."
         case .decoding: return "The plan response couldn't be read."
         case .pollTimeout: return "Still working on your Story — it's taking longer than usual."
+        case .quotaExceeded(let scope, _):
+            // A real allowance cap — NOT a technical failure. Honest, scope-specific, and never a plain retry.
+            switch scope {
+            case "user_daily_gens":
+                return "You've reached today's limit for creating videos. Please try again tomorrow."
+            case "user_monthly_usd":
+                return "You've reached this month's usage limit for AI video creation. It resets next month."
+            case "active_jobs":
+                return "You already have videos being created. Let those finish, then try again."
+            case "global_monthly_usd":
+                return "Story is at capacity for AI video creation right now. Please try again later."
+            default:
+                return "You've reached a usage limit for AI video creation. Please try again later."
+            }
+        case .quotaStoreUnavailable:
+            return "Story can't start a new video right now. Please try again in a moment."
         }
     }
 }
@@ -130,6 +148,17 @@ final class EditPlanJobClient: EditPlanJobClienting {
             do { return try JSONDecoder().decode(R.self, from: data).job_id }
             catch { throw EditPlanJobError.decoding(error) }
         case 409: throw EditPlanJobError.conflict
+        case 429:
+            // Quota denial (enforce mode). Parse the scope + Retry-After for an honest, specific message.
+            struct Q: Decodable { let error: String?; let scope: String?; let retry_after_seconds: Int? }
+            let q = try? JSONDecoder().decode(Q.self, from: data)
+            let ra = q?.retry_after_seconds ?? http.value(forHTTPHeaderField: "Retry-After").flatMap { Int($0) }
+            // Distinguish a quota cap from a Phase-3 rate-limit (both are 429 but carry different `error`).
+            throw EditPlanJobError.quotaExceeded(scope: q?.scope ?? q?.error ?? "", retryAfter: ra)
+        case 503:
+            // quota_store_unavailable / rate_limiter_unavailable: an accounting-layer outage, not a user cap.
+            let ra = http.value(forHTTPHeaderField: "Retry-After").flatMap { Int($0) }
+            throw EditPlanJobError.quotaStoreUnavailable(retryAfter: ra)
         default: throw EditPlanJobError.badStatus(http.statusCode)
         }
     }

@@ -283,3 +283,57 @@ def test_fallback_without_transact_still_reserves_user_and_global():
     q.reserve("u1", "op-1", estimate_usd=0.10)
     assert round(float(q._ddb.items[("u1", _P())]["reserved_usd"]["N"]), 2) == 0.10
     assert round(float(q._ddb.items[(GLOBAL_PK, _P())]["reserved_usd"]["N"]), 2) == 0.10
+
+
+# owner-approved external-beta thresholds (2026-10-22): $8/mo, 20 gens/day, 2 active jobs, $60 global -------
+
+def _beta_cfg():
+    # The EXACT proposed external-beta enforce config, so this test fails if a future change drifts from it.
+    return QuotaConfig(user_monthly_usd=8.0, user_daily_gens=20, max_active_jobs=2, global_monthly_usd=60.0)
+
+
+def test_beta_thresholds_daily_gens_boundary_20():
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_beta_cfg())
+    for i in range(20):
+        q.reserve("u1", f"op-{i}", estimate_usd=0.01)   # 20 allowed
+    with pytest.raises(QuotaDenied) as ei:
+        q.reserve("u1", "op-21", estimate_usd=0.01)      # 21st denied
+    assert ei.value.scope == "user_daily_gens"
+
+
+def test_beta_thresholds_active_jobs_boundary_2():
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_beta_cfg())
+    assert q.reserve_slot("u1", "j1") is True
+    assert q.reserve_slot("u1", "j2") is True
+    with pytest.raises(QuotaDenied) as ei:
+        q.reserve_slot("u1", "j3")                        # queued+running cap = 2
+    assert ei.value.scope == "active_jobs"
+    q.release_slot("u1", "j1")                            # a terminal frees a slot
+    assert q.reserve_slot("u1", "j3") is True
+
+
+def test_beta_thresholds_monthly_usd_boundary_8():
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_beta_cfg())
+    q.reserve("u1", "big", estimate_usd=7.95, gens=1)     # near the $8 cap
+    with pytest.raises(QuotaDenied):
+        q.reserve("u1", "over", estimate_usd=0.10, gens=1)  # 8.05 > 8.00
+
+
+def test_beta_global_60_trips_before_budget_100():
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_beta_cfg())
+    # drive the global aggregate to the $60 breaker across users; it must trip BELOW the $100 AWS budget alert
+    for i in range(6):
+        q.reserve(f"u{i}", f"g-{i}", estimate_usd=7.0)    # 6 * 7 = 42 (each user under $8? no: 7<8 ok, 1/user)
+    # one more 7.0 would be 49 global — still under 60; push to the boundary
+    total = 42.0
+    i = 100
+    while total + 7.0 <= 60.0:
+        q.reserve(f"ux{i}", f"gx-{i}", estimate_usd=7.0); total += 7.0; i += 1
+    # now total is the largest multiple of 7 <= 60 (56); the next must be denied at the global cap
+    with pytest.raises(QuotaDenied) as ei:
+        q.reserve("ulast", "glast", estimate_usd=7.0)     # 56 + 7 = 63 > 60
+    assert ei.value.scope == "global_monthly_usd"

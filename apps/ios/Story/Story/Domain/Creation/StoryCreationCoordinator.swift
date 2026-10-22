@@ -76,6 +76,11 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
     /// choice, never a plain Retry, and the planner is NEVER called with the impossible target.
     case insufficientMaterial(achievable: Double, requested: Double, suggested: Double?)
 
+    /// A real usage-limit denial (enforce mode): the backend returned 429 quota_exceeded or 503 quota-store
+    /// unavailable. NOT a technical failure and NOT material-infeasible — carries an honest, scope-specific
+    /// message and never a plain Retry (retrying hits the same cap). The current version is kept unchanged.
+    case quotaDenied(String)
+
     var errorDescription: String? {
         switch self {
         case .missingPrerequisite(let w): return w
@@ -108,6 +113,9 @@ enum StoryCreationError: Error, LocalizedError, Equatable {
             }
             return "There's only about \(a)s of usable footage — not enough for a \(req)s Story yet. "
                  + "Shoot or add a little more and try again."
+        case .quotaDenied(let m):
+            // Surface the honest, scope-specific quota message built by the networking layer; never a retry.
+            return m
         }
     }
 }
@@ -725,6 +733,14 @@ final class StoryCreationCoordinator {
         } catch EditPlanJobError.conflict {
             if cancelRequested { return finishCancelled() }
             return finishFailed(.planTransport("this Story is already being created"))
+        } catch let EditPlanJobError.quotaExceeded(scope, _) {
+            // Enforce-mode allowance cap (429). Honest, scope-specific message; NOT a retry.
+            if cancelRequested { return finishCancelled() }
+            return finishFailed(.quotaDenied(EditPlanJobError.quotaExceeded(scope: scope, retryAfter: nil).errorDescription ?? "You've reached a usage limit."))
+        } catch EditPlanJobError.quotaStoreUnavailable {
+            // Accounting-store outage (503). Transient — the user may try again shortly.
+            if cancelRequested { return finishCancelled() }
+            return finishFailed(.quotaDenied(EditPlanJobError.quotaStoreUnavailable(retryAfter: nil).errorDescription ?? "Please try again in a moment."))
         } catch EditPlanJobError.pollTimeout {
             if cancelRequested { return finishCancelled() }
             // The job may still be running server-side — do NOT lose it; the Story keeps its job_id for reopen.

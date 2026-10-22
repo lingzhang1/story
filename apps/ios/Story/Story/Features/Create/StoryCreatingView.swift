@@ -53,6 +53,7 @@ enum FailureRecovery: Equatable {
     case keepShooting                              // insufficient material, not even a minimum Story -> only "keep shooting"
     case adjustInstructions                        // proven directive conflict -> Adjust Instructions, NO plain retry
     case technical                                 // recoverable technical failure -> honest "Try again"
+    case quotaReached                              // usage-limit denial (429/503) -> message + Back, NO plain retry
 
     static func from(_ error: StoryCreationError?) -> FailureRecovery {
         if case let .insufficientMaterial(_, _, suggested)? = error {
@@ -66,6 +67,9 @@ enum FailureRecovery: Equatable {
         // A preservation violation also fails identically on a plain retry (the same target+directives produce
         // the same clip changes) — route it to Adjust Instructions, not retry.
         if case .preservationViolation? = error { return .adjustInstructions }
+        // A quota cap (daily/monthly/active-jobs/global) fails identically on an immediate retry — show the
+        // honest message and send the user back, never a plain "Try again".
+        if case .quotaDenied? = error { return .quotaReached }
         return .technical
     }
 }
@@ -362,6 +366,28 @@ struct StoryCreatingView: View {
             adjustInstructionsBody(message: message)
         case .technical:
             technicalFailedBody(message: message)
+        case .quotaReached:
+            quotaReachedBody(message: message)
+        }
+    }
+
+    /// Usage-limit denial (enforce mode 429/503). Honest, scope-specific message with NO plain "Try again"
+    /// (an immediate retry hits the same cap). Just sends the user back to the Story.
+    private func quotaReachedBody(message: String) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Text("You've reached a limit.")
+                .font(StoryTheme.display(22))
+                .foregroundStyle(StoryTheme.cream)
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(StoryTheme.body(14))
+                .foregroundStyle(StoryTheme.cream.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            StoryPrimaryButton(title: "Back to Story") { dismiss() }
+                .padding(.bottom, 24)
         }
     }
 
