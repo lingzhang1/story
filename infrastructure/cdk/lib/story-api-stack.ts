@@ -548,10 +548,12 @@ export class StoryApiStack extends cdk.Stack {
           "dynamodb:*",             // the jobs table
           "sqs:*",                  // queue + DLQ
           "s3:*",                   // staging bucket + bucket policy + the S3 auto-delete custom resource
-          "lambda:*",               // worker + ESM + permissions + the OIDC custom-resource handler
+          "lambda:*",               // worker + ESM + permissions + the OIDC + LogRetention custom-resource handlers
           "events:*",               // the reconcile EventBridge rule
           "ssm:GetParameters", "ssm:GetParameter",   // CDK reads the bootstrap version param
-          "logs:*",                 // Lambda log groups
+          "logs:*",                 // Lambda log groups + CloudWatch Logs retention policies (observability)
+          "sns:*",                  // observability alarm topic + alerts@ subscription (CFN manages it)
+          "cloudwatch:*",           // observability dashboards + metric alarms
         ],
         // Service-level scope to this account+region. CloudFormation creates these resources, so ARNs
         // are not known pre-create; scoping by service+account+region removes cross-account/cross-service
