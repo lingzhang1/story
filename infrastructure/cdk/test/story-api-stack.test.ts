@@ -274,6 +274,23 @@ describe("P0 Beta Observability construct", () => {
     }));
   });
 
+  test("unwired metric alarms use treatMissingData=missing (never a healthy OK until an emitter ships)", () => {
+    const t = synthWith({ environment: "test", observability: "true" });
+    // The two alarms on metrics with NO emitter yet (auth/quota milestone) must sit in INSUFFICIENT_DATA
+    // when there is no data — NOT OK. A green "no unauthorized access" on an unmeasured metric is misleading.
+    for (const name of ["story-test-quota-enforcement-error", "story-test-unauthorized-access-anomaly"]) {
+      t.hasResourceProperties("AWS::CloudWatch::Alarm", Match.objectLike({
+        AlarmName: name,
+        TreatMissingData: "missing",
+      }));
+    }
+    // A WIRED infra alarm stays notBreaching (no data genuinely means nothing bad).
+    t.hasResourceProperties("AWS::CloudWatch::Alarm", Match.objectLike({
+      AlarmName: "story-test-lambda-errors",
+      TreatMissingData: "notBreaching",
+    }));
+  });
+
   test("email alarmDestination + createBudget creates an SNS subscription AND an AWS Budget with 3 thresholds", () => {
     const t = synthWith({ environment: "test", observability: "true", createBudget: "true",
       alarmDestination: "ops@example.com", monthlyBudgetUsd: "150" });
