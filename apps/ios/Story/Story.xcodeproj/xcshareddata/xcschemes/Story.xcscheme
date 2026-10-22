@@ -80,6 +80,28 @@
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_USER_POOL_ID"
+            value = "us-east-1_3cPNfbrUl"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_APP_CLIENT_ID"
+            value = "4f3dtn9d0nk5uq1hcvbdc7m73c"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_DOMAIN_PREFIX"
+            value = "story-beta-auth"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_API_BASE_URL"
+            value = "https://asxtxgjiis.us-east-1.awsapprunner.com"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
