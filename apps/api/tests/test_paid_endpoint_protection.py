@@ -32,6 +32,7 @@ PAID_ROUTES = {
     ("POST", "/v1/story-coverage"),
     ("POST", "/v1/story-guide"),
     ("POST", "/v1/story-guide-v2"),
+    ("POST", "/v1/scene-image"),
     ("POST", "/v1/edit-plan"),
     ("POST", "/v1/edit-plan-mm"),
     ("POST", "/v1/music-plan"),
