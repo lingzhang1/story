@@ -167,6 +167,15 @@ final class StoryCreationCoordinator {
     /// device-acceptance verification; carries NO image content.
     private(set) var lastPlanningDiagnostics: StoryPlanningDiagnostics?
 
+    /// EditPlan Creative Freedom v2: completion class of the most recent SUCCESSFUL plan.
+    /// "complete" = every creative objective satisfied; "partial" = technically valid + playable but some
+    /// creative objective could not be applied. nil until a run completes (or when the backend predates v2).
+    /// A partial result STILL renders as a success — this only drives an honest, concise disclosure note.
+    private(set) var lastCompletion: String?
+    /// A one-line, user-facing disclosure of the material unmet creative instructions on a PARTIAL success
+    /// (nil for a complete success). Shown as a non-blocking note on the result, never an error.
+    private(set) var lastPartialDisclosure: String?
+
     // Seams
     private let planner: EditPlanning
     private let jobClient: EditPlanJobClienting
@@ -249,11 +258,14 @@ final class StoryCreationCoordinator {
         var obj: [String: JSONValue]
         if case .object(let o)? = base { obj = o } else { obj = [:] }
         if obj["mode"] == nil { obj["mode"] = .string((directives != nil || soft != nil) ? "revise" : "explore") }
-        // HARD directives must be read as REQUIREMENTS, so when we fold them onto an explore base (a
-        // Customize-directed Create Another Version: "start from Moment 15, then Moment 2"), upgrade the mode
-        // from explore to revise. Without this the planner would treat an explicit opening/order as a soft
-        // nudge and could ignore it — exactly the "doesn't align to my instruction" bug.
-        if directives != nil, case .string("explore")? = obj["mode"] { obj["mode"] = .string("revise") }
+        // NOTE (owner decision 2026-10-22): we DO NOT upgrade explore->revise when directives are present.
+        // A directed Create Another Version must stay mode=explore — it keeps Explore's "meaningfully different
+        // interpretation" objective and does NOT inherit Revise's base-plan preservation framing or continuity
+        // gate. The user's structured directives + soft instruction still ride along (folded below) and are
+        // enforced by the planner's directive handling (rendered as requirements) and, under EditPlan v2, by
+        // the deterministic reorder + creative-intent scorer — all of which run independently of the mode. This
+        // removes the former `explore -> revise` reroute that conflated "honor my pins" with "stay similar to
+        // the previous version", violating the Revise vs Create-Another-Version semantics.
         // Fold the Story's persisted creation-time directives ONLY when the base context does not already carry
         // its own (a Revise run supplies its own directives from the user's revise instruction — never clobber).
         if obj["directives"] == nil, let directives { obj["directives"] = directives }
@@ -466,9 +478,10 @@ final class StoryCreationCoordinator {
         pendingParentVersionId = parent.versionId ?? parent.id
         pendingOperationType = "another_version"
         // When the user reached this via the Customize sheet and typed Creative Direction for THIS operation,
-        // honor those directives (mode=revise semantics over the explore base) — they are not a stale
-        // creation-time leak, they are this operation's intent. A one-tap "Create another version" from the
-        // Result (no Customize sheet) leaves this false, so it stays a blind explore and inherits nothing.
+        // fold those directives + soft instruction onto the explore context so the planner strongly pursues
+        // them (owner decision 2026-10-22: the operation STAYS mode=explore — a meaningfully-different NEW
+        // version — it is NOT rerouted to revise). A one-tap "Create another version" from the Result (no
+        // Customize sheet) leaves this false, so it stays a blind explore and inherits nothing.
         pendingDirectedByCustomize = directedByCustomize
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
@@ -692,6 +705,12 @@ final class StoryCreationCoordinator {
                     selectedTier: budgetDiag.tier, appliedSteps: budgetDiag.applied,
                     fallbackReason: nil, creativeBriefVersion: StoryMultimodalPlanning.creativeBriefVersion,
                     requestedApproach: requested, actualApproach: actualRaw)
+                // EditPlan v2: capture the completion class + honest partial-success disclosure (if any).
+                // Absent on a pre-v2 backend -> lastCompletion stays nil and nothing is shown (success as before).
+                lastCompletion = final.diagnostics?["completion"]?.stringValue
+                lastPartialDisclosure = (lastCompletion == "partial")
+                    ? final.diagnostics?["partial_disclosure"]?.stringValue
+                    : nil
                 story.planJobStatus = "completed"; try? context.save()
                 // Phase 3: durably persist the completed, validated-on-fetch plan at plan_ready BEFORE
                 // rendering, so a force-quit during render resumes from the saved plan (no re-poll/re-inference).

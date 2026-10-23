@@ -118,9 +118,11 @@ final class MomentReferenceIntegrationTests: XCTestCase {
         XCTAssertNil(o["directives"], "a blind explore must not inherit persisted directives (test 12)")
     }
 
-    func test_compose_anotherVersion_via_customize_folds_directives_as_revise() {
-        // Create Another Version launched FROM the Customize sheet with "Start from Moment 15, then Moment 2"
-        // must honor those hard directives and upgrade the explore base to revise mode.
+    func test_compose_anotherVersion_via_customize_stays_explore_with_directives() {
+        // Owner decision 2026-10-22: Create Another Version launched FROM the Customize sheet with
+        // "Start from Moment 15, then Moment 2" must KEEP mode=explore (a meaningfully-different NEW version)
+        // while carrying the user's hard directives — it must NOT be rerouted to revise (which would preserve
+        // the previous edit and conflict with Revise-vs-Create-Another-Version semantics).
         let s = story()
         let m15 = UUID(), m2 = UUID()
         var d = ResolvedDirectives(); d.opening = m15; d.orderAdjacent = [[m2, m15]]
@@ -131,9 +133,24 @@ final class MomentReferenceIntegrationTests: XCTestCase {
               case .object(let dir)? = o["directives"] else {
             return XCTFail("expected object with directives")
         }
-        XCTAssertEqual(o["mode"], .string("revise"), "hard directives must upgrade explore -> revise")
-        XCTAssertEqual(dir["opening"], .string(m15.uuidString), "opening=Moment 15 must reach the planner")
+        XCTAssertEqual(o["mode"], .string("explore"), "directed Create Another Version must STAY explore")
+        XCTAssertEqual(dir["opening"], .string(m15.uuidString), "opening=Moment 15 must still reach the planner")
         XCTAssertEqual(dir["order_adjacent"], .array([.array([.string(m2.uuidString), .string(m15.uuidString)])]))
+    }
+
+    func test_compose_anotherVersion_via_customize_carries_soft_direction_on_explore() {
+        // The typed soft instruction must ride along on the explore request too (not dropped by routing).
+        let s = story()
+        s.creativeDirectionText = "Add more local-people conversations"
+        var d = ResolvedDirectives(); d.opening = UUID()
+        s.creativeDirectivesJSON = d.toWireJSON()
+        let base = JSONValue.object(["mode": .string("explore")])
+        guard case .object(let o)? = StoryCreationCoordinator.composeRevisionContext(
+            base: base, story: s, operationType: "another_version", directedByCustomize: true) else {
+            return XCTFail("expected object")
+        }
+        XCTAssertEqual(o["mode"], .string("explore"))
+        XCTAssertEqual(o["soft_direction"], .string("Add more local-people conversations"))
     }
 
     // MARK: - RevisionContextBuilder.revise carries the EXACT base plan
