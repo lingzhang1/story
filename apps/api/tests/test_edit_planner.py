@@ -1888,3 +1888,194 @@ def test_repair_errors_non_visual_classification():
     # Mixed: any visual marker keeps images.
     assert not _errors_are_non_visual(["seg0: speed 4.0 out of range",
                                        "seg1: source range overlaps NO useful_segment"])
+
+
+# ============================================================================
+# Creative Freedom AMENDMENT v2 — creative directives as strong editorial
+# objectives, not terminal failures. Cost-aware repair. Safety/privacy hard.
+# All behind flags, default OFF. These tests FLIP the flags per-case.
+# ============================================================================
+from edit_planner import (  # noqa: E402
+    assess_creative_intent,
+    _validate_directives_split,
+    _exclude_is_safety,
+    _objective_directives_on,
+)
+
+
+def _obj_env(monkeypatch, **extra):
+    monkeypatch.setenv("STORY_EDITPLAN_OBJECTIVE_DIRECTIVES", "1")
+    monkeypatch.setenv("STORY_EDITPLAN_BEST_VALID_RETENTION", "1")
+    for k, v in extra.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_v2_flags_default_off_is_legacy(monkeypatch):
+    # With no flags set, an unmet opening directive is STILL a hard validation error (unchanged behavior).
+    monkeypatch.delenv("STORY_EDITPLAN_OBJECTIVE_DIRECTIVES", raising=False)
+    assert _objective_directives_on() is False
+    bad = _good_plan()  # M1 then M2; require M2 opening
+    inp = _inputs(revision_context=_rev({"opening": M2}))
+    errs = validate_plan(bad, inp)
+    assert any("directive opening:" in e for e in errs)   # hard in legacy mode
+
+
+def test_v2_unmet_opening_is_objective_not_hard(monkeypatch):
+    # Flag ON: a mis-ordered opening is NOT a hard error — validate_plan passes; the miss is an OBJECTIVE.
+    _obj_env(monkeypatch)
+    bad = _good_plan()  # M1 then M2
+    inp = _inputs(revision_context=_rev({"opening": M2}))
+    assert validate_plan(bad, inp) == []                  # technically valid -> shippable
+    hard, obj = _validate_directives_split(bad, inp, {str(m["id"]).lower(): m for m in inp.moments})
+    assert hard == [] and any("directive opening:" in e for e in obj)
+    rep = assess_creative_intent(bad, inp)
+    assert rep["satisfied"] is False and rep["material_unmet"]
+    assert rep["material_unmet"][0]["code"] == "opening"
+
+
+def test_v2_reference_to_unknown_moment_stays_hard(monkeypatch):
+    # An unknown/unowned Moment reference is a HARD error even in objective mode (integrity).
+    _obj_env(monkeypatch)
+    inp = _inputs(revision_context=_rev({"opening": str(uuid4())}))
+    errs = validate_plan(_good_plan(), inp)
+    assert any("not in the eligible source set" in e for e in errs)
+
+
+def test_v2_safety_exclude_is_hard_creative_exclude_is_objective(monkeypatch):
+    _obj_env(monkeypatch)
+    plan = _good_plan()  # uses M1 and M2
+    ms = {str(m["id"]).lower(): m for m in _inputs().moments}
+    # Creative exclude (explicitly marked) of a used Moment -> OBJECTIVE, not hard.
+    inp_creative = _inputs(revision_context=_rev({"exclude": [M2], "exclude_creative": [M2]}))
+    hard, obj = _validate_directives_split(plan, inp_creative, ms)
+    assert hard == [] and any("directive exclude:" in e for e in obj)
+    assert validate_plan(plan, inp_creative) == []
+    # Safety exclude (marked privacy) of a used Moment -> HARD, never shippable.
+    inp_safety = _inputs(revision_context=_rev({"exclude": [M2], "exclude_reason": {M2: "privacy"}}))
+    hard2, _ = _validate_directives_split(plan, inp_safety, ms)
+    assert any("safety/privacy" in e for e in hard2)
+    assert any("safety/privacy" in e for e in validate_plan(plan, inp_safety))
+
+
+def test_v2_missing_exclude_marker_defaults_to_safety(monkeypatch):
+    # Owner principle 3: a missing marker must NOT be treated as creative — fail safe.
+    _obj_env(monkeypatch)
+    directives = {"exclude": [M2]}  # no marker at all
+    assert _exclude_is_safety(directives, M2) is True
+    plan = _good_plan()
+    inp = _inputs(revision_context=_rev(directives))
+    assert any("safety/privacy" in e for e in validate_plan(plan, inp))
+
+
+def test_v2_contradiction_stays_hard(monkeypatch):
+    _obj_env(monkeypatch)
+    inp = _inputs(revision_context=_rev({"order_after": [[M1, M2], [M2, M1]]}))
+    errs = validate_plan(_good_plan(), inp)
+    assert any("directive conflict:" in e for e in errs)
+
+
+def test_v2_approx_duration_soft_but_runaway_hard(monkeypatch):
+    # Approximate target: a modest overshoot that WAS rejected (+67%) now ships; a runaway (+100%+) still fails.
+    _obj_env(monkeypatch, STORY_EDITPLAN_APPROX_DURATION_SOFT="1")
+    inp = _target12_inputs(
+        revision_context={"mode": "explore", "duration_target_source": "ai_recommended"},
+        moments=_target12_inputs().moments + [
+            {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 8.5]]}])
+    def plan3(d0, d1, d2):
+        return {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+            {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": d0,
+             "output_duration_seconds": d0, "native_audio": "keep"},
+            {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": d1,
+             "output_duration_seconds": d1, "native_audio": "keep"},
+            {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": d2,
+             "output_duration_seconds": d2, "native_audio": "keep"}]}
+    # +67% (20s vs 12) previously rejected -> now ships (approximate target).
+    assert validate_plan(plan3(7.0, 7.0, 6.0), inp) == []
+    # +108% (25s vs 12) -> runaway guard rejects.
+    assert any("runaway guard" in e for e in validate_plan(plan3(9.0, 8.0, 8.0), inp))
+
+
+def test_v2_exact_duration_stays_hard(monkeypatch):
+    # An EXPLICIT user-exact duration keeps the hard overshoot band even with the approx-soft flag on.
+    _obj_env(monkeypatch, STORY_EDITPLAN_APPROX_DURATION_SOFT="1")
+    inp = _target12_inputs(revision_context={"mode": "revise", "duration_target_source": "user_exact"},
+                           moments=_target12_inputs().moments + [
+                               {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 8.5]]}])
+    plan = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 7.0,
+         "output_duration_seconds": 7.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 7.0,
+         "output_duration_seconds": 7.0, "native_audio": "keep"},
+        {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": 6.0,
+         "output_duration_seconds": 6.0, "native_audio": "keep"}]}   # 20s vs 12 = +67%
+    assert any("upper bound" in e for e in validate_plan(plan, inp))
+
+
+def test_v2_47p5s_mis_ordered_directive_ships_via_reorder(monkeypatch):
+    # The 47.5s class: model returns valid segments but wrong order for opening+adjacency. In objective mode the
+    # engine reorders deterministically (0 extra model calls) and ships a FULLY satisfied plan.
+    _obj_env(monkeypatch)
+    gp = _good_plan()
+    s_m1, s_m2 = gp["segments"][0], gp["segments"][1]
+    wrong = {**gp, "segments": [{**s_m2, "order": 0}, {**s_m1, "order": 1}]}  # M2 first
+    eng = RealEditPlannerEngine(FakeModelGateway(response=wrong))
+    out = eng.generate(_inputs(revision_context={"mode": "explore", "directives": {"opening": M1}}))
+    d = eng.last_diagnostics
+    assert d["final"] == "executable"
+    assert d["model_calls"] == 1                       # no extra repair call
+    assert d.get("structural_repair") is True
+    assert str(out.segments[0].asset_id).lower() == M1.lower()
+    assert d.get("completion") == "complete"
+
+
+def test_v2_partial_ships_with_disclosure_no_extra_calls(monkeypatch):
+    # Objective that a reorder CANNOT satisfy (must_include of a Moment the model simply didn't place) -> the
+    # plan is technically valid, so it SHIPS with a partial disclosure and ZERO extra model calls (cost policy).
+    _obj_env(monkeypatch)
+    plan = _good_plan()  # uses M1, M2
+    M3 = str(uuid4())
+    inp = _inputs(
+        moments=_inputs().moments + [{"id": M3, "duration_seconds": 5.0, "useful_segments": [[0.0, 4.0]]}],
+        revision_context={"mode": "explore", "directives": {"must_include": [M3]}})
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    eng.generate(inp)
+    d = eng.last_diagnostics
+    assert d["final"] == "executable" and d["completion"] == "partial"
+    assert d["model_calls"] == 1                       # no repair spent chasing the objective
+    assert any(m["code"] == "inclusion" for m in d["material_unmet"])
+    assert "partial_disclosure" in d
+
+
+def test_v2_best_valid_retained_not_discarded(monkeypatch):
+    # First call returns a VALID plan but with a HARD error nowhere; a (hypothetical) later regression must not
+    # discard it. Here: initial valid plan with an unmet objective -> retained + shipped, never invalid.
+    _obj_env(monkeypatch)
+    plan = _good_plan()
+    M3 = str(uuid4())
+    inp = _inputs(
+        moments=_inputs().moments + [{"id": M3, "duration_seconds": 5.0, "useful_segments": [[0.0, 4.0]]}],
+        revision_context={"mode": "explore", "directives": {"must_include": [M3]}})
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(inp)
+    assert out is not None and eng.last_diagnostics["final"] == "executable"
+
+
+def test_v2_revise_zero_repair_budget(monkeypatch):
+    # Revise with a HARD-valid first plan: budget is 0 repairs, ships immediately.
+    _obj_env(monkeypatch)
+    eng = RealEditPlannerEngine(FakeModelGateway(response=_good_plan()))
+    eng.generate(_inputs(revision_context={"mode": "revise", "base_plan": _good_plan(),
+                                            "allow_broad_replan": True}))
+    d = eng.last_diagnostics
+    assert d["repair_budget"] == 0 and d["executability_repairs_used"] == 0
+
+
+def test_v2_technical_error_still_fails_when_unrecoverable(monkeypatch):
+    # A HARD technical error with no valid candidate anywhere still fails honestly (speed unrenderable).
+    _obj_env(monkeypatch)
+    bad = _good_plan()
+    bad["segments"][0]["speed"] = 4.0   # out of renderer range -> HARD, unrecoverable here (Fake repeats it)
+    eng = RealEditPlannerEngine(FakeModelGateway(response=bad))
+    with pytest.raises(StructuredOutputError):
+        eng.generate(_inputs(revision_context={"mode": "explore", "directives": {"opening": M1}}))
+    assert eng.last_diagnostics["final"] == "invalid_after_repair"

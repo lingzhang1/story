@@ -144,6 +144,49 @@ SPEED_CONSISTENCY_REL = 0.25
 ROUND_SNAP_ABS = 0.15
 
 
+# ---------------------------------------------------------------------------
+# EDITPLAN CREATIVE-FREEDOM v2 FEATURE FLAGS (owner-approved amendment v2, 2026-10-22).
+# Each is INDEPENDENTLY reversible and defaults OFF, so importing/deploying this module is a pure no-op
+# until a flag is flipped. The amendment turns imperfectly-satisfied CREATIVE directives from terminal
+# validation failures into strong editorial OBJECTIVES: a technically-valid, meaningful plan ships (with an
+# honest disclosure of material unmet instructions) instead of burning repeated Opus calls and returning an
+# "Adjust instructions" error. Technical/integrity/ownership/renderer-safety/privacy rules stay HARD.
+# See specs implementation-plan/milestone-editplan-validation-creative-freedom-amendment-v2.md.
+def _flag(name: str) -> bool:
+    return (os.environ.get(name, "") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _objective_directives_on() -> bool:
+    # Opening/ending/inclusion/ordering become OBJECTIVES (scored, disclosed) rather than hard errors.
+    return _flag("STORY_EDITPLAN_OBJECTIVE_DIRECTIVES")
+
+
+def _best_valid_retention_on() -> bool:
+    # Retain the best technically-valid candidate across the whole attempt chain; ship it rather than fail.
+    return _flag("STORY_EDITPLAN_BEST_VALID_RETENTION")
+
+
+def _approx_duration_soft_on() -> bool:
+    # For an APPROXIMATE (not user-exact) target, the duration band is a runaway guard, not a hard reject.
+    return _flag("STORY_EDITPLAN_APPROX_DURATION_SOFT")
+
+
+def _useful_range_soft_on() -> bool:
+    # source-range-outside-useful becomes a deterministic nudge target, not a hard reject (real-duration
+    # bound stays HARD).
+    return _flag("STORY_EDITPLAN_USEFUL_RANGE_SOFT")
+
+
+# When the approximate-duration band is soft, we still refuse a RUNAWAY plan (a safety/quality guard, not an
+# editorial nicety): generous beyond the normal overshoot band so a longer-but-watchable video still ships.
+DURATION_RUNAWAY_GUARD = 1.00   # reject only if >+100% of an APPROXIMATE target (degenerate/runaway)
+
+# Stable low-cardinality codes for the creative objectives (surfaced in diag.material_unmet / disclosure).
+_OBJECTIVE_CODES = (
+    "opening", "ending", "inclusion", "ordering", "adjacency", "exclusion_creative", "approx_duration",
+)
+
+
 def _useful_ranges(moment: dict) -> list[tuple[float, float]]:
     """Read a Moment's useful_segments into [(start, end), ...] number pairs.
 
@@ -814,17 +857,34 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     undershoot_tol = _undershoot_tolerance_for(inputs)
     if total_out and not declared_infeasible:
         over = (total_out - target) / target     # >0 => longer than asked, <0 => shorter
-        if over > DURATION_OVERSHOOT_TOLERANCE:
-            errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
-                        f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
-        elif undershoot_tol is not None and over < -undershoot_tol:
-            errs.append(f"total output {total_out:.1f}s is >{int(undershoot_tol*100)}% "
-                        f"SHORT of target {target}s (lower bound)")
+        # v2: an APPROXIMATE (not user-exact) target is an editorial OBJECTIVE, not a hard reject — honoring
+        # pacing/selection may legitimately land a bit long or short. We keep only a RUNAWAY guard (degenerate /
+        # absurdly-long) hard; the normal overshoot/undershoot bands move to the creative-intent scorer. An
+        # EXPLICIT user-exact duration keeps the hard bands. Flag-gated; default OFF = exactly today's behavior.
+        _approx_soft = _approx_duration_soft_on() and _duration_target_source(inputs) != "user_exact"
+        if _approx_soft:
+            if over > DURATION_RUNAWAY_GUARD:
+                errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
+                            f">{int(DURATION_RUNAWAY_GUARD*100)}% (runaway guard)")
+            # a degenerate near-empty plan is still caught by 'no segments' / feasibility; no hard lower band here
+        else:
+            if over > DURATION_OVERSHOOT_TOLERANCE:
+                errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
+                            f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
+            elif undershoot_tol is not None and over < -undershoot_tol:
+                errs.append(f"total output {total_out:.1f}s is >{int(undershoot_tol*100)}% "
+                            f"SHORT of target {target}s (lower bound)")
     if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
         errs.append("feasible=false but no infeasible_reason given")
-    # HARD DIRECTIVES (Explicit Moment References): when the request carries resolved stable Moment IDs as
-    # directives, the plan MUST satisfy them deterministically — the model is never trusted to honor them.
-    errs.extend(_validate_directives(plan, inputs, moments))
+    # DIRECTIVES. Split into HARD (references to unknown/unowned Moments, safety/privacy excludes, internal
+    # contradictions) and OBJECTIVE (opening/ending/inclusion/ordering/adjacency/creative-exclude). HARD always
+    # fails validation. OBJECTIVE fails validation ONLY when the objective-directives flag is OFF (legacy); when
+    # ON, objective misses are scored + disclosed by assess_creative_intent, never a terminal failure. The model
+    # is still never trusted to self-certify — the hard gate is deterministic throughout.
+    hard_d, obj_d = _validate_directives_split(plan, inputs, moments)
+    errs.extend(hard_d)
+    if not _objective_directives_on():
+        errs.extend(obj_d)
     return errs
 
 
@@ -845,23 +905,60 @@ def _pairs(raw) -> list[tuple[str, str]]:
     return out
 
 
+def _exclude_is_safety(directives: dict, mid: str) -> bool:
+    """Conservative safety/privacy classification of an exclude (owner principle 3). An exclude is treated as
+    a SAFETY/PRIVACY prohibition — HARD, never silently violated — UNLESS it is UNAMBIGUOUSLY marked creative.
+    A MISSING marker does NOT mean creative: we fail safe. The client's privacy/face controls set
+    exclude_safety:[ids] (or safety_exclude / exclude_reason:{id:'privacy'|'safety'}). Only an id explicitly
+    listed as a creative exclude (exclude_creative:[ids] or exclude_reason:{id:'creative'}) is treated as a
+    mere editorial drop. When the distinction cannot be resolved for an id, it is SAFETY (fail-safe)."""
+    mid = (mid or "").lower()
+    def _idset(key):
+        v = directives.get(key)
+        if isinstance(v, list):
+            return {str(x).lower() for x in v}
+        if isinstance(v, str):
+            return {v.lower()}
+        return set()
+    if mid in _idset("exclude_safety") or mid in _idset("safety_exclude"):
+        return True
+    reason = directives.get("exclude_reason")
+    if isinstance(reason, dict):
+        r = str(reason.get(mid) or reason.get(mid.upper()) or "").strip().lower()
+        if r in ("privacy", "safety", "sensitive", "person", "face"):
+            return True
+        if r == "creative":
+            return False
+    if mid in _idset("exclude_creative"):
+        return False
+    # No resolvable marker -> conservative default: SAFETY (fail-safe). Opt into creative handling explicitly.
+    return not _flag("STORY_EDITPLAN_EXCLUDE_DEFAULT_CREATIVE")
+
+
 def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> list[str]:
-    """Deterministically enforce the hard Moment-reference directives carried in
-    revision_context['directives']. Returns precise error strings; NEVER silently ignores or substitutes.
+    """Back-compat wrapper: returns HARD + OBJECTIVE errors as one flat list (legacy all-hard behavior).
+    New callers use _validate_directives_split to keep objectives out of the hard gate."""
+    hard, obj = _validate_directives_split(plan, inputs, moments)
+    return hard + obj
 
-    Shape (all ids are RESOLVED stable Moment ids — the same values that appear as segment asset_id):
+
+def _validate_directives_split(plan: dict, inputs: EditPlanInputs,
+                               moments: dict) -> tuple[list[str], list[str]]:
+    """Deterministically evaluate the Moment-reference directives in revision_context['directives'], returning
+    (HARD errors, OBJECTIVE errors). NEVER silently ignores or substitutes.
+
+    HARD (always block a ship): a reference to a Moment not in the eligible/owned source set; a SAFETY/PRIVACY
+    exclude that is violated (conservative — see _exclude_is_safety); any internal directive CONTRADICTION.
+    OBJECTIVE (block only in legacy mode; otherwise scored+disclosed): opening, ending, must_include placement,
+    order_after, order_adjacent, and a CREATIVE exclude.
+
+    Shape (all ids RESOLVED stable Moment ids — the same values that appear as segment asset_id):
       {"must_include": [id,...], "exclude": [id,...], "opening": id, "ending": id,
-       "order_after": [[A,B],...], "order_adjacent": [[A,B],...]}
-    order_after[A,B]    => A's first segment comes AFTER B's first segment.
-    order_adjacent[A,B] => A's first segment comes IMMEDIATELY after B's first segment (B then A, no gap).
-
-    A directive naming a Moment that is NOT in the eligible source set (inputs.moments) is itself an error —
-    the caller must resolve/clarify references BEFORE submission (a deleted/unavailable Moment is caught here,
-    not silently dropped). None/empty directives are a no-op (behavior unchanged)."""
+       "order_after": [[A,B],...], "order_adjacent": [[A,B],...]}"""
     ctx = inputs.revision_context or {}
     directives = ctx.get("directives") or {}
     if not isinstance(directives, dict) or not any(directives.get(k) for k in _DIRECTIVE_KEYS):
-        return []
+        return [], []
 
     # Case-INSENSITIVE id comparison (see validate_plan). Directive ids historically arrived UPPERCASE while
     # segment asset_ids / moments ids are lowercase; a raw == never matched, so opening/ending/order went
@@ -872,9 +969,11 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
         if isinstance(v, list):
             return [_norm(x) for x in v]
         return v
+    _raw_directives = directives
     directives = {k: _norm(val) for k, val in directives.items()}
 
-    errs: list[str] = []
+    hard: list[str] = []
+    obj: list[str] = []
     segs = sorted(plan.get("segments", []), key=lambda s: s.get("order", 0))
     used = [(str(s.get("asset_id")).lower() if s.get("asset_id") is not None else None) for s in segs]
     used_set = set(used)
@@ -892,36 +991,41 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     inc = directives.get("must_include") or []
     for mid in (inc if isinstance(inc, list) else [inc]):
         if not _known(mid):
-            errs.append(f"directive must_include references Moment '{mid}' not in the eligible source set "
+            hard.append(f"directive must_include references Moment '{mid}' not in the eligible source set "
                         "(resolve/clarify the reference before submission)")
         elif mid not in used_set:
-            errs.append(f"directive must_include: Moment '{mid}' is required but appears in no segment")
+            obj.append(f"directive must_include: Moment '{mid}' is required but appears in no segment")
 
-    # exclude: no named Moment may appear in any segment.
+    # exclude: no named Moment may appear in any segment. A SAFETY/PRIVACY exclude is HARD (never violated,
+    # conservative classification); an ordinary CREATIVE exclude is an objective.
     exc = directives.get("exclude") or []
     for mid in (exc if isinstance(exc, list) else [exc]):
         if mid in used_set:
-            errs.append(f"directive exclude: Moment '{mid}' must NOT be used but appears in a segment")
+            if _exclude_is_safety(_raw_directives, mid):
+                hard.append(f"directive exclude (safety/privacy): Moment '{mid}' must NOT be used but appears "
+                            "in a segment")
+            else:
+                obj.append(f"directive exclude: Moment '{mid}' must NOT be used but appears in a segment")
 
     # opening: the first segment (order 0) must be the named Moment.
     opening = directives.get("opening")
     if opening:
         if not _known(opening):
-            errs.append(f"directive opening references Moment '{opening}' not in the eligible source set "
+            hard.append(f"directive opening references Moment '{opening}' not in the eligible source set "
                         "(resolve/clarify the reference before submission)")
         elif not segs or used[0] != opening:
             got = used[0] if used else "(none)"
-            errs.append(f"directive opening: first segment must be Moment '{opening}' but is '{got}'")
+            obj.append(f"directive opening: first segment must be Moment '{opening}' but is '{got}'")
 
     # ending: the last segment must be the named Moment.
     ending = directives.get("ending")
     if ending:
         if not _known(ending):
-            errs.append(f"directive ending references Moment '{ending}' not in the eligible source set "
+            hard.append(f"directive ending references Moment '{ending}' not in the eligible source set "
                         "(resolve/clarify the reference before submission)")
         elif not segs or used[-1] != ending:
             got = used[-1] if used else "(none)"
-            errs.append(f"directive ending: last segment must be Moment '{ending}' but is '{got}'")
+            obj.append(f"directive ending: last segment must be Moment '{ending}' but is '{got}'")
 
     after_pairs = _pairs(directives.get("order_after"))
     adj_pairs = _pairs(directives.get("order_adjacent"))
@@ -930,37 +1034,37 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     for a, b in after_pairs:
         if not _known(a) or not _known(b):
             miss = a if not _known(a) else b
-            errs.append(f"directive order_after references Moment '{miss}' not in the eligible source set "
+            hard.append(f"directive order_after references Moment '{miss}' not in the eligible source set "
                         "(resolve/clarify the reference before submission)")
             continue
         ia, ib = _first_index(a), _first_index(b)
         if ia is None or ib is None:
             missing = a if ia is None else b
-            errs.append(f"directive order_after: Moment '{missing}' is required for ordering but appears in no segment")
+            obj.append(f"directive order_after: Moment '{missing}' is required for ordering but appears in no segment")
         elif not (ia > ib):
-            errs.append(f"directive order_after: Moment '{a}' must come after '{b}' but is at position {ia} vs {ib}")
+            obj.append(f"directive order_after: Moment '{a}' must come after '{b}' but is at position {ia} vs {ib}")
 
     # order_adjacent[A,B]: A's first segment must be exactly one position after B's first segment.
     for a, b in adj_pairs:
         if not _known(a) or not _known(b):
             miss = a if not _known(a) else b
-            errs.append(f"directive order_adjacent references Moment '{miss}' not in the eligible source set "
+            hard.append(f"directive order_adjacent references Moment '{miss}' not in the eligible source set "
                         "(resolve/clarify the reference before submission)")
             continue
         ia, ib = _first_index(a), _first_index(b)
         if ia is None or ib is None:
             missing = a if ia is None else b
-            errs.append(f"directive order_adjacent: Moment '{missing}' is required for adjacency but appears in no segment")
+            obj.append(f"directive order_adjacent: Moment '{missing}' is required for adjacency but appears in no segment")
         elif ia != ib + 1:
-            errs.append(f"directive order_adjacent: Moment '{a}' must immediately follow '{b}' "
+            obj.append(f"directive order_adjacent: Moment '{a}' must immediately follow '{b}' "
                         f"(expected position {ib + 1}) but is at position {ia}")
 
-    # ---- conflict detection: surface contradictory constraints, never silently ignore ----
+    # ---- conflict detection: surface contradictory constraints, never silently ignore (ALWAYS HARD) ----
     # A Moment cannot be both required and excluded.
     inc_set = set(inc if isinstance(inc, list) else [inc])
     exc_set = set(exc if isinstance(exc, list) else [exc])
     for mid in (inc_set & exc_set):
-        errs.append(f"directive conflict: Moment '{mid}' is in both must_include and exclude")
+        hard.append(f"directive conflict: Moment '{mid}' is in both must_include and exclude")
     # An excluded Moment cannot be named in an ordering/opening/ending constraint.
     ordered_ids = {x for pair in (after_pairs + adj_pairs) for x in pair}
     if opening:
@@ -968,12 +1072,12 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
     if ending:
         ordered_ids.add(ending)
     for mid in (exc_set & ordered_ids):
-        errs.append(f"directive conflict: Moment '{mid}' is excluded but also named in an ordering/position directive")
+        hard.append(f"directive conflict: Moment '{mid}' is excluded but also named in an ordering/position directive")
     # Contradictory after-ordering: A after B AND B after A.
     after_set = set(after_pairs) | set(adj_pairs)
     for a, b in after_set:
         if (b, a) in after_set:
-            errs.append(f"directive conflict: contradictory ordering between '{a}' and '{b}'")
+            hard.append(f"directive conflict: contradictory ordering between '{a}' and '{b}'")
     # Impossible adjacency: two different predecessors required immediately before the same Moment,
     # or one Moment required immediately before two different successors.
     adj_by_a: dict[str, set[str]] = {}
@@ -983,16 +1087,89 @@ def _validate_directives(plan: dict, inputs: EditPlanInputs, moments: dict) -> l
         adj_by_b.setdefault(b, set()).add(a)
     for a, bs in adj_by_a.items():
         if len(bs) > 1:
-            errs.append(f"directive conflict: Moment '{a}' is required immediately after multiple Moments {sorted(bs)}")
+            hard.append(f"directive conflict: Moment '{a}' is required immediately after multiple Moments {sorted(bs)}")
     for b, as_ in adj_by_b.items():
         if len(as_) > 1:
-            errs.append(f"directive conflict: multiple Moments {sorted(as_)} are each required immediately after '{b}'")
+            hard.append(f"directive conflict: multiple Moments {sorted(as_)} are each required immediately after '{b}'")
     # opening cannot also be required to come after something; ending cannot be required before something.
     if opening and any(opening == a for a, _ in after_set):
-        errs.append(f"directive conflict: Moment '{opening}' is the opening but is also ordered after another Moment")
+        hard.append(f"directive conflict: Moment '{opening}' is the opening but is also ordered after another Moment")
     if ending and any(ending == b for _, b in after_set):
-        errs.append(f"directive conflict: Moment '{ending}' is the ending but another Moment is ordered after it")
-    return errs
+        hard.append(f"directive conflict: Moment '{ending}' is the ending but another Moment is ordered after it")
+    return hard, obj
+
+
+def _objective_code(err: str) -> str:
+    """Map an objective error string to a stable low-cardinality code for disclosure/diagnostics."""
+    e = err
+    if e.startswith("directive opening:"):
+        return "opening"
+    if e.startswith("directive ending:"):
+        return "ending"
+    if e.startswith("directive must_include:"):
+        return "inclusion"
+    if e.startswith("directive order_adjacent:"):
+        return "adjacency"
+    if e.startswith("directive order_after:"):
+        return "ordering"
+    if e.startswith("directive exclude:"):
+        return "exclusion_creative"
+    if "SHORT of target" in e or "exceeds target" in e or "runaway guard" in e:
+        return "approx_duration"
+    return "other"
+
+
+def assess_creative_intent(plan: dict, inputs: EditPlanInputs) -> dict:
+    """Deterministic, model-free scorer of how well a TECHNICALLY-VALID plan satisfies the creative OBJECTIVES
+    (opening, ending, inclusion, ordering, adjacency, creative exclude, approximate duration). It emits NO hard
+    error and never rejects — its output drives best-candidate selection and the honest partial-success
+    disclosure. Call it only AFTER the hard gate (validate_plan) passes.
+
+    Returns:
+      satisfied:       True when every present objective is met (fully complete creative request)
+      satisfaction:    float in [0,1], fraction of present objectives satisfied (1.0 when none present)
+      material_unmet:  list of {code, detail} for each unmet objective the user will notice
+      objective_count: number of objectives evaluated
+    """
+    moments = {str(m["id"]).lower(): m for m in inputs.moments}
+    _hard, obj_errs = _validate_directives_split(plan, inputs, moments)
+    # Count the objectives actually PRESENT in the request so satisfaction is fraction-of-present, not absolute.
+    ctx = inputs.revision_context or {}
+    directives = ctx.get("directives") or {}
+    present = 0
+    if isinstance(directives, dict):
+        if directives.get("opening"):
+            present += 1
+        if directives.get("ending"):
+            present += 1
+        inc = directives.get("must_include") or []
+        present += len(inc if isinstance(inc, list) else [inc])
+        exc = directives.get("exclude") or []
+        for mid in (exc if isinstance(exc, list) else [exc]):
+            if not _exclude_is_safety(directives, str(mid)):
+                present += 1
+        present += len(_pairs(directives.get("order_after")))
+        present += len(_pairs(directives.get("order_adjacent")))
+    # Approximate-duration objective counts as present when the band would otherwise bind (soft mode on).
+    _approx_present = _approx_duration_soft_on() and _duration_target_source(inputs) != "user_exact"
+    if _approx_present:
+        present += 1
+
+    material: list[dict] = []
+    for e in obj_errs:
+        material.append({"code": _objective_code(e), "detail": str(e)[:200]})
+    # approx-duration miss appears in obj_errs only in legacy mode; in soft mode the band is relaxed, so a
+    # within-runaway long/short plan is considered SATISFIED for the duration objective (the owner's intent:
+    # do not treat a modest deviation as unmet). No extra material entry needed.
+    unmet = len(material)
+    # Satisfaction: present objectives that were met. Clamp so an over-count can't go negative.
+    sat = 1.0 if present <= 0 else max(0.0, (present - unmet) / present)
+    return {
+        "satisfied": unmet == 0,
+        "satisfaction": round(sat, 4),
+        "material_unmet": material,
+        "objective_count": present,
+    }
 
 
 def preflight_directives(directives: dict, eligible_ids: set[str]) -> list[str]:
@@ -1632,14 +1809,41 @@ class RealEditPlannerEngine:
             diag["normalize_notes"] = notes
         errs = validate_plan(plan, inputs)
 
-        # 3b: DETERMINISTIC structural directive repair (Part A). When the ONLY failures are opening/ending/
-        # order PLACEMENT violations, reorder the SAME segments to satisfy them — no model call, no content
-        # change, full validate_plan re-run. This fixes the common "model picked the right clips but didn't put
-        # the opening/adjacency Moment in the right position" case (satisfiable directive the model mis-ordered)
-        # without relaxing any constraint. Membership/duration/speed/source errors are NOT order-only, so they
-        # fall through to the model-repair loop unchanged. If the reorder cannot satisfy the constraints
-        # (absent opening/ending, cyclic order) it returns None and we keep the existing path.
-        if errs and _errors_are_order_only(errs):
+        # --- v2 cost-aware repair policy (owner-approved 2026-10-22; all gated by the v2 flags) -------------
+        # best_valid retains the best TECHNICALLY-VALID candidate across the whole chain so a later attempt can
+        # never discard an earlier usable one. ship_best() records satisfaction for selection.
+        best_valid: dict | None = None
+        best_sat: float = -1.0
+        best_from = None
+
+        def _consider_best(p: dict, attempt: str) -> None:
+            nonlocal best_valid, best_sat, best_from
+            if not _best_valid_retention_on():
+                return
+            if validate_plan(p, inputs) or p.get("feasible") is False:
+                return
+            sat = assess_creative_intent(p, inputs)["satisfaction"] if _objective_directives_on() else 1.0
+            # First valid wins; replace ONLY by a strictly-higher satisfaction (never a worse candidate).
+            if best_valid is None or sat > best_sat:
+                import copy as _c
+                best_valid, best_sat, best_from = _c.deepcopy(p), sat, attempt
+
+        if not errs:
+            _consider_best(plan, "initial")
+
+        # 3b: DETERMINISTIC structural directive repair (0 Bedrock). v2: run the reorder whenever the DIRECTIVE
+        # PLACEMENT subset is reorder-only — not only when EVERY error is placement (the 47.5s fix: a lone
+        # unrelated numeric error used to disqualify the cheap reorder). In objective mode the placement misses
+        # are OBJECTIVE (not in errs), so we also pull them from assess_creative_intent and reorder to raise
+        # satisfaction before shipping. Content is never changed; full validate_plan re-run gates adoption.
+        def _placement_errors() -> list[str]:
+            moments_l = {str(m["id"]).lower(): m for m in inputs.moments}
+            _h, _o = _validate_directives_split(plan, inputs, moments_l)
+            pool = list(errs) + (_o if _objective_directives_on() else [])
+            return [e for e in pool if any(str(e).startswith(p) for p in _ORDER_REPAIRABLE_PREFIXES)]
+
+        _place = _placement_errors()
+        if _place:
             reordered = repair_directive_placement(plan, inputs)
             if reordered is not None:
                 re_errs = validate_plan(reordered, inputs)
@@ -1648,29 +1852,68 @@ class RealEditPlannerEngine:
                     errs = []
                     diag["structural_repair"] = True
                     diag["structural_repair_kind"] = "directive_placement"
+                    _consider_best(plan, "deterministic_reorder")
 
-        # 4-5: bounded model repair carrying the exact errors.
-        for _ in range(self._exec_repairs):
+        # 4-5: STRICT COST-AWARE model repair (owner policy §7). Default ZERO additional model calls. We issue
+        # a targeted model repair ONLY when (a) HARD errors remain (never for a purely creative/objective
+        # deviation), (b) no technically-valid candidate is already retained (justified expected benefit), and
+        # (c) the per-operation budget allows it. Budget: Create/Explore <= 1; Revise = 0, with a single
+        # exception of 1 when a HARD technical defect would otherwise leave the result unrenderable. Repairs
+        # carry ONLY the HARD errors — the model is never asked to chase editorial objectives.
+        def _hard_only(es: list[str]) -> list[str]:
+            # In objective mode, `errs` already contains only hard errors (objectives are excluded upstream),
+            # so this is the identity; in legacy mode we repair everything as before.
+            return list(es)
+
+        _mode = (rc.get("mode") or "").strip().lower()
+        _is_revise = _mode == "revise"
+        if _objective_directives_on():
+            # Create / Create Another Version: at most 1. Revise: 0, exception 1 to recover an unrenderable
+            # HARD defect. (errs here are HARD-only by construction.)
+            if _is_revise:
+                max_repairs = 1 if errs else 0   # the exception: only if a HARD defect remains
+            else:
+                max_repairs = min(1, self._exec_repairs) if self._exec_repairs else 1
+            max_repairs = min(max_repairs, 1)   # never >=2 under v2
+        else:
+            max_repairs = self._exec_repairs     # legacy behavior unchanged
+
+        diag["repair_budget"] = max_repairs
+        _repairs_done = 0
+        for _ in range(max_repairs):
             if not errs:
                 break
+            # Justified-benefit gate: if we already hold a valid candidate, do NOT spend a model call to chase
+            # compliance — ship the retained candidate instead (owner §6/§7).
+            if best_valid is not None:
+                diag["repair_skipped_have_valid"] = True
+                break
             diag["executability_repairs_used"] += 1
+            _repairs_done += 1
             diag["repaired"] = True
-            # Phase 3 — targeted repair payload. A repair whose errors are purely NUMERIC/STRUCTURAL (duration,
-            # speed, source range, ordering, native-audio, directive placement, unknown-id) does not need the
-            # model to re-see pixels — the fix is arithmetic/positional over the plan text + the exact errors.
-            # So we drop the full contact-sheet payload for those repairs (big cost saving). We KEEP images only
-            # when an error implicates what a clip CONTAINS (useful-segment coverage) — i.e. a judgement that
-            # genuinely benefits from frames — never assuming reduced visual input is free (owner safeguard).
-            repair_images = [] if _errors_are_non_visual(errs) else list(inputs.images)
+            repair_errs = _hard_only(errs)
+            # Phase 3 — targeted repair payload (unchanged): drop contact sheets for non-visual numeric fixes.
+            repair_images = [] if _errors_are_non_visual(repair_errs) else list(inputs.images)
             diag["repair_images_sent"] = len(repair_images)
-            plan = _call(_build_repair(inputs, plan, errs), images=repair_images)
+            plan = _call(_build_repair(inputs, plan, repair_errs), images=repair_images)
             plan, notes = normalize_plan(plan, inputs)
             if notes:
                 diag["normalized"] = True
                 diag["normalize_notes"] = diag["normalize_notes"] + notes
             errs = validate_plan(plan, inputs)
+            if not errs:
+                _consider_best(plan, f"repair_{_repairs_done}")
 
         # 6: authoritative verdict.
+        # v2: if the final attempt is hard-invalid but we retained a technically-valid candidate earlier, SHIP
+        # the retained candidate instead of failing (owner §6). Only a chain with NO valid candidate at all is
+        # a terminal failure, and its reason is always a HARD technical/integrity/safety one (never editorial).
+        if errs and best_valid is not None:
+            plan = best_valid
+            errs = []
+            diag["shipped_retained_candidate"] = True
+            diag["best_valid_from_attempt"] = best_from
+
         if errs:
             diag["final"] = "invalid_after_repair"
             diag["final_errors"] = errs
@@ -1744,6 +1987,29 @@ class RealEditPlannerEngine:
                 diag["critique_applied"] = False
                 diag["critique_rejected_reason"] = f"provider_error:{type(e).__name__}"
 
+        # v2 PARTIAL-SUCCESS DISCLOSURE (owner §9). The plan is technically valid and shippable. Score the
+        # creative objectives (deterministic, no model) and record Complete vs Partial + the material unmet
+        # instructions, so the device renders a SUCCESS (with a concise disclosure) rather than an "Adjust
+        # instructions" error. Complete = valid + every present objective satisfied; Partial = valid + some
+        # objective unmet. The result is ALWAYS a playable plan either way.
+        if _objective_directives_on():
+            cre = assess_creative_intent(plan, inputs)
+            diag["creative_satisfaction"] = cre["satisfaction"]
+            diag["creative_objective_count"] = cre["objective_count"]
+            if cre["material_unmet"]:
+                diag["material_unmet"] = cre["material_unmet"]
+                diag["final"] = "executable"
+                diag["completion"] = "partial"
+                diag["partial_disclosure"] = (
+                    "Your video is ready. A few of your creative requests couldn't all be applied: "
+                    + "; ".join(sorted({m["code"] for m in cre["material_unmet"]})) + ".")
+            else:
+                diag["final"] = "executable"
+                diag["completion"] = "complete"
+            diag["used_fallback"] = bool(getattr(self._gw, "last_fallback", False))
+            self.last_diagnostics = diag
+            return _to_contract(plan, inputs)
+
         diag["final"] = "executable"
         diag["used_fallback"] = bool(getattr(self._gw, "last_fallback", False))
         self.last_diagnostics = diag
@@ -1779,5 +2045,6 @@ __all__ = [
     "EditPlanInputs", "EditPlanInfeasibleError", "MalformedPlanError",
     "SegmentTimeline", "validate_plan", "normalize_plan", "timeline_total_seconds",
     "preflight_directives", "diversity_diagnostics",
+    "assess_creative_intent", "DURATION_RUNAWAY_GUARD",
     "EditPlannerEngine", "RealEditPlannerEngine", "MockEditPlannerEngine",
 ]
