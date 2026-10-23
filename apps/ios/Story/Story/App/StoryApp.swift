@@ -26,6 +26,7 @@ struct StoryApp: App {
             LocalIdentityModel.self,
             MomentUnderstandingModel.self, AssetUnderstandingJobModel.self,
             StoryCoverageModel.self, StoryGuideModel.self,
+            StoryScenePinModel.self,   // Guide v2.1: user-pinned shooting-script scenes (refinement-protected)
             StoryMusicDirectionModel.self,
             MyMusicAssetModel.self,
             PendingOperationModel.self,

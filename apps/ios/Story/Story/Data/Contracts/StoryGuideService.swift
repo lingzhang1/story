@@ -96,3 +96,68 @@ final class StoryGuideV2Service: StoryGuideV2Generating {
         catch { throw StoryGuideServiceError.decoding(error) }
     }
 }
+
+// StoryGuideRefineService — POST /v1/story-guide-refine ("Update Guide", Guide v2.1, additive).
+//
+// current v2 scenes + captured/pinned state + user update -> next v2 scenes + change log. The server
+// reconciles identity + history (captured/pinned preserved, stable ids kept, new ids minted, dropped
+// uncaptured scenes archived). 404 (gated off) / 503 (failed) => unavailable: the caller KEEPS the current
+// Guide and surfaces a recoverable error — NEVER a fabricated or cleared Guide.
+struct StoryGuideRefineRequestDTO: Encodable {
+    let storyId: UUID
+    let creativeIntent: JSONValue
+    let scope: JSONValue
+    let currentFramingSummary: String
+    let currentScenes: [JSONValue]
+    let capturedSceneIds: [String]
+    let pinnedSceneIds: [String]
+    let userInstruction: String?
+    let eventContext: String?
+    let sourceCreativeIntentVersion: String?
+    enum CodingKeys: String, CodingKey {
+        case storyId = "story_id"
+        case creativeIntent = "creative_intent"
+        case scope
+        case currentFramingSummary = "current_framing_summary"
+        case currentScenes = "current_scenes"
+        case capturedSceneIds = "captured_scene_ids"
+        case pinnedSceneIds = "pinned_scene_ids"
+        case userInstruction = "user_instruction"
+        case eventContext = "event_context"
+        case sourceCreativeIntentVersion = "source_creative_intent_version"
+    }
+}
+
+protocol StoryGuideRefining {
+    func refine(_ request: StoryGuideRefineRequestDTO) async throws -> StoryGuideRefinementResultDTO
+}
+
+final class StoryGuideRefineService: StoryGuideRefining {
+    private let baseURL: URL
+    private let session: URLSession
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
+        self.baseURL = baseURL
+        self.session = session
+    }
+
+    func refine(_ request: StoryGuideRefineRequestDTO) async throws -> StoryGuideRefinementResultDTO {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-guide-refine"))
+        StoryBackend.authorize(&req)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            req.httpBody = try StoryContractCoding.encoder().encode(request)
+        } catch { throw StoryGuideServiceError.encoding(error) }
+
+        let data: Data
+        let resp: URLResponse
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw StoryGuideServiceError.transport(error) }
+
+        guard let http = resp as? HTTPURLResponse else { throw StoryGuideServiceError.badStatus(-1) }
+        if http.statusCode == 503 || http.statusCode == 404 { throw StoryGuideServiceError.unavailable }
+        guard http.statusCode == 200 else { throw StoryGuideServiceError.badStatus(http.statusCode) }
+        do { return try StoryContractCoding.decoder().decode(StoryGuideRefinementResultDTO.self, from: data) }
+        catch { throw StoryGuideServiceError.decoding(error) }
+    }
+}

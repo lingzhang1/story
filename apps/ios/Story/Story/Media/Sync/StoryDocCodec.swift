@@ -51,6 +51,7 @@ enum StoryDocCodec {
         story["editing_approach_explicit"] = s.editingApproachExplicit as Any
         story["creative_directives_json"] = s.creativeDirectivesJSON as Any
         story["creative_direction_text"] = s.creativeDirectionText as Any
+        story["event_context"] = s.eventContext as Any   // Guide v2.1: persistent editable event context
         story["plan_operation_id"] = s.planOperationId as Any
         story["plan_job_id"] = s.planJobId as Any
 
@@ -196,6 +197,11 @@ extension StoryDocCodec {
             derived["guide"] = ["json": g.guideJSON, "schema_version": g.schemaVersion,
                                 "prompt_version": g.promptVersion, "model_id": g.modelId as Any]
         }
+        // Guide v2.1: user-pinned scene ids (durable user decisions; refinement-protected). Carried as a
+        // simple id list keyed by the Story so pins survive cross-device sync + guide refinement.
+        let pinDesc = FetchDescriptor<StoryScenePinModel>(predicate: #Predicate { $0.storyId == sid })
+        let pins = ((try? context.fetch(pinDesc)) ?? []).map { $0.sceneId }
+        if !pins.isEmpty { derived["scene_pins"] = pins }
         if let c = first(StoryCoverageModel.self, #Predicate { $0.storyId == sid }) {
             derived["coverage"] = ["json": c.coverageJSON, "schema_version": c.schemaVersion,
                                    "prompt_version": c.promptVersion,
@@ -255,6 +261,17 @@ extension StoryDocCodec {
             upsert(StoryGuideModel.self, #Predicate { $0.storyId == sid },
                    make: { StoryGuideModel(storyId: sid, guideJSON: json, schemaVersion: schema) },
                    overwrite: { row in row.guideJSON = json; row.schemaVersion = schema; row.updatedAt = .now })
+        }
+        // Guide v2.1: adopt pinned scene ids (additive; a pin is a durable user decision). Insert any pin the
+        // device is missing; never delete a local pin on pull (pins are user-owned and merge-additive).
+        if let pins = derived["scene_pins"] as? [String] {
+            for pid in pins {
+                let key = "\(sid.uuidString)#\(pid)"
+                var pd = FetchDescriptor<StoryScenePinModel>(predicate: #Predicate { $0.key == key }); pd.fetchLimit = 1
+                if ((try? context.fetch(pd))?.first) == nil {
+                    context.insert(StoryScenePinModel(storyId: sid, sceneId: pid)); n += 1
+                }
+            }
         }
         if let c = derived["coverage"] as? [String: Any], let json = c["json"] as? String {
             upsert(StoryCoverageModel.self, #Predicate { $0.storyId == sid },

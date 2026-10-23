@@ -203,6 +203,24 @@ struct StoryGuideV2Section: View {
     var fetchImage: (_ scene: StoryGuideSceneDTO) async -> SceneImageDTO? = { _ in nil }
     /// Fire Unsplash download-tracking when a scene image is actually shown-to-use (owner-documented rule).
     var trackImageUse: (_ image: SceneImageDTO) async -> Void = { _ in }
+    // Guide v2.1 — "Update Guide" refinement + pin affordances (all optional; parent wires to the coordinator).
+    /// Submit a natural-language Guide update. Returns a short result summary (e.g. "2 added · 1 archived") on
+    /// success, or throws for a recoverable error. ASYNC + non-blocking — the current script stays until it returns.
+    var onUpdateGuide: (_ instruction: String) async -> String? = { _ in nil }
+    /// Whether a scene is user-pinned (protected from refinement). Default false.
+    var isPinned: (_ sceneId: String) -> Bool = { _ in false }
+    /// Toggle a scene pin. Returns the new pinned state.
+    var onTogglePin: (_ sceneId: String) -> Void = { _ in }
+    /// Current persistent event context (editable); nil/empty => not set.
+    var eventContext: String = ""
+    /// Save edited persistent event context.
+    var onSaveEventContext: (_ text: String) -> Void = { _ in }
+
+    @State private var showUpdateSheet = false
+    @State private var updateText = ""
+    @State private var isRefining = false
+    @State private var refineSummary: String?
+    @State private var refineError: String?
 
     /// Which scene is featured (hero). Defaults to the first NOT-yet-covered scene, else the first.
     @State private var featuredId: String?
@@ -247,6 +265,8 @@ struct StoryGuideV2Section: View {
                         category: StoryGuideV2Section.category(for: sceneNumber(g, hero)),
                         status: statusLabel(hero.id),
                         covered: isCovered(hero.id),
+                        pinned: isPinned(hero.id),
+                        onTogglePin: { onTogglePin(hero.id) },
                         onShoot: { onShoot(hero, hero.capturePossibilities.first) },
                         fetchImage: { await fetchImage(hero) },
                         trackImageUse: trackImageUse)
@@ -289,6 +309,91 @@ struct StoryGuideV2Section: View {
             HStack(spacing: 8) {
                 pill("\(g.scenes.count) scene\(g.scenes.count == 1 ? "" : "s")", gold: true)
                 if let ev = eventLabel, !ev.isEmpty { pill(ev, gold: false) }
+                Spacer(minLength: 8)
+                Button { updateText = ""; refineError = nil; showUpdateSheet = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wand.and.stars").font(.system(size: 11, weight: .semibold))
+                        Text("Update Guide").font(StoryTheme.body(12, .medium))
+                    }.foregroundStyle(StoryTheme.gold)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefining)
+                .accessibilityIdentifier("update-guide-button")
+            }
+            if isRefining {
+                Text("Updating your shooting script…")
+                    .font(StoryTheme.body(12).italic()).foregroundStyle(StoryTheme.cream.opacity(0.4))
+            } else if let s = refineSummary {
+                Text(s).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold.opacity(0.85))
+            } else if let e = refineError {
+                Text(e).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+            }
+        }
+        .sheet(isPresented: $showUpdateSheet) { updateGuideSheet }
+    }
+
+    // MARK: Update Guide sheet (one-time instruction + editable persistent event context)
+    @ViewBuilder
+    private var updateGuideSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Tell your director what changed, and the shooting script will update — your filmed and pinned scenes stay.")
+                        .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        StoryEyebrow(text: "What's new")
+                        TextEditor(text: $updateText)
+                            .frame(minHeight: 90).scrollContentBackground(.hidden)
+                            .padding(10).background(StoryTheme.cream.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .foregroundStyle(StoryTheme.cream).font(StoryTheme.body(15))
+                        Text("e.g. \"Tomorrow we're visiting Arashiyama\" · \"We filmed lots of temples — suggest something different\" · \"Focus more on us, less on landscapes\"")
+                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        StoryEyebrow(text: "Ongoing event context (optional)")
+                        Text("Persistent details about your event you don't want to retype — itinerary, venue, who's there.")
+                            .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.35))
+                            .fixedSize(horizontal: false, vertical: true)
+                        TextEditor(text: Binding(get: { eventContext }, set: { onSaveEventContext($0) }))
+                            .frame(minHeight: 70).scrollContentBackground(.hidden)
+                            .padding(10).background(StoryTheme.cream.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .foregroundStyle(StoryTheme.cream).font(StoryTheme.body(14))
+                    }
+                    Spacer(minLength: 8)
+                }.padding(18)
+            }
+            .background(StoryTheme.ink.ignoresSafeArea())
+            .navigationTitle("Update Guide")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showUpdateSheet = false }.foregroundStyle(StoryTheme.cream.opacity(0.7))
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Update") { submitUpdate() }
+                        .foregroundStyle(StoryTheme.gold)
+                        .disabled(updateText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func submitUpdate() {
+        let instruction = updateText.trimmingCharacters(in: .whitespacesAndNewlines)
+        showUpdateSheet = false
+        refineSummary = nil; refineError = nil
+        isRefining = true
+        Task {
+            let summary = await onUpdateGuide(instruction)
+            await MainActor.run {
+                isRefining = false
+                if let summary { refineSummary = summary }
+                else { refineError = "Couldn't update just now — your current guide is unchanged. Try again." }
             }
         }
     }
@@ -346,6 +451,8 @@ private struct FeaturedSceneCard: View {
     let category: String
     let status: String
     let covered: Bool
+    var pinned: Bool = false
+    var onTogglePin: () -> Void = {}
     let onShoot: () -> Void
     let fetchImage: () async -> SceneImageDTO?
     let trackImageUse: (SceneImageDTO) async -> Void
@@ -383,6 +490,14 @@ private struct FeaturedSceneCard: View {
                         .font(StoryTheme.eyebrow()).tracking(1.2)
                         .foregroundStyle(StoryTheme.gold)
                     Spacer()
+                    Button(action: onTogglePin) {
+                        Image(systemName: pinned ? "pin.fill" : "pin")
+                            .font(.system(size: 12))
+                            .foregroundStyle(pinned ? StoryTheme.gold : StoryTheme.cream.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(pinned ? "Unpin scene" : "Pin scene")
+                    .accessibilityIdentifier("pin-scene-button")
                     Text(status).font(StoryTheme.body(12))
                         .foregroundStyle(covered ? StoryTheme.cream.opacity(0.5) : StoryTheme.cream.opacity(0.4))
                 }

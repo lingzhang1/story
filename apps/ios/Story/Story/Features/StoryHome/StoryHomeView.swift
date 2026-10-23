@@ -166,7 +166,40 @@ struct StoryHomeView: View {
                             guard let q = scene.visualReferenceQuery else { return nil }
                             return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
                         },
-                        trackImageUse: { img in await sceneImages.track(downloadLocation: img.downloadLocation) })
+                        trackImageUse: { img in await sceneImages.track(downloadLocation: img.downloadLocation) },
+                        onUpdateGuide: { instruction in
+                            // Guide v2.1 refinement: async, non-blocking; current script stays until a valid
+                            // refined one replaces it. Returns a short summary, or nil on a recoverable failure.
+                            let coordinator = StoryGuideCoordinator(context: context)
+                            do {
+                                let outcome = try await coordinator.refineGuideV2(for: story, instruction: instruction)
+                                await MainActor.run { guideV2 = outcome.guide }
+                                // Mark the Story dirty so R7 syncs the refined guide + scene history.
+                                StorySyncCoordinator.shared.touch(storyId: story.id, context: context,
+                                    activeOwner: story.ownerAccountId, token: { await AuthStore.shared?.validAccessToken() })
+                                let added = outcome.changes.filter { $0.disposition == "added" }.count
+                                let improved = outcome.changes.filter { $0.disposition == "improved" }.count
+                                let archived = outcome.archivedSceneIds.count
+                                var parts: [String] = []
+                                if added > 0 { parts.append("\(added) added") }
+                                if improved > 0 { parts.append("\(improved) improved") }
+                                if archived > 0 { parts.append("\(archived) archived") }
+                                return parts.isEmpty ? "Guide updated." : "Updated · " + parts.joined(separator: " · ")
+                            } catch {
+                                return nil   // current guide untouched; the section shows a recoverable error
+                            }
+                        },
+                        isPinned: { sceneId in StoryGuideCoordinator(context: context).isPinned(storyId: story.id, sceneId: sceneId) },
+                        onTogglePin: { sceneId in
+                            _ = StoryGuideCoordinator(context: context).togglePin(storyId: story.id, sceneId: sceneId)
+                            StorySyncCoordinator.shared.touch(storyId: story.id, context: context,
+                                activeOwner: story.ownerAccountId, token: { await AuthStore.shared?.validAccessToken() })
+                        },
+                        eventContext: story.eventContext ?? "",
+                        onSaveEventContext: { text in
+                            story.eventContext = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+                            try? context.save()
+                        })
                 } else {
                 StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading, onShoot: { dim, poss in
                     // Guide possibility -> Shoot (Director entry point B): purpose = possibility

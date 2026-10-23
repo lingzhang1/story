@@ -544,6 +544,47 @@ struct StoryGuideV2DTO: Codable, Equatable {
     }
 }
 
+// MARK: - StoryGuide/2 REFINEMENT ("Update Guide", Guide v2.1) — result + change log
+
+/// One change-log entry: what a refinement did to one scene (for the history view / "3 preserved,
+/// 1 improved, 2 added, 1 archived" summary). `sceneId` is the stable id the disposition applies to.
+struct SceneChangeDTO: Codable, Equatable, Identifiable {
+    var id: String { sceneId + ":" + disposition }
+    let sceneId: String
+    let disposition: String   // preserved | improved | added | archived
+    let title: String
+    let reason: String?
+    enum CodingKeys: String, CodingKey {
+        case sceneId = "scene_id"
+        case disposition, title, reason
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sceneId = try c.decode(String.self, forKey: .sceneId)
+        disposition = try c.decode(String.self, forKey: .disposition)
+        title = (try? c.decodeIfPresent(String.self, forKey: .title)).flatMap { $0 } ?? ""
+        reason = (try? c.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0 }
+    }
+}
+
+/// Result of a Guide refinement: the next active v2 shooting script (`guide`, a normal StoryGuideV2DTO so
+/// every existing consumer works unchanged) + the change log + the retired scene ids (history).
+struct StoryGuideRefinementResultDTO: Codable, Equatable {
+    let guide: StoryGuideV2DTO
+    let changes: [SceneChangeDTO]
+    let archivedSceneIds: [String]
+    enum CodingKeys: String, CodingKey {
+        case guide, changes
+        case archivedSceneIds = "archived_scene_ids"
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guide = try c.decode(StoryGuideV2DTO.self, forKey: .guide)
+        changes = (try? c.decodeIfPresent([SceneChangeDTO].self, forKey: .changes)).flatMap { $0 } ?? []
+        archivedSceneIds = (try? c.decodeIfPresent([String].self, forKey: .archivedSceneIds)).flatMap { $0 } ?? []
+    }
+}
+
 /// Metadata-only reference image (from the backend /v1/scene-image proxy). NO image bytes — `imageURL` is a
 /// hotlinked Unsplash CDN URL the UI loads via AsyncImage. Attribution + source links are mandatory to show.
 struct SceneImageDTO: Codable, Equatable {

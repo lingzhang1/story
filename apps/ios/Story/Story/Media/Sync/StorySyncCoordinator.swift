@@ -413,6 +413,7 @@ extension StorySyncCoordinator {
         story.editingApproachExplicit = sd["editing_approach_explicit"] as? String
         story.creativeDirectivesJSON = sd["creative_directives_json"] as? String
         story.creativeDirectionText = sd["creative_direction_text"] as? String
+        story.eventContext = sd["event_context"] as? String   // Guide v2.1: persistent event context
         story.planOperationId = sd["plan_operation_id"] as? String
         story.planJobId = sd["plan_job_id"] as? String
         story.updatedAt = .now
@@ -483,6 +484,7 @@ extension StorySyncCoordinator {
         copy.editorialMode = src.editorialMode; copy.editingApproachExplicit = src.editingApproachExplicit
         copy.creativeDirectivesJSON = src.creativeDirectivesJSON
         copy.creativeDirectionText = src.creativeDirectionText
+        copy.eventContext = src.eventContext
         context.insert(copy)
         // Re-link the SAME Moments (shared references; we never duplicate media).
         for l in src.momentLinks.sorted(by: { ($0.orderIndex ?? 0) < ($1.orderIndex ?? 0) }) {
