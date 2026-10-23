@@ -270,6 +270,36 @@ describe("StoryApiStack (Milestone A)", () => {
     // No destructive delete in THIS increment's media grant.
     expect(actions.some((a) => a.toLowerCase().includes("delete"))).toBe(false);
   });
+
+  test("EditPlan v2 flags: absent by default, present only for development + -c editplanV2=true", () => {
+    const workerVars = (t: Template) => {
+      const fns = Object.values(t.findResources("AWS::Lambda::Function")) as any[];
+      const w = fns.find((f) => String(f.Properties?.FunctionName || "").endsWith("edit-plan-worker"));
+      return (w?.Properties?.Environment?.Variables) || {};
+    };
+    const V2 = ["STORY_EDITPLAN_OBJECTIVE_DIRECTIVES", "STORY_EDITPLAN_BEST_VALID_RETENTION",
+                "STORY_EDITPLAN_APPROX_DURATION_SOFT", "STORY_EDITPLAN_USEFUL_RANGE_SOFT"];
+
+    // (a) default test stack: no v2 flags at all.
+    for (const k of V2) expect(workerVars(template)[k]).toBeUndefined();
+
+    // (b) development + flag => all four enabled; EXCLUDE_DEFAULT_CREATIVE stays OFF (fail-safe).
+    const devApp = new cdk.App({ context: { editplanV2: "true" } });
+    const devTpl = Template.fromStack(new StoryApiStack(devApp, "story-development-api", {
+      environment: "development", env: { account: "123456789012", region: "us-east-1" } }));
+    const dv = workerVars(devTpl);
+    for (const k of V2) expect(dv[k]).toBe("1");
+    expect(dv["STORY_EDITPLAN_EXCLUDE_DEFAULT_CREATIVE"]).toBeUndefined();
+
+    // (c) the gate is environment==='development' AND the context flag. A non-development env (here 'test')
+    // with the context flag set must still get NONE of the v2 flags — proving the dev-only guard, without
+    // depending on beta's separate release-input guard.
+    const testApp = new cdk.App({ context: { editplanV2: "true" } });
+    const testTpl = Template.fromStack(new StoryApiStack(testApp, "story-test-api", {
+      environment: "test", env: { account: "123456789012", region: "us-east-1" } }));
+    const tv = workerVars(testTpl);
+    for (const k of V2) expect(tv[k]).toBeUndefined();
+  });
 });
 
 
