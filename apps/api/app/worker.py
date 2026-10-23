@@ -468,7 +468,13 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                                              "critique_applied", "first_pass_executable",
                                              "first_pass_errors", "any_fallback", "first_fallback_error",
                                              "calls", "executability_repairs_used", "revision_path",
-                                             "retime_reject_errors")}
+                                             "retime_reject_errors",
+                                             # v2 creative-freedom: completion state + honest partial disclosure
+                                             # so the device renders a SUCCESS-with-note, never the Adjust error.
+                                             "completion", "partial_disclosure", "material_unmet",
+                                             "creative_satisfaction", "creative_objective_count",
+                                             "shipped_retained_candidate", "best_valid_from_attempt",
+                                             "structural_repair", "repair_budget")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
         # P0 Beta Observability: surface TOKENS + the physical model into the diag (they live in the engine's
