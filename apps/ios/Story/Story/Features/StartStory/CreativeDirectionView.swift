@@ -26,6 +26,7 @@ struct CreativeDirectionView: View {
     @State private var description = ""
     @State private var feeling: String?            // chosen preset tag (optional)
     @State private var isResolving = false
+    @State private var isCreating = false          // Phase 1: immediate non-blocking create (Create Story)
     @State private var errorMessage: String?
     @State private var resolvedStory: StoryModel?       // reflected at Context step
     @State private var navigate = false                 // Start Story -> Story Home
