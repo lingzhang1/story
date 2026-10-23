@@ -2079,3 +2079,68 @@ def test_v2_technical_error_still_fails_when_unrecoverable(monkeypatch):
     with pytest.raises(StructuredOutputError):
         eng.generate(_inputs(revision_context={"mode": "explore", "directives": {"opening": M1}}))
     assert eng.last_diagnostics["final"] == "invalid_after_repair"
+
+
+# ---- Directed Create Another Version (Explore + directives) — owner routing fix 2026-10-22 ----
+# A directed Create Another Version stays mode=explore (not rerouted to revise). These assert the ENGINE
+# honors that: directives are enforced/scored independently of mode, the revise continuity gate does NOT
+# apply to explore, and a valid plan still ships.
+
+def test_v2_directed_explore_enforces_directive_reference(monkeypatch):
+    # An explore request with a directive referencing an UNKNOWN Moment is a HARD error regardless of mode.
+    _obj_env(monkeypatch)
+    inp = _inputs(revision_context={"mode": "explore", "directives": {"opening": str(uuid4())}})
+    errs = validate_plan(_good_plan(), inp)
+    assert any("not in the eligible source set" in e for e in errs)
+
+
+def test_v2_directed_explore_scores_objectives(monkeypatch):
+    # In explore mode, an unmet opening is an OBJECTIVE (scored), not a hard error — same as revise.
+    _obj_env(monkeypatch)
+    bad = _good_plan()  # M1 then M2; ask for M2 opening
+    inp = _inputs(revision_context={"mode": "explore", "directives": {"opening": M2}})
+    assert validate_plan(bad, inp) == []                       # technically valid -> shippable
+    rep = assess_creative_intent(bad, inp)
+    assert rep["satisfied"] is False and rep["material_unmet"][0]["code"] == "opening"
+
+
+def test_v2_directed_explore_no_continuity_gate(monkeypatch):
+    # The revise continuity gate must NOT apply to explore: a plan with a totally different clip set from a
+    # (hypothetical) base ships. Explore carries no base_plan and is not a targeted revise, so even a plan
+    # that shares nothing with a prior version is accepted. model_calls stays 1, final executable.
+    _obj_env(monkeypatch)
+    plan = _good_plan()
+    inp = _inputs(revision_context={"mode": "explore",
+                                    "directives": {"opening": M1},
+                                    # a base_plan present in an explore ctx must NOT trigger the revise gate
+                                    "base_plan": {"target_duration_seconds": 18.0, "feasible": True,
+                                                  "segments": [{"order": 0, "asset_id": M2,
+                                                                "source_start_seconds": 0.5, "source_end_seconds": 6.0,
+                                                                "output_duration_seconds": 5.5, "native_audio": "keep"}]}})
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(inp)
+    d = eng.last_diagnostics
+    assert d["final"] == "executable"
+    assert "continuity" not in d, "explore must not run the revise continuity assessment"
+    assert str(out.segments[0].asset_id).lower() == M1.lower()
+
+
+def test_v2_directed_explore_ships_meaningfully_different(monkeypatch):
+    # Representative fixture: an explore whose model output selects/orders a genuinely different set than the
+    # parent (M1 opening + a 3rd moment) ships as a valid, complete plan at 1 call.
+    _obj_env(monkeypatch)
+    M3 = str(uuid4())
+    plan = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
+        {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+         "output_duration_seconds": 10.0, "native_audio": "keep"},
+        {"order": 1, "asset_id": M3, "source_start_seconds": 0.0, "source_end_seconds": 5.0,
+         "output_duration_seconds": 5.0, "native_audio": "keep"}]}
+    inp = _inputs(
+        moments=_inputs().moments + [{"id": M3, "duration_seconds": 6.0, "useful_segments": [[0.0, 5.0]]}],
+        revision_context={"mode": "explore", "directives": {"opening": M1}})
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(inp)
+    d = eng.last_diagnostics
+    assert d["final"] == "executable" and d["completion"] == "complete"
+    assert d["model_calls"] == 1
+    assert str(out.segments[0].asset_id).lower() == M1.lower()
