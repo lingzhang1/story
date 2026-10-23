@@ -107,6 +107,7 @@ jobs:
             -c cognitoAppClientId="${{ vars.BETA_COGNITO_APP_CLIENT_ID }}" \
             -c observability=true \
             -c alarmDestination=alerts@yotale.ai \
+            -c editplanV2=true \
             --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
 
       - name: Upload release manifest artifact
