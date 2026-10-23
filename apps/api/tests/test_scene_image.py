@@ -169,3 +169,50 @@ def test_track_flag_off_404(monkeypatch):
     c = TestClient(create_app())
     r = c.post("/v1/scene-image/track", json={"download_location": "https://api.unsplash.com/x"})
     assert r.status_code == 404
+
+
+# --- Secret parsing: owner's real Unsplash secret shape (3 hyphenated keys) ------------------------------
+
+class _FakeSM:
+    """Minimal fake Secrets Manager client returning a canned SecretString."""
+    def __init__(self, secret_string):
+        self._s = secret_string
+    def get_secret_value(self, SecretId):  # noqa: N803 (boto kwarg name)
+        return {"SecretString": self._s}
+
+
+def _patch_sm(monkeypatch, secret_string):
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: _FakeSM(secret_string))
+
+
+def test_load_key_resolves_access_key_from_hyphenated_multikey_secret(monkeypatch):
+    # The owner stored {Unsplash-Application-ID, Unsplash-Access-Key, Unsplash-Secret-key}. load_key must
+    # return the ACCESS key (the Client-ID), never the Secret key or the Application ID.
+    import json as _json
+    secret = _json.dumps({
+        "Unsplash-Application-ID": "1234567",
+        "Unsplash-Access-Key": "ACCESS_" + "a" * 36,
+        "Unsplash-Secret-key": "SECRET_" + "b" * 36,
+    })
+    _patch_sm(monkeypatch, secret)
+    key = si.load_key("Unsplash-API-Key")
+    assert key.startswith("ACCESS_")
+    assert not key.startswith("SECRET_") and key != "1234567"
+
+
+@pytest.mark.parametrize("secret_string,expected_prefix", [
+    ('{"access_key": "AK_123"}', "AK_"),
+    ('{"accessKey": "AK_456"}', "AK_"),
+    ('{"Unsplash-API-Key": "AK_789"}', "AK_"),   # lone non-secret field
+    ("BARE_STRING_KEY_abc", "BARE_"),            # plain-string secret
+])
+def test_load_key_variants(monkeypatch, secret_string, expected_prefix):
+    _patch_sm(monkeypatch, secret_string)
+    assert si.load_key("x").startswith(expected_prefix)
+
+
+def test_load_key_rejects_unrecognizable_multikey(monkeypatch):
+    _patch_sm(monkeypatch, '{"Unsplash-Secret-key": "S", "Unsplash-Application-ID": "9"}')
+    with pytest.raises(si.SceneImageAuthError):
+        si.load_key("x")

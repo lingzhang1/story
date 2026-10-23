@@ -95,12 +95,26 @@ def load_key(secret_id: str | None = None) -> str:
         raise SceneImageAuthError(f"could not read Unsplash key secret '{sid}': {type(e).__name__}") from e
     if s.startswith("{"):
         d = json.loads(s)
-        for k in ("UNSPLASH_ACCESS_KEY", "access_key", "accessKey", "api_key", "apiKey", "key", "value"):
-            if d.get(k):
-                return str(d[k]).strip()
+        # The Unsplash Access Key is the Client-ID used in `Authorization: Client-ID <key>`. (The Secret Key
+        # is only for OAuth write flows we never use.) Match tolerantly across separator/case variants so a
+        # console-entered key like "Unsplash-Access-Key" / "access_key" / "accessKey" all resolve.
+        def _norm(x: str) -> str:
+            return "".join(ch for ch in x.lower() if ch.isalnum())
+        # Preference order (normalized): the ACCESS key first, then generic single-value fields.
+        preferred = ["unsplashaccesskey", "accesskey", "unsplashkey", "apikey", "key", "value"]
+        norm_map = { _norm(k): v for k, v in d.items() }
+        for want in preferred:
+            v = norm_map.get(want)
+            if v and str(v).strip():
+                return str(v).strip()
+        # Avoid the Secret Key / Application ID if an access-like field is absent; fall back to a lone value.
+        non_secret = { k: v for k, v in d.items()
+                       if "secret" not in _norm(k) and "applicationid" not in _norm(k) and "appid" not in _norm(k) }
+        if len(non_secret) == 1:
+            return str(next(iter(non_secret.values()))).strip()
         if len(d) == 1:
             return str(next(iter(d.values()))).strip()
-        raise SceneImageAuthError("secret JSON has no recognizable key field")
+        raise SceneImageAuthError("secret JSON has no recognizable Unsplash access-key field")
     if not s:
         raise SceneImageAuthError("empty secret")
     return s
