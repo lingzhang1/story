@@ -292,6 +292,21 @@ export class StoryApiStack extends cdk.Stack {
         // same in observe/enforce — they only reverse what reserve recorded).
         STORY_USER_USAGE_TABLE: `story-${environment}-user-usage`,
         STORY_QUOTA_MODE: process.env.STORY_QUOTA_MODE ?? "observe",
+        // EditPlan Creative Freedom v2 (owner-approved for controlled DEV enablement 2026-10-22). Each flag
+        // is INDEPENDENTLY reversible and defaults OFF (absent => the planner behaves exactly as before), so
+        // this block is inert unless `-c editplanV2=true` is passed at deploy. The APPROVED dev combination
+        // turns creative directives into objectives, retains the best valid candidate, and softens the
+        // approximate-duration band + source-outside-useful — but leaves EXCLUDE_DEFAULT_CREATIVE OFF so an
+        // unmarked exclude stays SAFETY (fail-safe). Enabled for the `development` environment only.
+        ...((this.node.tryGetContext("editplanV2") === true
+             || this.node.tryGetContext("editplanV2") === "true") && environment === "development"
+          ? {
+              STORY_EDITPLAN_OBJECTIVE_DIRECTIVES: "1",
+              STORY_EDITPLAN_BEST_VALID_RETENTION: "1",
+              STORY_EDITPLAN_APPROX_DURATION_SOFT: "1",
+              STORY_EDITPLAN_USEFUL_RANGE_SOFT: "1",
+            }
+          : {}),
       },
     });
     worker.addEventSource(new lambdaEventSources.SqsEventSource(jobsQueue, {

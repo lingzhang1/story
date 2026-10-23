@@ -86,6 +86,7 @@ jobs:
           # CFN_EXEC_ROLE_ARN is set in the development Environment (the CfnExecRoleArn stack output).
           npx cdk deploy -c environment=development --require-approval never \
             -c imageDigest="${{ steps.image.outputs.digest }}" \
+            -c editplanV2=true \
             --role-arn "${{ vars.CFN_EXEC_ROLE_ARN }}"
 
       - name: Upload release manifest artifact
