@@ -153,6 +153,7 @@ struct StoryHomeView: View {
                     // AI shooting script (story_guide/2): cinematic scene cards with lazy reference images.
                     StoryGuideV2Section(
                         guide: guideV2, coverage: coverage, isLoading: coverageLoading,
+                        eventLabel: story.title,
                         onShoot: { scene, poss in
                             pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
                                 storyGuideDimensionId: scene.id,

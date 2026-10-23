@@ -192,6 +192,8 @@ struct StoryGuideV2Section: View {
     let guide: StoryGuideV2DTO?
     let coverage: StoryCoverageV2DTO?
     let isLoading: Bool
+    /// Short event label for the "Your trip"-style context pill (from the Story title/kind). Optional.
+    var eventLabel: String? = nil
     /// Scene possibility (or the scene itself) -> Shoot (Director entry point B). Reuses the v1 dimension/poss
     /// handoff shape via a bridge the parent provides.
     var onShoot: (_ scene: StoryGuideSceneDTO, _ possibility: SceneCapturePossibilityDTO?) -> Void = { _, _ in }
@@ -202,18 +204,21 @@ struct StoryGuideV2Section: View {
     /// Fire Unsplash download-tracking when a scene image is actually shown-to-use (owner-documented rule).
     var trackImageUse: (_ image: SceneImageDTO) async -> Void = { _ in }
 
-    private static let initialVisible = 3
-    @State private var showAll = false
+    /// Which scene is featured (hero). Defaults to the first NOT-yet-covered scene, else the first.
+    @State private var featuredId: String?
+    @State private var showAllOthers = false
 
     private func stateFor(_ sceneId: String) -> NarrativeCoverageDTO? {
         coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == sceneId })?.state
     }
-    private func stateLabel(_ s: NarrativeCoverageDTO?) -> String? {
-        switch s {
-        case .strong: return "You've got this covered"
+    private func isCovered(_ sceneId: String) -> Bool { stateFor(sceneId) == .strong }
+    /// Right-aligned status label on a card, reference-matched ("Covered" / "Not captured" / gentle mid).
+    private func statusLabel(_ sceneId: String) -> String {
+        switch stateFor(sceneId) {
+        case .strong:      return "Covered"
         case .lookingGood: return "Looking strong"
         case .couldUseMore: return "Could use more"
-        default: return nil
+        default:           return "Not captured"
         }
     }
     private var pendingLine: String? {
@@ -222,33 +227,32 @@ struct StoryGuideV2Section: View {
         return "Still looking at \(n) more moment\(n == 1 ? "" : "s") — your guide will fill in as they're ready."
     }
 
+    /// Resolve the hero scene + the index-derived "SCENE NN" number for each scene.
+    private func sceneNumber(_ g: StoryGuideV2DTO, _ scene: StoryGuideSceneDTO) -> Int {
+        (g.scenes.firstIndex(where: { $0.id == scene.id }) ?? 0) + 1
+    }
+    private func resolvedFeatured(_ g: StoryGuideV2DTO) -> StoryGuideSceneDTO? {
+        if let fid = featuredId, let s = g.scenes.first(where: { $0.id == fid }) { return s }
+        return g.scenes.first(where: { !isCovered($0.id) }) ?? g.scenes.first
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StoryEyebrow(text: "Shooting Script")
+            if let g = guide, !g.scenes.isEmpty {
+                header(g)
+                if let hero = resolvedFeatured(g) {
+                    FeaturedSceneCard(
+                        scene: hero,
+                        number: sceneNumber(g, hero),
+                        category: StoryGuideV2Section.category(for: sceneNumber(g, hero)),
+                        status: statusLabel(hero.id),
+                        covered: isCovered(hero.id),
+                        onShoot: { onShoot(hero, hero.capturePossibilities.first) },
+                        fetchImage: { await fetchImage(hero) },
+                        trackImageUse: trackImageUse)
 
-            if let g = guide {
-                Text("A guide, not a checklist — capture what feels right.")
-                    .font(StoryTheme.body(12).italic()).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                if !g.framingSummary.isEmpty {
-                    Text(g.framingSummary)
-                        .font(StoryTheme.body(13).italic())
-                        .foregroundStyle(StoryTheme.cream.opacity(0.55))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                let scenes = showAll ? g.scenes : Array(g.scenes.prefix(Self.initialVisible))
-                ForEach(scenes) { scene in
-                    SceneCard(scene: scene,
-                              stateTag: stateLabel(stateFor(scene.id)),
-                              couldUseMore: stateFor(scene.id) == .couldUseMore,
-                              onShoot: { onShoot(scene, scene.capturePossibilities.first) },
-                              fetchImage: { await fetchImage(scene) },
-                              trackImageUse: trackImageUse)
-                }
-                if g.scenes.count > Self.initialVisible {
-                    Button { withAnimation { showAll.toggle() } } label: {
-                        Text(showAll ? "Show fewer scenes" : "Show full shooting script (\(g.scenes.count))")
-                            .font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
-                    }.buttonStyle(.plain).padding(.top, 2)
+                    let others = g.scenes.filter { $0.id != hero.id }
+                    if !others.isEmpty { otherScenes(others) }
                 }
                 if let pendingLine {
                     Text(pendingLine).font(StoryTheme.body(12).italic())
@@ -256,9 +260,11 @@ struct StoryGuideV2Section: View {
                         .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
                 }
             } else if isLoading {
+                StoryEyebrow(text: "Your Shooting Script")
                 Text("Writing your shooting script…")
                     .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.cream.opacity(0.32))
             } else {
+                StoryEyebrow(text: "Your Shooting Script")
                 Text("Add a little about your event and your shooting script will appear.")
                     .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.cream.opacity(0.3))
                     .fixedSize(horizontal: false, vertical: true)
@@ -269,109 +275,227 @@ struct StoryGuideV2Section: View {
         }
         .padding(.top, 20)
     }
+
+    // MARK: header (eyebrow + title + framing + pills)
+    @ViewBuilder
+    private func header(_ g: StoryGuideV2DTO) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            StoryEyebrow(text: "Your Shooting Script")
+            if !g.framingSummary.isEmpty {
+                Text(g.framingSummary)
+                    .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                pill("\(g.scenes.count) scene\(g.scenes.count == 1 ? "" : "s")", gold: true)
+                if let ev = eventLabel, !ev.isEmpty { pill(ev, gold: false) }
+            }
+        }
+    }
+
+    private func pill(_ text: String, gold: Bool) -> some View {
+        Text(text)
+            .font(StoryTheme.body(12, .medium))
+            .foregroundStyle(gold ? StoryTheme.gold : StoryTheme.cream.opacity(0.7))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(StoryTheme.cream.opacity(0.06))
+            .clipShape(Capsule())
+    }
+
+    // MARK: Other scenes (compact list + View all)
+    @ViewBuilder
+    private func otherScenes(_ others: [StoryGuideSceneDTO]) -> some View {
+        let visible = showAllOthers ? others : Array(others.prefix(3))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Other scenes").font(StoryTheme.body(14, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.75))
+                Spacer()
+                if others.count > 3 {
+                    Button { withAnimation { showAllOthers.toggle() } } label: {
+                        Text(showAllOthers ? "Show fewer" : "View all")
+                            .font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                    }.buttonStyle(.plain)
+                }
+            }
+            ForEach(visible) { scene in
+                OtherSceneRow(
+                    scene: scene,
+                    covered: isCovered(scene.id),
+                    onTap: { withAnimation { featuredId = scene.id } },
+                    onShoot: { onShoot(scene, scene.capturePossibilities.first) })
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    /// A small, deterministic category vocabulary derived from scene position (NOT a backend field — the
+    /// contract stays unchanged). Gives the reference's "SCENE NN · CATEGORY" badge a tasteful label.
+    static func category(for number: Int) -> String {
+        let vocab = ["OPENING", "ATMOSPHERE", "CONNECTION", "TEXTURE", "CLIMAX", "RELEASE", "DETAIL", "REFLECTION"]
+        return vocab[(max(1, number) - 1) % vocab.count]
+    }
 }
 
-// One cinematic scene card. The reference image loads LAZILY and NEVER blocks the card: until it resolves
-// (or if it fails / is disabled) the card shows a tasteful text-only header. Attribution + source link are
-// shown only when an image is present (Unsplash requirement). why-it-matters is collapsed by default.
-private struct SceneCard: View {
+// The featured (hero) scene — the reference's big card. Large lazy reference image (text-only when
+// absent/off/failed, NEVER blocks the card), SCENE NN · CATEGORY + status row, serif title, what-to-capture,
+// a boxed "How to shoot" panel, an expandable "Why this matters", and a cream "Shoot" pill. Attribution +
+// source chip shown only when an image is present (Unsplash requirement).
+private struct FeaturedSceneCard: View {
     let scene: StoryGuideSceneDTO
-    let stateTag: String?
-    let couldUseMore: Bool
+    let number: Int
+    let category: String
+    let status: String
+    let covered: Bool
     let onShoot: () -> Void
     let fetchImage: () async -> SceneImageDTO?
     let trackImageUse: (SceneImageDTO) async -> Void
 
     @State private var image: SceneImageDTO?
-    @State private var triedImage = false
     @State private var whyExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Prominent reference image (lazy, hotlinked) OR a text-only header band.
-            ZStack(alignment: .bottomLeading) {
-                if let img = image, let url = URL(string: img.imageURL) {
+            // Prominent reference image (lazy, hotlinked) — only occupies space once an image exists.
+            if let img = image, let url = URL(string: img.imageURL) {
+                ZStack(alignment: .bottomLeading) {
                     AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.25))) { phase in
                         switch phase {
                         case .success(let i): i.resizable().scaledToFill()
                         default: placeholderBand
                         }
                     }
-                    .frame(height: 150).frame(maxWidth: .infinity).clipped()
-                    // ink gradient so the title overlay stays legible (same language as the home hero cards)
-                    .overlay(LinearGradient(colors: [.clear, StoryTheme.ink.opacity(0.75)],
-                                            startPoint: .top, endPoint: .bottom))
-                } else {
-                    placeholderBand.frame(height: image == nil && !triedImage ? 0 : 54)
+                    .frame(height: 210).frame(maxWidth: .infinity).clipped()
+                    // source chip bottom-left (reference: "kyotanuki.com")
+                    if let host = sourceHost(img) {
+                        Text(host).font(StoryTheme.body(11))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(StoryTheme.ink.opacity(0.55)).clipShape(Capsule())
+                            .padding(10)
+                    }
                 }
-                Text(scene.title)
-                    .font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
-                    .padding(.horizontal, 14).padding(.bottom, 10)
-                    .shadow(radius: image != nil ? 6 : 0)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                if image == nil {   // title shown in-body when there is no image band to carry it
-                    Text(scene.title).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+            VStack(alignment: .leading, spacing: 10) {
+                // SCENE NN · CATEGORY  …  status
+                HStack(alignment: .firstTextBaseline) {
+                    Text("SCENE \(String(format: "%02d", number)) · \(category)")
+                        .font(StoryTheme.eyebrow()).tracking(1.2)
+                        .foregroundStyle(StoryTheme.gold)
+                    Spacer()
+                    Text(status).font(StoryTheme.body(12))
+                        .foregroundStyle(covered ? StoryTheme.cream.opacity(0.5) : StoryTheme.cream.opacity(0.4))
                 }
-                if let tag = stateTag {
-                    Text("· \(tag)").font(StoryTheme.body(12))
-                        .foregroundStyle(couldUseMore ? StoryTheme.gold.opacity(0.85) : StoryTheme.cream.opacity(0.4))
-                }
-                Text(scene.whatToCapture).font(StoryTheme.body(14))
-                    .foregroundStyle(StoryTheme.cream.opacity(0.82)).fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "camera").font(.system(size: 11)).foregroundStyle(StoryTheme.gold.opacity(0.8))
-                        .padding(.top, 2)
+                Text(scene.title).font(StoryTheme.display(22)).foregroundStyle(StoryTheme.cream)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(scene.whatToCapture).font(StoryTheme.body(15))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.8)).fixedSize(horizontal: false, vertical: true)
+
+                // Boxed "How to shoot" panel.
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "video").font(.system(size: 12)).foregroundStyle(StoryTheme.cream.opacity(0.85))
+                        Text("How to shoot").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.9))
+                    }
                     Text(scene.howToShoot).font(StoryTheme.body(13))
                         .foregroundStyle(StoryTheme.cream.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
                 }
-                // Expandable why-it-matters.
-                Button { withAnimation { whyExpanded.toggle() } } label: {
-                    HStack(spacing: 4) {
-                        Text(whyExpanded ? "Why this matters" : "Why this matters")
-                            .font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.5))
-                        Image(systemName: whyExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 9)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                    }
-                }.buttonStyle(.plain)
-                if whyExpanded {
-                    Text(scene.whyItMatters).font(StoryTheme.body(13))
-                        .foregroundStyle(StoryTheme.cream.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
-                }
-                HStack {
-                    Button(action: onShoot) {
-                        Text("Shoot →").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(StoryTheme.cream.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                // Why this matters (expander) + Shoot pill.
+                HStack(alignment: .center) {
+                    Button { withAnimation { whyExpanded.toggle() } } label: {
+                        HStack(spacing: 4) {
+                            Text("Why this matters").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                            Image(systemName: whyExpanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9)).foregroundStyle(StoryTheme.gold.opacity(0.8))
+                        }
                     }.buttonStyle(.plain)
                     Spacer()
-                    // Unsplash attribution (required) — only when an image is shown.
-                    if let img = image, let u = URL(string: img.sourceURL) {
-                        Link(destination: u) {
-                            Text(img.attributionText).font(StoryTheme.body(10))
-                                .foregroundStyle(StoryTheme.cream.opacity(0.35)).lineLimit(1)
+                    Button(action: onShoot) {
+                        HStack(spacing: 5) {
+                            Text("Shoot").font(StoryTheme.body(14, .medium))
+                            Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
                         }
+                        .foregroundStyle(StoryTheme.ink)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(StoryTheme.cream).clipShape(Capsule())
+                    }.buttonStyle(.plain)
+                }
+                if whyExpanded {
+                    Text(scene.whyItMatters).font(StoryTheme.body(13))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
+                }
+                // Attribution (required) — only when an image is shown.
+                if let img = image, let u = URL(string: img.sourceURL) {
+                    Link(destination: u) {
+                        Text(img.attributionText).font(StoryTheme.body(10))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.35)).lineLimit(1)
                     }
-                }.padding(.top, 2)
+                }
             }
-            .padding(14)
+            .padding(16)
         }
-        .background(StoryTheme.cream.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.07), lineWidth: 1))
+        .background(StoryTheme.cream.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(StoryTheme.cream.opacity(0.08), lineWidth: 1))
         .task(id: scene.id) {
-            // Lazy, non-blocking image load. A nil result (disabled/no-match/failure) leaves the text-only card.
-            guard !triedImage else { return }
-            triedImage = true
+            // Featured scene can change (user taps an "Other scene") -> reload image for the new hero.
+            image = nil
             if let img = await fetchImage() {
                 image = img
-                await trackImageUse(img)   // the scene reference is now shown-to-use -> fire download tracking
+                await trackImageUse(img)
             }
         }
+    }
+
+    private func sourceHost(_ img: SceneImageDTO) -> String? {
+        // Prefer the photographer's profile host; fall back to the source URL host.
+        if let h = URL(string: img.photographerURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
+        if let h = URL(string: img.sourceURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
+        return nil
     }
 
     private var placeholderBand: some View {
         LinearGradient(colors: [StoryTheme.cream.opacity(0.06), StoryTheme.cream.opacity(0.02)],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+// A compact "Other scenes" row (reference: glyph + title + subtitle + status + chevron). Tapping promotes
+// the scene to the featured hero; the trailing control offers a quick Shoot.
+private struct OtherSceneRow: View {
+    let scene: StoryGuideSceneDTO
+    let covered: Bool
+    let onTap: () -> Void
+    let onShoot: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Image(systemName: covered ? "checkmark.circle.fill" : "circle.dashed")
+                    .font(.system(size: 18))
+                    .foregroundStyle(covered ? StoryTheme.gold : StoryTheme.gold.opacity(0.6))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(scene.title).font(StoryTheme.display(17)).foregroundStyle(StoryTheme.cream.opacity(0.92))
+                        .lineLimit(1)
+                    Text(scene.whatToCapture).font(StoryTheme.body(12))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.45)).lineLimit(1)
+                }
+                Spacer()
+                Text(covered ? "Covered" : "")
+                    .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.45))
+                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(StoryTheme.cream.opacity(0.3))
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+            .background(StoryTheme.cream.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(StoryTheme.cream.opacity(0.06), lineWidth: 1))
+        }.buttonStyle(.plain)
     }
 }
 
