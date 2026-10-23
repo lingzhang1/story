@@ -484,6 +484,101 @@ struct StoryGuideDTO: Codable, Equatable {
     }
 }
 
+// MARK: - StoryGuide/2 (AI shooting script, additive) — scenes, not dimensions
+
+/// ONE example way a scene's `what_to_capture` could be realized. Mirrors CapturePossibilityDTO so the
+/// Coverage/2 represented/Shoot/Reshoot affordances work against a v2 scene exactly like a v1 dimension.
+struct SceneCapturePossibilityDTO: Codable, Identifiable, Equatable {
+    let id: String
+    let label: String
+    let semanticPurpose: String?
+    enum CodingKeys: String, CodingKey { case id, label; case semanticPurpose = "semantic_purpose" }
+}
+
+/// One shooting-script scene. `id` is the server-minted STABLE Story-local id (Coverage/2 keys state on it
+/// exactly like a v1 dimension id). `visualReferenceQuery` is a GENERIC composition phrase (no personal
+/// data) used to fetch ONE reference image via the backend proxy; nil => text-only card.
+struct StoryGuideSceneDTO: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let whatToCapture: String
+    let howToShoot: String
+    let whyItMatters: String
+    let visualReferenceQuery: String?
+    let capturePossibilities: [SceneCapturePossibilityDTO]
+    enum CodingKeys: String, CodingKey {
+        case id, title
+        case whatToCapture = "what_to_capture"
+        case howToShoot = "how_to_shoot"
+        case whyItMatters = "why_it_matters"
+        case visualReferenceQuery = "visual_reference_query"
+        case capturePossibilities = "capture_possibilities"
+    }
+    // capture_possibilities may be absent in older payloads — decode tolerantly.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        whatToCapture = try c.decode(String.self, forKey: .whatToCapture)
+        howToShoot = try c.decode(String.self, forKey: .howToShoot)
+        whyItMatters = try c.decode(String.self, forKey: .whyItMatters)
+        visualReferenceQuery = (try? c.decodeIfPresent(String.self, forKey: .visualReferenceQuery)).flatMap { $0 }
+        capturePossibilities = (try? c.decodeIfPresent([SceneCapturePossibilityDTO].self, forKey: .capturePossibilities)).flatMap { $0 } ?? []
+    }
+}
+
+struct StoryGuideV2DTO: Codable, Equatable {
+    let schemaVersion: String
+    let storyId: UUID
+    let sourceCreativeIntentVersion: String?
+    let framingSummary: String
+    let scenes: [StoryGuideSceneDTO]
+    let generatedAt: Date?
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case storyId = "story_id"
+        case sourceCreativeIntentVersion = "source_creative_intent_version"
+        case framingSummary = "framing_summary"
+        case scenes
+        case generatedAt = "generated_at"
+    }
+}
+
+/// Metadata-only reference image (from the backend /v1/scene-image proxy). NO image bytes — `imageURL` is a
+/// hotlinked Unsplash CDN URL the UI loads via AsyncImage. Attribution + source links are mandatory to show.
+struct SceneImageDTO: Codable, Equatable {
+    let photoId: String
+    let imageURL: String
+    let thumbURL: String
+    let attributionText: String
+    let photographerName: String
+    let photographerURL: String
+    let sourceURL: String
+    let downloadLocation: String
+    let width: Int?
+    let height: Int?
+    let color: String?
+    let altDescription: String?
+    enum CodingKeys: String, CodingKey {
+        case photoId = "photo_id"
+        case imageURL = "image_url"
+        case thumbURL = "thumb_url"
+        case attributionText = "attribution_text"
+        case photographerName = "photographer_name"
+        case photographerURL = "photographer_url"
+        case sourceURL = "source_url"
+        case downloadLocation = "download_location"
+        case width, height, color
+        case altDescription = "alt_description"
+    }
+}
+
+/// Envelope for /v1/scene-image: {image: SceneImageDTO?, status: "ok"|"no_match"|...}.
+struct SceneImageResponseDTO: Codable, Equatable {
+    let image: SceneImageDTO?
+    let status: String
+}
+
 // MARK: - StoryCoverage/2 (E2-b, FROZEN) — Guide-relative state + independent sufficiency/idea
 
 struct DimensionCoverageDTO: Codable, Identifiable, Equatable {

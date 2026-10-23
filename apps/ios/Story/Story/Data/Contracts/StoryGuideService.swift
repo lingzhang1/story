@@ -55,3 +55,44 @@ final class StoryGuideService: StoryGuideGenerating {
         catch { throw StoryGuideServiceError.decoding(error) }
     }
 }
+
+// StoryGuideV2Service — POST /v1/story-guide-v2 (AI shooting script, additive).
+//
+// Same request shape as v1 (CreativeIntent + scope); returns StoryGuideV2DTO (scenes). The backend route
+// is feature-gated (STORY_GUIDE_V2) and returns 404 when off — the client treats 404 the same as 503
+// (unavailable, retryable, NEVER a fabricated Guide), so a device whose backend has not enabled v2 simply
+// falls back to the v1 path at the coordinator level.
+protocol StoryGuideV2Generating {
+    func generate(_ request: StoryGuideRequestDTO) async throws -> StoryGuideV2DTO
+}
+
+final class StoryGuideV2Service: StoryGuideV2Generating {
+    private let baseURL: URL
+    private let session: URLSession
+    init(baseURL: URL = StoryBackend.baseURL, session: URLSession = StoryBackend.longSession) {
+        self.baseURL = baseURL
+        self.session = session
+    }
+
+    func generate(_ request: StoryGuideRequestDTO) async throws -> StoryGuideV2DTO {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/story-guide-v2"))
+        StoryBackend.authorize(&req)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            req.httpBody = try StoryContractCoding.encoder().encode(request)
+        } catch { throw StoryGuideServiceError.encoding(error) }
+
+        let data: Data
+        let resp: URLResponse
+        do { (data, resp) = try await session.data(for: req) }
+        catch { throw StoryGuideServiceError.transport(error) }
+
+        guard let http = resp as? HTTPURLResponse else { throw StoryGuideServiceError.badStatus(-1) }
+        // 404 (route gated off) or 503 (generation failed) both => unavailable; caller preserves intent + falls back.
+        if http.statusCode == 503 || http.statusCode == 404 { throw StoryGuideServiceError.unavailable }
+        guard http.statusCode == 200 else { throw StoryGuideServiceError.badStatus(http.statusCode) }
+        do { return try StoryContractCoding.decoder().decode(StoryGuideV2DTO.self, from: data) }
+        catch { throw StoryGuideServiceError.decoding(error) }
+    }
+}

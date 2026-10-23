@@ -146,26 +146,82 @@ struct CreativeDirectionView: View {
         }
     }
 
-    // Step 1 — describe
+    // Step 1 — describe (Phase 1: SIMPLIFIED creation). Title required (sensible default if blank); event
+    // description OPTIONAL; lightweight example prompts; NO style/music/mood/duration here. "Create" makes the
+    // account-owned Story IMMEDIATELY and navigates straight to Story Home — the Guide + intent resolve async.
     private var describeStep: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Tell me about\nthis experience.")
+            Text("Start a Story.")
                 .font(StoryTheme.displayItalic(28)).foregroundStyle(StoryTheme.cream)
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("What it is, how long, what you want it to feel like.")
+            Text("Give it a name. Add a little about the event if you like — you can always add more later.")
                 .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.32))
-            StoryTextField(placeholder: "We're hiking the Tour du Mont Blanc for 8 days…",
-                           text: $description, minHeight: 220)
-            StoryTextField(placeholder: "Give it a title", text: $title, minHeight: 44)
+                .fixedSize(horizontal: false, vertical: true)
+
+            StoryTextField(placeholder: "Story title", text: $title, minHeight: 44)
+
+            Text("What's the event? (optional)")
+                .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.4)).padding(.top, 4)
+            StoryTextField(placeholder: "Three days in New York. Restaurants, exploring the city, a Broadway show.",
+                           text: $description, minHeight: 120)
+
+            // Lightweight EXAMPLE prompts — not mandatory categories. Tapping inserts an editable starter.
+            FlowExampleChips(examples: ["Weekend trip", "Birthday", "Wedding", "Daily vlog", "Family vacation"]) { ex in
+                if description.trimmingCharacters(in: .whitespaces).isEmpty { description = ex }
+                else { description += (description.hasSuffix(" ") ? "" : " ") + ex }
+            }
+
             Spacer(minLength: 8)
-            StoryPrimaryButton(title: "Continue") { step = .feel }
-                .disabled(cannotContinueDescribe).opacity(cannotContinueDescribe ? 0.4 : 1)
+            StoryPrimaryButton(title: isCreating ? "Creating…" : "Create Story") {
+                requireAuthThen { Task { await createAndGo() } }
+            }
+            .disabled(isCreating).opacity(isCreating ? 0.6 : 1)
+
+            // Secondary: the original guided path (feel → understood → guide) remains available for users who
+            // want to shape feeling up front. Optional, never required.
+            Button("Shape the feeling first →") { step = .feel }
+                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                .frame(maxWidth: .infinity)
+                .disabled(isCreating)
         }
     }
+
+    /// Phase 1 immediate create: make the account-owned Story NOW (title + optional description, no blocking
+    /// AI), navigate to Story Home, then resolve the real CreativeIntent + generate the Guide ASYNCHRONOUSLY.
+    /// A thin/empty description does NOT trigger an expensive generic Guide — we wait for the user to add detail
+    /// (Story Home offers "Build my guide"). Guide v2 is used when enabled, else the frozen v1 path.
+    private func createAndGo() async {
+        guard !isCreating else { return }
+        isCreating = true
+        errorMessage = nil
+        do {
+            let story = try useCases.createStoryImmediately(title: title, description: description)
+            if !seedMoments.isEmpty { try? useCases.addExistingMoments(seedMoments, to: story) }
+            confirmed = true          // a real, kept Story — not an unconfirmed wizard draft
+            resolvedStory = story
+            isCreating = false
+            navigate = true           // → Story Home immediately; nothing below blocks on AI
+            // Fire-and-forget enrichment + Guide generation (never blocks navigation or creation).
+            let sufficient = StoryUseCases.hasSufficientGuideContext(title: title, description: description)
+            Task { @MainActor in
+                _ = await useCases.enrichCreativeIntent(for: story)
+                guard sufficient else { return }   // don't fabricate a generic Guide from thin context
+                let coord = StoryGuideCoordinator(context: context)
+                if StoryGuideFeatures.guideV2Enabled { await coord.ensureGuideV2(for: story) }
+                else { await coord.ensureGuide(for: story) }
+            }
+        } catch {
+            isCreating = false
+            errorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "Couldn't create your Story. Please try again."
+        }
+    }
+
     private var cannotContinueDescribe: Bool {
+        // Phase 1: only a title gates manual Continue on the LEGACY guided path; the simplified Create uses a
+        // sensible default when blank, so Create is never disabled on an empty title.
         title.trimmingCharacters(in: .whitespaces).isEmpty
-        || description.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Confirm "Start Story": Stage 1 is description-only — Moment-specific editing instructions live on the
@@ -520,6 +576,26 @@ private struct FlowChips: View {
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(Capsule().fill(on ? StoryTheme.gold : .clear))
                     .overlay(Capsule().stroke(on ? StoryTheme.gold : StoryTheme.cream.opacity(0.14), lineWidth: 1))
+            }
+        }
+    }
+}
+
+// Phase 1 example-prompt chips — lightweight, NON-mandatory starters that INSERT editable text (never a
+// forced category, never auto-submit). Tap appends the example to the optional description field.
+private struct FlowExampleChips: View {
+    let examples: [String]
+    let onTap: (String) -> Void
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], alignment: .leading, spacing: 8) {
+            ForEach(examples, id: \.self) { ex in
+                Button { onTap(ex) } label: {
+                    Text(ex).font(StoryTheme.body(13))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.7))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.18), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             }
         }
     }

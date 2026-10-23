@@ -41,8 +41,11 @@ struct StoryHomeView: View {
 
     // Milestone E2 — persistent StoryGuide + Coverage/2 (real Story Guide + Story Idea).
     @State private var guide: StoryGuideDTO?
+    @State private var guideV2: StoryGuideV2DTO?          // AI shooting script (when STORY_GUIDE_V2 on)
     @State private var coverage: StoryCoverageV2DTO?
     @State private var coverageLoading = false
+    // One scene-image service for the whole screen (its metadata cache is shared across scene cards).
+    private let sceneImages = SceneImageService()
 
     private var coverageEngine: StoryCoverageEngine {
         StoryCoverageEngine(context: context)
@@ -146,6 +149,24 @@ struct StoryHomeView: View {
                 // Story Guide — the persistent StoryGuide creative map (renders as soon as the
                 // Guide exists, independent of Coverage) + optional Coverage/2 overlay (state tags +
                 // represented-possibility affordances). Advisory, never a checklist.
+                if StoryGuideFeatures.guideV2Enabled, guideV2 != nil {
+                    // AI shooting script (story_guide/2): cinematic scene cards with lazy reference images.
+                    StoryGuideV2Section(
+                        guide: guideV2, coverage: coverage, isLoading: coverageLoading,
+                        onShoot: { scene, poss in
+                            pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                                storyGuideDimensionId: scene.id,
+                                label: poss?.label ?? scene.title,
+                                purpose: poss?.semanticPurpose ?? scene.whatToCapture,
+                                capturePossibilityLabel: poss?.label))
+                        },
+                        onRetry: { Task { await refreshGuideAndCoverage() } },
+                        fetchImage: { scene in
+                            guard let q = scene.visualReferenceQuery else { return nil }
+                            return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
+                        },
+                        trackImageUse: { img in await sceneImages.track(downloadLocation: img.downloadLocation) })
+                } else {
                 StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading, onShoot: { dim, poss in
                     // Guide possibility -> Shoot (Director entry point B): purpose = possibility
                     // semantic_purpose ?? owning dimension purpose; carry the possibility label.
@@ -156,6 +177,7 @@ struct StoryHomeView: View {
                 }, onRetry: {
                     Task { await refreshGuideAndCoverage() }   // #1: recover a failed/interrupted Guide
                 })
+                }
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -315,6 +337,31 @@ struct StoryHomeView: View {
         let coordinator = StoryGuideCoordinator(context: context)
         if let existing = coordinator.guide(for: story.id) { guide = existing }  // show at once if present
         coverageLoading = (guide == nil)
+        // Guide v2 (AI shooting script): when enabled, prefer the scene-based Guide. It persists into the SAME
+        // model row, so Coverage fingerprinting + R7 sync are unchanged. A v2 failure (incl. the backend route
+        // gated off) falls back to the v1 creative-map path below — never a fabricated Guide.
+        if StoryGuideFeatures.guideV2Enabled {
+            if let existingV2 = coordinator.guideV2(for: story.id) { guideV2 = existingV2 }
+            coverageLoading = (guideV2 == nil && guide == nil)
+            if let gv2 = await coordinator.ensureGuideV2(for: story) {
+                guideV2 = gv2
+                coverageLoading = false
+            }
+            // When a v2 shooting script is in effect, do NOT run the v1 ensureGuide path — it would fail to
+            // decode the v2 row as v1 dimensions and try to regenerate, overwriting the scene-based Guide.
+            if let gv2 = guideV2 {
+                // Music backfill (same as the v1 tail): ensure a default MusicDirection exists, non-blocking.
+                let musicCoord = MusicDirectionCoordinator(context: context)
+                if musicCoord.direction(for: story.id) == nil,
+                   !CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
+                    Task { await musicCoord.ensure(for: story, guideFramingSummary: gv2.framingSummary) }
+                }
+                // Coverage: the existing Coverage/2 state (cached) is shown as-is, keyed by stable scene id —
+                // we do NOT regenerate the Guide on ordinary Coverage updates (owner Phase 5). The Coverage/2
+                // mapper already keys state by the Guide's stable ids, which v2 scenes preserve.
+                return
+            }
+        }
         let g = await coordinator.ensureGuide(for: story)
         coverageLoading = false          // ALWAYS clear (success, failure, or cancellation)
         guard let g else { return }      // Guide unavailable (retryable) — neutral state + Retry button

@@ -56,6 +56,68 @@ final class StoryUseCases {
         return story
     }
 
+    /// Phase 1 (pre-beta simplified creation): create the account-owned Story IMMEDIATELY from a title and an
+    /// OPTIONAL free-text event description, with NO blocking AI call. A sensible default title is used when
+    /// blank. The Story is seeded with a cheap LOCAL mock intent so it is fully valid offline; the REAL
+    /// CreativeIntent (and then the Guide) are resolved ASYNCHRONOUSLY afterwards (enrichCreativeIntent +
+    /// the Guide coordinator), never on the create path. Returns the created Story so the UI can navigate to
+    /// Story Home right away.
+    func createStoryImmediately(title rawTitle: String, description rawDescription: String) throws -> StoryModel {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let desc = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = title.isEmpty ? Self.defaultStoryTitle() : title
+        // Local, offline mock intent from whatever description we have (may be empty). Never blocks.
+        let intent = storyEngine.deriveCreativeIntent(from: desc)
+        let story = try repository.createStory(title: resolvedTitle, intent: intent)
+        // Preserve the user's raw description verbatim so the async resolver can enrich WITHOUT re-prompting,
+        // and so a thin/empty description is detectable (don't fabricate a specific Guide from nothing).
+        story.intentRawText = desc
+        try repository.save()
+        return story
+    }
+
+    /// A sensible default Story title when the user leaves it blank (owner Phase 1 "sensible default if blank").
+    static func defaultStoryTitle() -> String {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none
+        return "My Story · \(f.string(from: Date()))"
+    }
+
+    /// Whether there is ENOUGH event context to generate a non-generic Guide. A very thin/empty description
+    /// (and a default-ish title) should NOT trigger expensive Guide inference — instead the UI invites the
+    /// user to add detail. Heuristic: a description with a few meaningful words is sufficient.
+    static func hasSufficientGuideContext(title: String, description: String) -> Bool {
+        let d = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wordCount = d.split { $0 == " " || $0 == "\n" || $0 == "\t" }.count
+        if wordCount >= 4 { return true }           // a real event description
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A specific (non-default) multi-word title can also carry enough intent (e.g. "Maya's 5th Birthday").
+        return !t.isEmpty && !t.hasPrefix("My Story ·") && t.split(separator: " ").count >= 2
+    }
+
+    /// ASYNC enrichment: resolve the REAL CreativeIntent for an already-created Story via the backend and
+    /// fold the richer fields onto it. Fire-and-forget off the create path; a failure leaves the Story valid
+    /// with its local mock intent (the Guide can still be attempted, or retried later). Never fabricates.
+    @discardableResult
+    func enrichCreativeIntent(for story: StoryModel,
+                              service: CreativeIntentService = CreativeIntentService()) async -> Bool {
+        let desc = story.intentRawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !desc.isEmpty else { return false }   // nothing to resolve from; keep the local intent
+        guard let dto = try? await service.resolve(rawText: desc) else { return false }
+        let intent = Self.mapIntent(dto, rawText: desc)
+        story.intentTheme = intent.theme
+        story.intentTone = intent.tone
+        story.intentSummary = intent.summary
+        story.intentSubject = dto.subject
+        story.intentDesiredFeeling = dto.desiredFeeling
+        story.intentStyleTags = dto.styleTags
+        story.intentEmphasis = dto.emphasis
+        story.intentConstraints = dto.creativeConstraints
+        story.intentPace = dto.pace?.rawValue
+        story.intentTargetDurationSeconds = dto.targetDurationSeconds
+        try? repository.save()
+        return true
+    }
+
     /// Map the canonical CreativeIntent DTO onto the Milestone-A flattened local
     /// value type (documented mapping, 02 §0a): summary 1:1; the local `theme`/
     /// `tone` are seeded from style_tags / desired_feeling until the local model

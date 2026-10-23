@@ -180,6 +180,201 @@ struct StoryGuideSection: View {
     }
 }
 
+// MARK: - Story Guide v2 (AI shooting script) — cinematic scene cards
+
+// Renders the story_guide/2 shooting script as cinematic scene cards in YoTale's dark/serif/champagne
+// language. Each card: a prominent LAZY reference image (text-only when absent/off/failed), scene title,
+// concise what-to-capture, compact how-to-shoot, an EXPANDABLE why-it-matters, coverage status (reusing the
+// Coverage/2 state keyed by the scene's stable id — exactly like a v1 dimension), a Shoot action, and the
+// Unsplash attribution/source link when an image is shown. Shows a SMALL number of scenes first ("Show full
+// shooting script" reveals the rest). Advisory, never a checklist. Images NEVER block the card.
+struct StoryGuideV2Section: View {
+    let guide: StoryGuideV2DTO?
+    let coverage: StoryCoverageV2DTO?
+    let isLoading: Bool
+    /// Scene possibility (or the scene itself) -> Shoot (Director entry point B). Reuses the v1 dimension/poss
+    /// handoff shape via a bridge the parent provides.
+    var onShoot: (_ scene: StoryGuideSceneDTO, _ possibility: SceneCapturePossibilityDTO?) -> Void = { _, _ in }
+    var onRetry: () -> Void = {}
+    /// Fetch ONE reference image for a scene (backend proxy). Returns nil => text-only card. Injected so the
+    /// view stays testable and the network stays out of the view.
+    var fetchImage: (_ scene: StoryGuideSceneDTO) async -> SceneImageDTO? = { _ in nil }
+    /// Fire Unsplash download-tracking when a scene image is actually shown-to-use (owner-documented rule).
+    var trackImageUse: (_ image: SceneImageDTO) async -> Void = { _ in }
+
+    private static let initialVisible = 3
+    @State private var showAll = false
+
+    private func stateFor(_ sceneId: String) -> NarrativeCoverageDTO? {
+        coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == sceneId })?.state
+    }
+    private func stateLabel(_ s: NarrativeCoverageDTO?) -> String? {
+        switch s {
+        case .strong: return "You've got this covered"
+        case .lookingGood: return "Looking strong"
+        case .couldUseMore: return "Could use more"
+        default: return nil
+        }
+    }
+    private var pendingLine: String? {
+        guard let c = coverage, c.pendingCount > 0 else { return nil }
+        let n = c.pendingCount
+        return "Still looking at \(n) more moment\(n == 1 ? "" : "s") — your guide will fill in as they're ready."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            StoryEyebrow(text: "Shooting Script")
+
+            if let g = guide {
+                Text("A guide, not a checklist — capture what feels right.")
+                    .font(StoryTheme.body(12).italic()).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                if !g.framingSummary.isEmpty {
+                    Text(g.framingSummary)
+                        .font(StoryTheme.body(13).italic())
+                        .foregroundStyle(StoryTheme.cream.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                let scenes = showAll ? g.scenes : Array(g.scenes.prefix(Self.initialVisible))
+                ForEach(scenes) { scene in
+                    SceneCard(scene: scene,
+                              stateTag: stateLabel(stateFor(scene.id)),
+                              couldUseMore: stateFor(scene.id) == .couldUseMore,
+                              onShoot: { onShoot(scene, scene.capturePossibilities.first) },
+                              fetchImage: { await fetchImage(scene) },
+                              trackImageUse: trackImageUse)
+                }
+                if g.scenes.count > Self.initialVisible {
+                    Button { withAnimation { showAll.toggle() } } label: {
+                        Text(showAll ? "Show fewer scenes" : "Show full shooting script (\(g.scenes.count))")
+                            .font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                    }.buttonStyle(.plain).padding(.top, 2)
+                }
+                if let pendingLine {
+                    Text(pendingLine).font(StoryTheme.body(12).italic())
+                        .foregroundStyle(StoryTheme.cream.opacity(0.34))
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                }
+            } else if isLoading {
+                Text("Writing your shooting script…")
+                    .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.cream.opacity(0.32))
+            } else {
+                Text("Add a little about your event and your shooting script will appear.")
+                    .font(StoryTheme.body(13).italic()).foregroundStyle(StoryTheme.cream.opacity(0.3))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: onRetry) {
+                    Text("Build my guide").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                }.buttonStyle(.plain).padding(.top, 2)
+            }
+        }
+        .padding(.top, 20)
+    }
+}
+
+// One cinematic scene card. The reference image loads LAZILY and NEVER blocks the card: until it resolves
+// (or if it fails / is disabled) the card shows a tasteful text-only header. Attribution + source link are
+// shown only when an image is present (Unsplash requirement). why-it-matters is collapsed by default.
+private struct SceneCard: View {
+    let scene: StoryGuideSceneDTO
+    let stateTag: String?
+    let couldUseMore: Bool
+    let onShoot: () -> Void
+    let fetchImage: () async -> SceneImageDTO?
+    let trackImageUse: (SceneImageDTO) async -> Void
+
+    @State private var image: SceneImageDTO?
+    @State private var triedImage = false
+    @State private var whyExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Prominent reference image (lazy, hotlinked) OR a text-only header band.
+            ZStack(alignment: .bottomLeading) {
+                if let img = image, let url = URL(string: img.imageURL) {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.25))) { phase in
+                        switch phase {
+                        case .success(let i): i.resizable().scaledToFill()
+                        default: placeholderBand
+                        }
+                    }
+                    .frame(height: 150).frame(maxWidth: .infinity).clipped()
+                    // ink gradient so the title overlay stays legible (same language as the home hero cards)
+                    .overlay(LinearGradient(colors: [.clear, StoryTheme.ink.opacity(0.75)],
+                                            startPoint: .top, endPoint: .bottom))
+                } else {
+                    placeholderBand.frame(height: image == nil && !triedImage ? 0 : 54)
+                }
+                Text(scene.title)
+                    .font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+                    .padding(.horizontal, 14).padding(.bottom, 10)
+                    .shadow(radius: image != nil ? 6 : 0)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if image == nil {   // title shown in-body when there is no image band to carry it
+                    Text(scene.title).font(StoryTheme.display(18)).foregroundStyle(StoryTheme.cream)
+                }
+                if let tag = stateTag {
+                    Text("· \(tag)").font(StoryTheme.body(12))
+                        .foregroundStyle(couldUseMore ? StoryTheme.gold.opacity(0.85) : StoryTheme.cream.opacity(0.4))
+                }
+                Text(scene.whatToCapture).font(StoryTheme.body(14))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.82)).fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "camera").font(.system(size: 11)).foregroundStyle(StoryTheme.gold.opacity(0.8))
+                        .padding(.top, 2)
+                    Text(scene.howToShoot).font(StoryTheme.body(13))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
+                }
+                // Expandable why-it-matters.
+                Button { withAnimation { whyExpanded.toggle() } } label: {
+                    HStack(spacing: 4) {
+                        Text(whyExpanded ? "Why this matters" : "Why this matters")
+                            .font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                        Image(systemName: whyExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    }
+                }.buttonStyle(.plain)
+                if whyExpanded {
+                    Text(scene.whyItMatters).font(StoryTheme.body(13))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Button(action: onShoot) {
+                        Text("Shoot →").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                    }.buttonStyle(.plain)
+                    Spacer()
+                    // Unsplash attribution (required) — only when an image is shown.
+                    if let img = image, let u = URL(string: img.sourceURL) {
+                        Link(destination: u) {
+                            Text(img.attributionText).font(StoryTheme.body(10))
+                                .foregroundStyle(StoryTheme.cream.opacity(0.35)).lineLimit(1)
+                        }
+                    }
+                }.padding(.top, 2)
+            }
+            .padding(14)
+        }
+        .background(StoryTheme.cream.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.07), lineWidth: 1))
+        .task(id: scene.id) {
+            // Lazy, non-blocking image load. A nil result (disabled/no-match/failure) leaves the text-only card.
+            guard !triedImage else { return }
+            triedImage = true
+            if let img = await fetchImage() {
+                image = img
+                await trackImageUse(img)   // the scene reference is now shown-to-use -> fire download tracking
+            }
+        }
+    }
+
+    private var placeholderBand: some View {
+        LinearGradient(colors: [StoryTheme.cream.opacity(0.06), StoryTheme.cream.opacity(0.02)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
 // MARK: - Story Idea section
 //
 // Renders NOTHING when storyIdea is nil (the whole section is omitted by the
