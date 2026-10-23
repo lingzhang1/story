@@ -41,7 +41,7 @@ struct HomeView: View {
                     // ── Primary 1: Capture a Moment — opens the shared camera immediately,
                     //    no Story / CreativeIntent / AI call required to open it.
                     Button { showCapture = true } label: {
-                        StoryImageCard(image: "ph_lake", eyebrow: "Right now",
+                        StoryImageCard(image: "ph_city", eyebrow: "Right now",
                                        title: "Capture a Moment",
                                        sub: "Capture something worth remembering. Get an AI shot idea whenever you want.",
                                        icon: "camera.fill")
@@ -93,7 +93,7 @@ struct HomeView: View {
 
     private var header: some View {
         HStack {
-            StoryEyebrow(text: "Story")
+            StoryEyebrow(text: "YoTale")
             Spacer()
             // Account affordance in the Home header — the ONLY entry point to sign in WITHOUT first triggering a
             // gated AI action (Start a Story / music search / capture AI). Beta testers can sign in here to see
