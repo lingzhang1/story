@@ -39,6 +39,12 @@ jobs:
       AWS_REGION: us-east-1
       ENVIRONMENT: beta
       ECR_REPO: story-beta-api
+      # Beta runs quota + throttle in ENFORCE (owner-confirmed 2026-10-23). The CDK stack reads these from
+      # process.env (default "observe"); setting them here encodes beta's enforce posture in the pipeline so a
+      # deploy never silently reverts live beta to observe. Changing beta's quota/throttle posture is an
+      # explicit edit to these two lines, not a side effect of an unrelated deploy.
+      STORY_QUOTA_MODE: enforce
+      STORY_THROTTLE_MODE: enforce
     steps:
       - uses: actions/checkout@v4
 
