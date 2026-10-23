@@ -13,6 +13,7 @@ routes live under /v1 (03-system-architecture.md §14).
 from __future__ import annotations
 
 import json
+import os
 import time
 from uuid import UUID, uuid4
 
@@ -96,7 +97,7 @@ from story_coverage_v2 import (
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryGuideV2Contract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -112,6 +113,7 @@ from app.deps import (
     get_asset_understanding_engine,
     get_story_coverage_engine,
     get_story_guide_engine,
+    get_story_guide_v2_engine,
     get_story_coverage_v2_engine,
     get_music_direction_engine,
     get_edit_planner_engine,
@@ -1135,6 +1137,39 @@ def create_app() -> FastAPI:
         log.info("story_guide_resolved",
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "dimension_count": len(guide.dimensions)})
+        return guide
+
+    @app.post("/v1/story-guide-v2", response_model=StoryGuideV2Contract, status_code=200)
+    def story_guide_v2(
+        body: StoryGuideRequest,
+        engine=Depends(get_story_guide_v2_engine),
+        principal: Principal = Depends(optional_user),
+    ) -> StoryGuideV2Contract:
+        """Generate the AI SHOOTING SCRIPT (story_guide/2) from CreativeIntent. ADDITIVE/versioned —
+        v1 /v1/story-guide is unchanged. FEATURE-GATED by STORY_GUIDE_V2: when the flag is off the
+        route returns 404 so a stale client cannot reach an un-rolled-out path. Same contract as v1
+        on failure: 503, preserve CreativeIntent, NO fabricated Guide. Server mints canonical stable
+        scene ids; the model never emits image ids/urls/attribution."""
+        if os.environ.get("STORY_GUIDE_V2") != "1":
+            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "story_guide_v2", "correlation_id": correlation_id,
+                "task": "story_guide.generate_v2", "prompt_version": "story_guide/v2",
+                "schema_version": "story_guide/2"}
+        try:
+            guide = engine.generate(GuideInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                source_creative_intent_version=body.source_creative_intent_version))
+        except GuideUnavailableError as e:
+            log.warning("story_guide_v2_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_guide_unavailable: could not generate; preserve CreativeIntent and retry")
+        log.info("story_guide_v2_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "scene_count": len(guide.scenes)})
         return guide
 
     @app.post("/v1/music-direction", response_model=MusicDirectionContract, status_code=200)

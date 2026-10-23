@@ -65,6 +65,7 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("POST", "/v1/story-coverage"): "ai_sync",
     ("POST", "/v1/story-coverage/v2"): "ai_sync",
     ("POST", "/v1/story-guide"): "ai_sync",
+    ("POST", "/v1/story-guide-v2"): "ai_sync",
     ("POST", "/v1/edit-plan"): "ai_sync",
     ("POST", "/v1/edit-plan-mm"): "ai_sync",
     ("POST", "/v1/music-plan"): "ai_sync",

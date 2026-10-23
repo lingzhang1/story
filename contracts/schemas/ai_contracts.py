@@ -668,6 +668,86 @@ class StoryGuideContract(_Strict):
     generated_at: datetime = Field(default_factory=_utcnow)
 
 
+# ---------------------------------------------------------------------------
+# StoryGuide/2 (pre-beta UX milestone, 2026-10-23) — ADDITIVE, VERSIONED evolution
+# of the creative map into a friendly AI SHOOTING SCRIPT. story_guide/1 is UNCHANGED
+# and remains the shape old Stories persist/sync; a Guide v2 is a NEW version, never
+# an in-place mutation (reconciliation §20/§28 versioning rule).
+#
+# Where v1 emits abstract `dimensions` (a creative map), v2 emits `scenes` — concrete,
+# event-specific filming opportunities a non-filmmaker can act on. Each scene keeps a
+# `capture_possibilities[]` list so StoryCoverage/2 mapping (which keys STATE by stable
+# Guide id) works UNCHANGED: a v2 scene IS a Coverage "dimension" from the mapper's
+# point of view (same stable-id FK, same purpose-fulfillment semantics).
+#
+# Scene + possibility `id`s are SERVER/DOMAIN-MINTED stable Story-local identity (the
+# model emits ordinal handles s1/s1p1 which the engine coerces — model ids are NEVER
+# canonical). The model NEVER produces image ids, source URLs or attribution: the only
+# image-related field it emits is `visual_reference_query`, a GENERIC composition/
+# action search phrase. Real provider metadata (Unsplash id/urls/attribution) is
+# attached SEPARATELY by the server/engine AFTER retrieval, never by the LLM, and lives
+# in `StorySceneVisualReference` — kept out of the AI contract on purpose.
+# ---------------------------------------------------------------------------
+
+
+class SceneCapturePossibility(_Strict):
+    """ONE example way a scene's `what_to_capture` COULD be realized — an illustration,
+    NEVER a required shot. Mirrors v1 CapturePossibility so Coverage mapping is identical.
+    `id` is server-minted stable identity (drives represented/Shoot/Reshoot affordances)."""
+
+    id: str = Field(description="server/domain-minted stable id; model ordinal is coerced, never canonical")
+    label: str = Field(description="short example expression, e.g. 'the first glimpse of the skyline'")
+    semantic_purpose: str | None = Field(
+        default=None, description="what this example expresses (optional; used by Director handoff)"
+    )
+
+
+class StoryGuideScene(_Strict):
+    """One concrete, event-specific shooting scene (the AI shooting-script unit). Written
+    in a friendly-director voice for a non-filmmaker. `id` is server-minted STABLE
+    Story-local identity (StoryCoverage/2 references it by id exactly like a v1 dimension).
+    `visual_reference_query` is a GENERIC composition/action description for an image
+    search — it carries NO user media, NO personal details, NO full event description, and
+    the model NEVER emits image ids/urls/attribution (those are attached server-side)."""
+
+    id: str = Field(description="server/domain-minted STABLE id; model ordinal is coerced, never canonical")
+    title: str = Field(description="short, memorable, EVENT-SPECIFIC scene title (never a generic template)")
+    what_to_capture: str = Field(description="a concrete filming opportunity, in plain language")
+    how_to_shoot: str = Field(
+        description="practical, accessible advice: framing, movement, perspective, shot variety or duration — no jargon"
+    )
+    why_it_matters: str = Field(description="short explanation of the scene's storytelling value")
+    visual_reference_query: str | None = Field(
+        default=None,
+        description="GENERIC composition/action search phrase for a reference image (e.g. 'wide shot city "
+                    "skyline at dusk'). No personal details, no user media, no image ids/urls/attribution.",
+    )
+    capture_possibilities: list[SceneCapturePossibility] = Field(
+        default_factory=list, description="a FEW (prefer 1-3) illustrative expressions; examples, not requirements"
+    )
+
+
+class StoryGuideV2Contract(_Strict):
+    """FROZEN-ON-SHIP story_guide/2 (additive to story_guide/1). Generated ONCE from
+    CreativeIntent at Story creation (async, non-blocking); stable while StoryCoverage
+    recomputes. A friendly, event-specific shooting script of a SMALL number of scenes
+    shown most-relevant-first. The `visual_reference_query` fields are text-only search
+    descriptions; provider image metadata is attached SEPARATELY and never by the model."""
+
+    schema_version: str = Field(default="story_guide/2")
+    story_id: UUID
+    source_creative_intent_version: str | None = Field(
+        default=None, description="provenance: which resolved CreativeIntent this Guide was built from"
+    )
+    framing_summary: str = Field(
+        description="ONE short human-readable statement of what this Story is trying to capture (app's calm voice)"
+    )
+    scenes: list[StoryGuideScene] = Field(
+        default_factory=list, description="SMALL, scope-sensitive set of event-specific shooting scenes"
+    )
+    generated_at: datetime = Field(default_factory=_utcnow)
+
+
 class CoverageDimension(_Strict):
     """One narrative dimension (HYBRID). label/purpose are CreativeIntent-derived
     and Story-specific; `coverage` is categorical. `id` is a handle WITHIN THIS
