@@ -198,6 +198,21 @@ def get_story_guide_v2_engine():
     return RealStoryGuideV2Engine(_gateway_with_fallback(model), model_id=model)
 
 
+def get_story_guide_refine_engine():
+    """Provide the StoryGuide/2 REFINEMENT engine — "Update Guide" (Guide v2.1, 2026-10-23).
+
+    current v2 shooting script + captured/pinned state + user update -> next v2 shooting script +
+    change log. The MODEL proposes; the engine reconciles identity + history server-side (captured/
+    pinned preserved, stable ids kept, new ids minted beyond max ordinal, dropped scenes archived).
+    Same model selection + Opus->Sonnet quota fallback as v1/v2. STORY_GUIDE_MOCK=1 -> dev mock. The
+    ENDPOINT is feature-gated by STORY_GUIDE_V2; refine failure preserves the CURRENT Guide (no fabricate)."""
+    from story_guide import RealStoryGuideRefineEngine, MockStoryGuideRefineEngine
+    if os.environ.get("STORY_GUIDE_MOCK") == "1":
+        return MockStoryGuideRefineEngine()
+    model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
+    return RealStoryGuideRefineEngine(_gateway_with_fallback(model), model_id=model)
+
+
 def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
     """Provide the StoryCoverage/2 engine (Milestone E2-b, FROZEN).
 

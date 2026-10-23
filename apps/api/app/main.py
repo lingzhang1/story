@@ -64,7 +64,7 @@ from story_coverage import (
     PROMPT_VERSION as COV_PROMPT_VERSION,
     SCHEMA_VERSION as COV_SCHEMA_VERSION,
 )
-from story_guide import GuideInput, GuideUnavailableError, StoryGuideEngine
+from story_guide import GuideInput, GuideUnavailableError, RefineInput, StoryGuideEngine
 from music_direction import MusicDirectionEngine
 from edit_planner import (
     EditPlannerEngine,
@@ -98,7 +98,7 @@ from story_coverage_v2 import (
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryGuideV2Contract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryGuideV2Contract, StoryGuideRefinementResult, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -115,6 +115,7 @@ from app.deps import (
     get_story_coverage_engine,
     get_story_guide_engine,
     get_story_guide_v2_engine,
+    get_story_guide_refine_engine,
     get_story_coverage_v2_engine,
     get_music_direction_engine,
     get_edit_planner_engine,
@@ -275,6 +276,27 @@ class StoryGuideRequest(BaseModel):
     story_id: UUID
     creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
     scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
+    source_creative_intent_version: str | None = Field(default=None)
+
+
+class StoryGuideRefineRequest(BaseModel):
+    """POST /v1/story-guide-refine body (Guide v2.1). The CURRENT v2 shooting script + per-scene
+    captured/pinned state + the user's update -> the NEXT v2 shooting script + change log. ADDITIVE;
+    the frozen generate-once v2 path is unchanged. captured/pinned ids are PROTECTED (never archived)."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
+    scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
+    current_framing_summary: str = Field(default="")
+    current_scenes: list[dict] = Field(default_factory=list,
+        description="the current canonical v2 scenes (id/title/what_to_capture/how_to_shoot/why_it_matters)")
+    captured_scene_ids: list[str] = Field(default_factory=list,
+        description="scene ids with Coverage evidence (PROTECTED — never archived)")
+    pinned_scene_ids: list[str] = Field(default_factory=list,
+        description="user-pinned scene ids (PROTECTED — never archived)")
+    user_instruction: str | None = Field(default=None, description="one-time Update Guide instruction")
+    event_context: str | None = Field(default=None, description="persistent editable event context")
     source_creative_intent_version: str | None = Field(default=None)
 
 
@@ -1217,6 +1239,51 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "scene_count": len(guide.scenes)})
         return guide
+
+    @app.post("/v1/story-guide-refine", response_model=StoryGuideRefinementResult, status_code=200)
+    def story_guide_refine(
+        body: StoryGuideRefineRequest,
+        engine=Depends(get_story_guide_refine_engine),
+        principal: Principal = Depends(optional_user),
+    ) -> StoryGuideRefinementResult:
+        """Refine (Update Guide) an existing story_guide/2 shooting script (Guide v2.1). The model
+        proposes preserve/improve/reorder/replace/add/archive over the CURRENT scenes + the user's
+        update; the ENGINE reconciles identity + history server-side: captured (Coverage-evidenced)
+        and user-PINNED scenes are preserved verbatim and NEVER archived, preserved/improved scenes
+        keep their stable ids, genuinely-new scenes get fresh ids beyond the max existing ordinal
+        (retired ids never reused), and dropped uncaptured+unpinned scenes are archived (recorded).
+
+        ADDITIVE/versioned — frozen /v1/story-guide and the generate-once /v1/story-guide-v2 are
+        unchanged. FEATURE-GATED by STORY_GUIDE_V2 (404 when off). On failure: 503, preserve the
+        CURRENT Guide, NO fabrication — the client keeps the existing shooting script and retries."""
+        if os.environ.get("STORY_GUIDE_V2") != "1":
+            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "story_guide_refine", "correlation_id": correlation_id,
+                "task": "story_guide.refine_v2", "prompt_version": "story_guide/refine-v1",
+                "schema_version": "story_guide/2"}
+        try:
+            result = engine.refine(RefineInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                current_framing_summary=body.current_framing_summary,
+                current_scenes=body.current_scenes,
+                captured_scene_ids=body.captured_scene_ids, pinned_scene_ids=body.pinned_scene_ids,
+                user_instruction=body.user_instruction, event_context=body.event_context,
+                source_creative_intent_version=body.source_creative_intent_version))
+        except GuideUnavailableError as e:
+            log.warning("story_guide_refine_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_guide_unavailable: could not refine; preserve current Guide and retry")
+        n_arch = len(result.archived_scene_ids)
+        n_add = sum(1 for c in result.changes if c.disposition.value == "added")
+        log.info("story_guide_refine_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "scene_count": len(result.guide.scenes),
+                   "added": n_add, "archived": n_arch})
+        return result
 
     @app.post("/v1/scene-image", status_code=200)
     def scene_image(

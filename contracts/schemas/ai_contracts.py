@@ -748,6 +748,64 @@ class StoryGuideV2Contract(_Strict):
     generated_at: datetime = Field(default_factory=_utcnow)
 
 
+# ---------------------------------------------------------------------------
+# StoryGuide/2 REFINEMENT (Guide v2.1, 2026-10-23) — ADDITIVE over story_guide/2.
+# A refinement takes the CURRENT v2 shooting script + a user update (one-time
+# instruction and/or changed persistent event context) + captured/pinned state +
+# Coverage, and produces the NEXT v2 shooting script (SAME StoryGuideV2Contract
+# shape — NO new output contract) PLUS a change log explaining what happened to
+# each scene. The frozen story_guide/2 generate-once path is UNCHANGED.
+#
+# Identity + history are SERVER-ENFORCED, never trusted from the model:
+#   - a PRESERVED/IMPROVED/REORDERED scene keeps its existing stable id;
+#   - an ADDED scene gets a FRESH id beyond the max existing ordinal (retired ids
+#     are NEVER reused for an unrelated scene);
+#   - a captured scene (has Coverage evidence) or a user-PINNED scene is preserved
+#     verbatim and can NEVER be archived/replaced by a refinement;
+#   - an ARCHIVED scene is retired (dropped from the active set) but its id is
+#     recorded in the change log so Coverage history still explains it.
+# The model PROPOSES; the engine RECONCILES and is the source of truth.
+# ---------------------------------------------------------------------------
+
+
+class SceneDisposition(str, Enum):
+    """What a refinement did to one scene, for the change log / history. PRESERVED
+    and IMPROVED keep identity; ADDED mints new identity; ARCHIVED retires an
+    uncaptured, unpinned scene (id recorded, never reused)."""
+
+    PRESERVED = "preserved"   # kept as-is (captured/pinned, or still relevant)
+    IMPROVED = "improved"     # same scene, better guidance/ordering (identity kept)
+    ADDED = "added"           # genuinely new scene (fresh id)
+    ARCHIVED = "archived"     # retired uncaptured+unpinned scene (id recorded, not reused)
+
+
+class SceneChange(_Strict):
+    """ONE entry in a refinement change log — which scene, what happened, and why.
+    `scene_id` is the canonical stable id the change applies to (an ARCHIVED id is
+    the retired scene's id; an ADDED id is the freshly minted one)."""
+
+    scene_id: str = Field(description="canonical stable scene id the disposition applies to")
+    disposition: SceneDisposition
+    title: str = Field(default="", description="scene title at the time of the change (for the history view)")
+    reason: str | None = Field(default=None, description="short human-readable why (not required)")
+
+
+class StoryGuideRefinementResult(_Strict):
+    """RESULT of a Guide refinement: the next active v2 shooting script + a change
+    log. `guide` is a normal StoryGuideV2Contract (the merged, reconciled scenes)
+    so every existing v2 consumer (persistence, Coverage mapping, UI) works
+    UNCHANGED. `changes` and `archived_scene_ids` are additive history the UI can
+    surface ('3 preserved, 1 improved, 2 added, 1 archived')."""
+
+    guide: StoryGuideV2Contract
+    changes: list[SceneChange] = Field(
+        default_factory=list, description="per-scene disposition log (preserved/improved/added/archived)"
+    )
+    archived_scene_ids: list[str] = Field(
+        default_factory=list, description="stable ids retired by this refinement (kept for Coverage history; never reused)"
+    )
+
+
 class CoverageDimension(_Strict):
     """One narrative dimension (HYBRID). label/purpose are CreativeIntent-derived
     and Story-specific; `coverage` is categorical. `id` is a handle WITHIN THIS
