@@ -186,7 +186,8 @@ struct StoryCreatingView: View {
                     // Picker already chose + resolved the track (or no-music). Render exactly that.
                     if let parent = sourceVersion {
                         // This Create-Another-Version came through the Customize sheet, so any Creative
-                        // Direction the user typed is for THIS operation — honor it (mode=revise over explore).
+                        // Direction the user typed is for THIS operation — fold it in (the operation stays
+                        // mode=explore; the directives ride along as strong objectives).
                         coord.createAnotherVersion(for: story, from: parent, music: preresolvedMusic,
                                                    directedByCustomize: true)
                     } else {

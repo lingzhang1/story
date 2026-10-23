@@ -108,6 +108,9 @@ struct StoryResultView: View {
     @State private var reviseCoordinator: StoryCreationCoordinator?
     @State private var reviseWorking = false
     @State private var reviseError: String?
+    // EditPlan v2: a concise, dismissible note shown when a SUCCESSFUL revise could not apply every creative
+    // instruction (partial success). The video still plays; this is honest disclosure, never an error.
+    @State private var partialNote: String?
     // In-flight recovery banner: a pending AI operation for this Story is being finished by the app-level
     // recovery (invisible). We OBSERVE it (no new coordinator) and show a banner so the user knows a new
     // version is coming, then offer to view it when it lands. `baselineOutputCount` is the version count when
@@ -185,6 +188,12 @@ struct StoryResultView: View {
                                                        set: { if !$0 { reviseError = nil } })) {
             Button("OK", role: .cancel) { reviseError = nil }
         } message: { Text(reviseError ?? "") }
+        // EditPlan v2: honest partial-success disclosure — the revise succeeded and plays, but some creative
+        // instructions couldn't all be applied. Informational (not an error); shown once, dismissible.
+        .alert("Your video is ready", isPresented: Binding(get: { partialNote != nil },
+                                                           set: { if !$0 { partialNote = nil } })) {
+            Button("OK", role: .cancel) { partialNote = nil }
+        } message: { Text(partialNote ?? "") }
     }
 
     private var resolvedURL: URL? {
@@ -715,6 +724,7 @@ struct StoryResultView: View {
             switch coord.state {
             case .completed(let created):
                 swappedOutput = created
+                partialNote = coord.lastPartialDisclosure   // EditPlan v2: honest partial-success note (nil if complete)
                 player?.pause(); player = nil; isPlaying = false
             case .failed(let message):
                 reviseError = message
