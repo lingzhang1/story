@@ -404,44 +404,57 @@ def reconcile_refinement(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     """SERVER-AUTHORITATIVE merge of the model's proposed scenes into the next guide.
 
-    Returns (merged_guide_dict, change_log, archived_ids). Enforces the hard rules
-    regardless of what the model proposed:
-      - every captured/pinned scene is in the output, PRESERVED with its original id
-        and original content (model edits to a protected scene are ignored);
-      - a model scene whose id matches an existing scene keeps that id (preserved/
-        improved); a model scene with an unknown id gets a fresh canonical id;
-      - any existing uncaptured+unpinned scene the model dropped is archived.
+    PRESERVATION-FIRST (P0 reliability fix). Returns (merged_guide_dict, change_log, archived_ids) and
+    enforces the hard rules regardless of what the model proposed:
+      - every captured/pinned scene is in the output, PRESERVED with its original id and original
+        content (model edits to a protected scene are ignored);
+      - a model scene whose id matches an existing scene keeps that id (preserved/improved);
+      - a model scene with an unknown id gets a fresh canonical id (new scene);
+      - **an existing scene the model simply OMITTED is PRESERVED (carried forward unchanged), NOT
+        archived.** Omission is not a delete instruction.
+      - a scene is ARCHIVED only when the model EXPLICITLY lists it in `changes` with
+        disposition="archived" AND it is not captured/pinned. Explicit, traceable supersession only.
+
+    This prevents an ordinary "add this context" update from collapsing the whole guide: the worst a
+    model that emits only a couple of scenes can do is add/adjust those, leaving the rest intact.
     """
     by_id = {str(s.get("id")): s for s in inp.current_scenes if s.get("id")}
     protected = set(inp.captured_scene_ids) | set(inp.pinned_scene_ids)
     next_ord = _max_scene_ordinal(inp.current_scenes)
 
+    # Explicit archive directives from the model's change log: archive ONLY these (never captured/pinned,
+    # never an unknown id). Omission alone never archives.
+    explicit_archive: set[str] = set()
+    for ch in (model_data.get("changes") or []):
+        if isinstance(ch, dict) and ch.get("disposition") == "archived":
+            sid = str(ch.get("scene_id", ""))
+            if sid in by_id and sid not in protected:
+                explicit_archive.add(sid)
+
     out_scenes: list[dict[str, Any]] = []
     changes: list[dict[str, Any]] = []
     emitted_ids: set[str] = set()
 
-    def _emit_protected(sid: str) -> None:
-        """Force a protected scene into the output verbatim (idempotent)."""
-        if sid in emitted_ids:
-            return
-        orig = by_id[sid]
-        out_scenes.append(dict(orig))
-        emitted_ids.add(sid)
-        changes.append({"scene_id": sid, "disposition": "preserved",
-                        "title": orig.get("title", ""),
-                        "reason": "captured/pinned — preserved"})
+    def _carry(orig: dict[str, Any]) -> dict[str, Any]:
+        return dict(orig)
 
     for ms in model_data.get("scenes", []) or []:
         if not isinstance(ms, dict):
             continue
         raw_id = str(ms.get("id", ""))
         if raw_id in by_id:
-            # References an existing scene.
+            if raw_id in emitted_ids:
+                continue
             if raw_id in protected:
                 # PROTECTED: keep the ORIGINAL content, ignore any model rewrite.
-                _emit_protected(raw_id)
+                out_scenes.append(_carry(by_id[raw_id]))
+                emitted_ids.add(raw_id)
+                changes.append({"scene_id": raw_id, "disposition": "preserved",
+                                "title": by_id[raw_id].get("title", ""),
+                                "reason": "captured/pinned — preserved"})
                 continue
-            if raw_id in emitted_ids:
+            if raw_id in explicit_archive:
+                # Model explicitly archived this one via `changes`; honor it (recorded below).
                 continue
             # Uncaptured, unpinned existing scene the model kept/improved -> keep id, take model content.
             orig = by_id[raw_id]
@@ -482,26 +495,38 @@ def reconcile_refinement(
             q = ms.get("visual_reference_query")
             if isinstance(q, str) and q.strip():
                 scene["visual_reference_query"] = q.strip()
-            # Skip an empty new scene (no title) — not a scene.
             if not scene["title"].strip():
-                continue
+                continue  # not a scene
             out_scenes.append(scene)
             emitted_ids.add(sid)
             changes.append({"scene_id": sid, "disposition": "added",
                             "title": scene["title"], "reason": ms.get("_reason")})
 
-    # Force any protected scene the model omitted back into the output (it may NOT be dropped).
-    for sid in by_id:
-        if sid in protected and sid not in emitted_ids:
-            _emit_protected(sid)
-
-    # Any existing uncaptured + unpinned scene not re-emitted is archived (id recorded, never reused).
-    archived_ids: list[str] = []
+    # PRESERVE-BY-DEFAULT: carry forward every existing scene that was neither emitted above nor explicitly
+    # archived. This is the heart of the fix — an omitted scene is kept, never silently dropped. The original
+    # id, content and (for captured scenes) Coverage association are retained unchanged.
     for sid, orig in by_id.items():
-        if sid not in emitted_ids and sid not in protected:
+        if sid in emitted_ids:
+            continue
+        if sid in explicit_archive:
+            continue  # handled in the archive pass below
+        out_scenes.append(_carry(orig))
+        emitted_ids.add(sid)
+        changes.append({"scene_id": sid, "disposition": "preserved",
+                        "title": orig.get("title", ""), "reason": "unchanged by this update"})
+
+    # Preserve scene order: existing scenes in their original order first, then newly added ones.
+    orig_order = {sid: i for i, sid in enumerate(by_id.keys())}
+    out_scenes.sort(key=lambda s: orig_order.get(str(s.get("id")), 10_000 + 0))
+
+    # Archive pass: ONLY the explicitly-archived, unprotected scenes (id recorded, never reused).
+    archived_ids: list[str] = []
+    for sid in by_id:
+        if sid in explicit_archive and sid not in emitted_ids:
             archived_ids.append(sid)
             changes.append({"scene_id": sid, "disposition": "archived",
-                            "title": orig.get("title", ""), "reason": "retired by refinement"})
+                            "title": by_id[sid].get("title", ""),
+                            "reason": "explicitly superseded by this update"})
 
     merged = {
         "framing_summary": model_data.get("framing_summary", inp.current_framing_summary) or inp.current_framing_summary,
@@ -546,11 +571,21 @@ class RealStoryGuideRefineEngine:
         }
         user = ("Refine THIS Story's shooting script.\n\nCURRENT STATE + UPDATE:\n"
                 + _json.dumps(payload)
-                + "\n\nPreserve every scene with protected=true verbatim (same id). Keep the same id for any "
-                  "scene that stays conceptually the same; mint a fresh ordinal only for a genuinely new scene. "
-                  "Archive outdated uncaptured, unpinned scenes by leaving them out, and record an 'archived' "
-                  "change entry for each. Honor the newest update; never fabricate plans. Return the FULL "
-                  "updated active script + the change log.")
+                + "\n\nRULES:\n"
+                  "• PRESERVE by default. Return every scene that is still relevant — keep its exact id. "
+                  "Scenes you do not mention are KEPT unchanged, so you do not need to re-list a scene you are "
+                  "not changing; but prefer to return the full active list for clarity.\n"
+                  "• Preserve every protected=true scene verbatim (same id, same text).\n"
+                  "• IMPROVE a scene by returning it with the same id and edited fields when the update "
+                  "justifies a change.\n"
+                  "• ADD a scene for a genuinely new experience (any new/unknown id; the server mints the "
+                  "canonical id).\n"
+                  "• ARCHIVE a scene ONLY when the update clearly makes it obsolete (e.g. a cancelled plan). "
+                  "To archive, add a `changes` entry {scene_id, disposition:\"archived\", reason}. Omitting a "
+                  "scene does NOT archive it. NEVER archive a protected=true scene.\n"
+                  "• This is an UPDATE, not a rewrite: a small contextual update should leave most scenes "
+                  "intact. Do not replace the whole script unless the user explicitly asks to.\n"
+                  "Honor the newest update; never fabricate. Return the updated active script + the change log.")
         return StructuredRequest(
             task=TASK_REFINE, schema=self._schema, prompt_version=PROMPT_VERSION_REFINE, system=self._system,
             user_content=user, max_repair_attempts=2,

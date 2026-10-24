@@ -26,6 +26,10 @@ class FakeDDB:
             elif ":q" in v and ":r" in v and "lease_until < :now" in ce:
                 now=int(v[":now"]["N"]); lease=int(it.get("lease_until",{}).get("N","0"))
                 ok=(cur==sval(":q")) or (cur==sval(":r") and lease<now)
+            elif ":failed" in v and "payload_fingerprint = :fp" in ce:
+                # Coverage recovery reset: require status==failed AND same payload_fingerprint.
+                ok = (cur==sval(":failed")
+                      and it.get("payload_fingerprint",{}).get("S")==sval(":fp"))
             else:
                 parts_ok=True
                 allowed={sval(k) for k in v if re.match(r":r\d+$",k)}
@@ -35,6 +39,14 @@ class FakeDDB:
                     lt_ok = it.get("lease_token",{}).get("S")==sval(":lt")
                 ok=parts_ok and lt_ok
             if not ok: raise Exception("ConditionalCheckFailedException")
+        # Coverage recovery reset -> queued + clear failure fields + bump recovery_count.
+        if ":queued" in v and "ADD recovery_count :one" in UpdateExpression:
+            it["status"]={"S":v[":queued"]["S"]}
+            it["attempt_count"]={"N":"0"}; it["lease_until"]={"N":"0"}; it["lease_token"]={"S":""}
+            it["recovery_count"]={"N":str(int(it.get("recovery_count",{}).get("N","0"))+1)}
+            for k in ("failure_category","failure_detail","result","diagnostics"):
+                it.pop(k,None)
+            return
         if ":run" in v: it["status"]={"S":v[":run"]["S"]}
         if ":new" in v: it["status"]={"S":v[":new"]["S"]}
         if ":lu" in v: it["lease_until"]={"N":v[":lu"]["N"]}
@@ -193,3 +205,63 @@ js3._ddb.items[jd]["expires_at"]={"N":"1"}
 assert all(x["job_id"]!=jd for x in js3.sweep_quota_orphans()), "dev job never swept"
 
 print("ALL AMENDED JOBSTORE TESTS PASSED")
+
+# ---- Coverage bounded-recovery (P0 reliability) --------------------------------------------------
+from edit_plan_jobs import COVERAGE_MAX_RECOVERY_ATTEMPTS
+
+def _mk_cov(js, op="COV", fp_="covfp"):
+    return js.create_or_get_coverage(operation_id=op, owner="u", body_json='{"b":1}',
+                                     payload_fingerprint=fp_)
+
+# R1: a RECOVERABLE terminal-failed coverage job is re-created (reset to queued) on identical re-submit.
+jcov=mk()
+j,c=_mk_cov(jcov); assert c, "first create"
+tok=jcov.claim_lease(j); assert tok
+assert jcov.fail(j,"mapper_unavailable","anthropic denied",tok), "mark failed"
+assert jcov.get(j)["status"]=="failed"
+j2,c2=_mk_cov(jcov)
+assert j2==j and c2 is True, "recoverable failed -> re-created as fresh attempt"
+assert jcov.get(j2)["status"]=="queued", "reset to queued"
+assert jcov.get(j2).get("failure_category") is None, "prior failure cleared"
+assert int(jcov.get(j2)["recovery_count"])==1
+
+# R2: a NON-recoverable failure (empty_mapping) is NOT re-created -> idempotent reuse of the failed record.
+jne=mk()
+j,c=_mk_cov(jne); tok=jne.claim_lease(j)
+assert jne.fail(j,"empty_mapping","truncated",tok)
+j2,c2=_mk_cov(jne)
+assert j2==j and c2 is False, "deterministic failure is not auto-retried"
+assert jne.get(j2)["status"]=="failed"
+
+# R3: recovery is CAPPED — after COVERAGE_MAX_RECOVERY_ATTEMPTS, a recoverable failure stops re-creating.
+jcap=mk()
+j,_=_mk_cov(jcap)
+for i in range(COVERAGE_MAX_RECOVERY_ATTEMPTS):
+    tok=jcap.claim_lease(j); assert tok, f"claim {i}"
+    assert jcap.fail(j,"provider_error","boom",tok)
+    j2,c2=_mk_cov(jcap)
+    assert c2 is True, f"recovery {i+1} within cap"
+# now at the cap: one more failure must NOT re-create
+tok=jcap.claim_lease(j); assert jcap.fail(j,"provider_error","boom",tok)
+j3,c3=_mk_cov(jcap)
+assert c3 is False, "recovery cap reached -> no further auto-retry"
+assert int(jcap.get(j3)["recovery_count"])==COVERAGE_MAX_RECOVERY_ATTEMPTS
+
+# R4: a QUEUED or COMPLETED coverage job is NEVER reset by a re-submit (idempotent coalesce preserved).
+jlive=mk()
+j,_=_mk_cov(jlive)             # queued
+j2,c2=_mk_cov(jlive); assert j2==j and c2 is False and jlive.get(j2)["status"]=="queued"
+tok=jlive.claim_lease(j)
+assert jlive.complete_coverage(j,{"dimension_coverage":[]},{"x":1},tok)
+assert jlive.get(j)["status"]=="completed"
+j3,c3=_mk_cov(jlive); assert j3==j and c3 is False and jlive.get(j3)["status"]=="completed", "completed not reset"
+
+# R5: payload CONFLICT still wins over recovery (a different payload on a failed job is a client bug).
+jpc=mk()
+j,_=_mk_cov(jpc, fp_="fpA"); tok=jpc.claim_lease(j); jpc.fail(j,"mapper_unavailable","x",tok)
+try:
+    _mk_cov(jpc, fp_="fpB")
+    assert False, "expected PayloadConflict on different payload"
+except PayloadConflict: pass
+
+print("COVERAGE RECOVERY TESTS PASSED")
