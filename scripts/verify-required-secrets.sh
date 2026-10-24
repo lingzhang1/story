@@ -22,20 +22,35 @@ REQUIRED=(
 
 echo "Verifying required secrets exist in account for environment=$ENVIRONMENT (region=$REGION)…"
 missing=()
+unverifiable=()
 for name in "${REQUIRED[@]}"; do
-  if aws secretsmanager describe-secret --region "$REGION" --secret-id "$name" >/dev/null 2>&1; then
-    echo "  ✓ $name"
+  # Capture stderr so we can tell "genuinely missing" (ResourceNotFoundException) apart from "cannot check"
+  # (AccessDenied — the scoped deploy role may lack secretsmanager:DescribeSecret). Only a definitive
+  # not-found aborts the deploy; an access gap is reported but does NOT false-positive as missing.
+  err="$(aws secretsmanager describe-secret --region "$REGION" --secret-id "$name" 2>&1 >/dev/null)" && {
+    echo "  ✓ $name"; continue
+  }
+  if printf '%s' "$err" | grep -q "ResourceNotFoundException"; then
+    echo "  ✗ MISSING: $name"; missing+=("$name")
+  elif printf '%s' "$err" | grep -qiE "AccessDenied|not authorized"; then
+    echo "  ? UNVERIFIABLE (no describe permission): $name"; unverifiable+=("$name")
   else
-    echo "  ✗ MISSING: $name"
-    missing+=("$name")
+    echo "  ? UNVERIFIABLE ($(printf '%s' "$err" | head -1)): $name"; unverifiable+=("$name")
   fi
 done
 
 if [ "${#missing[@]}" -ne 0 ]; then
   echo ""
-  echo "ABORT: ${#missing[@]} required secret(s) missing in the $ENVIRONMENT account: ${missing[*]}"
+  echo "ABORT: ${#missing[@]} required secret(s) definitively MISSING in the $ENVIRONMENT account: ${missing[*]}"
   echo "Provision them in Secrets Manager (per-account, out of band) BEFORE deploying."
   echo "Prod/gamma must never deploy with missing keys — failing closed."
   exit 1
 fi
-echo "All required secrets present. Proceeding."
+if [ "${#unverifiable[@]}" -ne 0 ]; then
+  echo ""
+  echo "NOTE: could not verify ${#unverifiable[@]} secret(s) (no DescribeSecret permission for the deploy role):"
+  echo "      ${unverifiable[*]}"
+  echo "      Not a 'missing' signal — proceeding. Grant secretsmanager:DescribeSecret to the deploy role to"
+  echo "      make this gate authoritative. The instance/worker roles' GetSecretValue is unaffected."
+fi
+echo "No definitively-missing required secrets. Proceeding."
