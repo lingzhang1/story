@@ -49,4 +49,15 @@ final class StylePresetTests: XCTestCase {
             XCTAssertFalse(p.musicMoodTags.isEmpty)
         }
     }
+
+    func test_expanded_preset_set() {   // owner #4 2026-10-24
+        XCTAssertEqual(StylePreset.allCases.count, 12)
+        XCTAssertEqual(StylePreset.upbeat.forcedPace, "fast")
+        XCTAssertEqual(StylePreset.minimal.forcedPace, "slow")
+        XCTAssertNil(StylePreset.nostalgic.forcedPace)
+        XCTAssertNil(StylePreset.dreamy.forcedPace)
+        XCTAssertEqual(StylePreset.nostalgic.musicMoodTags, ["emotional"])
+        XCTAssertEqual(StylePreset.dreamy.musicMoodTags, ["atmospheric"])
+        XCTAssertEqual(StylePreset.epic.musicMoodTags, ["cinematic"])
+    }
 }

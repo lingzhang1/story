@@ -22,6 +22,13 @@ enum StylePreset: String, CaseIterable, Identifiable, Equatable {
     case emotional
     case playful
     case calm
+    case nostalgic
+    case dramatic
+    case dreamy
+    case upbeat
+    case romantic
+    case epic
+    case minimal
 
     var id: String { rawValue }
 
@@ -33,6 +40,13 @@ enum StylePreset: String, CaseIterable, Identifiable, Equatable {
         case .emotional: return "Emotional"
         case .playful:   return "Playful"
         case .calm:      return "Calm"
+        case .nostalgic: return "Nostalgic"
+        case .dramatic:  return "Dramatic"
+        case .dreamy:    return "Dreamy"
+        case .upbeat:    return "Upbeat"
+        case .romantic:  return "Romantic"
+        case .epic:      return "Epic"
+        case .minimal:   return "Minimal"
         }
     }
 
@@ -45,6 +59,13 @@ enum StylePreset: String, CaseIterable, Identifiable, Equatable {
         case .emotional: return "Make it emotional and heartfelt"
         case .playful:   return "Keep it playful and fun"
         case .calm:      return "Keep it calm and unhurried"
+        case .nostalgic: return "Give it a warm, nostalgic feel"
+        case .dramatic:  return "Make it dramatic and bold"
+        case .dreamy:    return "Give it a dreamy, atmospheric feel"
+        case .upbeat:    return "Keep it upbeat and lively"
+        case .romantic:  return "Make it romantic and tender"
+        case .epic:      return "Make it epic and sweeping"
+        case .minimal:   return "Keep it simple and understated"
         }
     }
 
@@ -57,16 +78,23 @@ enum StylePreset: String, CaseIterable, Identifiable, Equatable {
         case .emotional: return ["emotional"]
         case .playful:   return ["playful"]
         case .calm:      return ["calm"]
+        case .nostalgic: return ["emotional"]      // maps to the "emotional" mood keyword (nostalgic is in it)
+        case .dramatic:  return ["cinematic"]      // closest recognized mood
+        case .dreamy:    return ["atmospheric"]
+        case .upbeat:    return ["energetic"]
+        case .romantic:  return ["emotional"]
+        case .epic:      return ["cinematic"]
+        case .minimal:   return ["calm"]
         }
     }
 
-    /// Pace mapped ONLY when unambiguous (decision 2C): Energetic->fast, Calm->slow; the rest force no pace.
-    /// Returned as the PaceDTO raw string the request/intent already use, or nil for "do not force a pace".
+    /// Pace mapped ONLY when unambiguous (decision 2C): Energetic/Upbeat->fast, Calm/Minimal->slow; the rest
+    /// force no pace. Returned as the PaceDTO raw string, or nil for "do not force a pace".
     var forcedPace: String? {
         switch self {
-        case .energetic: return "fast"
-        case .calm:      return "slow"
-        case .cinematic, .emotional, .playful: return nil
+        case .energetic, .upbeat: return "fast"
+        case .calm, .minimal:     return "slow"
+        case .cinematic, .emotional, .playful, .nostalgic, .dramatic, .dreamy, .romantic, .epic: return nil
         }
     }
 }
