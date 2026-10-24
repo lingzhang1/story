@@ -12,10 +12,10 @@ CONSTRAINTS enforced here:
   * Everything is env-configurable: provider per capability, model id per provider, and whether a
     capability even has a fallback.
 
-Default routing (approved Phase A table):
-  Gemini primary / OpenAI fallback : asset_understanding, scene_understanding
+Default routing (approved Phase A table; scene_understanding moved to OpenAI after a Gemini latency regression):
+  Gemini primary / OpenAI fallback : asset_understanding
   OpenAI primary / Gemini fallback : creative_intent, story_guide, story_coverage, edit_plan, music,
-                                     story_director, duration
+                                     story_director, duration, scene_understanding
 """
 from __future__ import annotations
 
@@ -28,7 +28,12 @@ from . import ModelGateway, FallbackModelGateway
 # STORY_ROUTE_<CAP>="primary:fallback" (e.g. STORY_ROUTE_ASSET_UNDERSTANDING="openai:gemini").
 _DEFAULT_ROUTES: dict[str, tuple[str, str | None]] = {
     "asset_understanding": ("gemini", "openai"),
-    "scene_understanding": ("gemini", "openai"),
+    # scene_understanding: OpenAI primary. Gemini (gemini-3.8-flash) is pathologically slow on THIS
+    # capability specifically — 50–132s for 1–3 frames vs 12–23s for 24-frame asset_understanding —
+    # which timed the on-device "AI Ideas" flow out (the scene step precedes the Director call). OpenAI
+    # returns the same contract in ~2–3s. AU stays Gemini-primary (fast there). Override via
+    # STORY_ROUTE_SCENE_UNDERSTANDING if the Gemini latency regression is resolved.
+    "scene_understanding": ("openai", "gemini"),
     "creative_intent":     ("openai", "gemini"),
     "story_guide":         ("openai", "gemini"),
     "story_coverage":      ("openai", "gemini"),

@@ -195,6 +195,9 @@ def test_routing_table(monkeypatch):
     routes = prov.active_routes()
     assert routes["asset_understanding"]["primary"] == "gemini"
     assert routes["asset_understanding"]["fallback"] == "openai"
+    # scene_understanding moved to OpenAI primary (Gemini latency regression on this capability)
+    assert routes["scene_understanding"]["primary"] == "openai"
+    assert routes["scene_understanding"]["fallback"] == "gemini"
     assert routes["story_guide"]["primary"] == "openai"
 def test_router_refuses_anthropic(monkeypatch):
     monkeypatch.setenv("STORY_ROUTE_STORY_GUIDE", "anthropic:openai")
