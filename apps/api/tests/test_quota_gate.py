@@ -281,9 +281,9 @@ def test_worker_release_refunds_allowance_keeps_spend():
         worker._quota_release_job(job, incurred_usd=0.03)   # failed after spending 0.03
     finally:
         worker._UserQuota = orig
-    from user_quota import _period
+    from user_quota import _period, _day
     it = ddb.items[("story-u1", _period())]
-    assert float(it["gens_used"]["N"]) == 0          # allowance refunded
+    assert float(it[_day()]["N"]) == 0          # daily allowance refunded (gens#YYYY-MM-DD bucket)
     assert float(it["settled_usd"]["N"]) == 0.03     # incurred spend KEPT
     assert float(it["active_jobs"]["N"]) == 0         # slot released
 

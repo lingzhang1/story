@@ -58,6 +58,14 @@ def _period(now: Optional[float] = None) -> str:
     return f"{t.tm_year:04d}-{t.tm_mon:02d}"  # monthly bucket, matches UserUsage SK shape
 
 
+def _day(now: Optional[float] = None) -> str:
+    """UTC day key for the DAILY generation allowance. The gens counter lives in the monthly item under a
+    per-day attribute `gens#YYYY-MM-DD`, so `user_daily_gens` resets each UTC day (a new day = a fresh
+    attribute, old days ignored) while USD spend stays monthly in the same item. No extra item/row needed."""
+    t = time.gmtime(now or time.time())
+    return f"gens#{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d}"
+
+
 @dataclass(frozen=True)
 class QuotaConfig:
     user_monthly_usd: float
@@ -159,11 +167,13 @@ class UserQuota:
                 if g_reserved + g_settled + estimate_usd > c.global_monthly_usd:
                     raise QuotaDenied("global_monthly_usd")
 
-            names = {"#ru": "reserved_usd", "#g": "gens_used", "#r": marker}
-            # The per-reservation marker is a MAP capturing exactly what to reverse on settle/release.
+            gens_attr = _day()  # daily bucket: gens#YYYY-MM-DD (resets each UTC day)
+            names = {"#ru": "reserved_usd", "#g": gens_attr, "#r": marker}
+            # The per-reservation marker is a MAP capturing exactly what to reverse on settle/release —
+            # including the daily gens attribute this reservation incremented, so release refunds the RIGHT day.
             values = {":eu": {"N": str(estimate_usd)}, ":g": {"N": str(gens)},
                       ":rid": {"M": {"state": {"S": "reserved"}, "usd": {"N": str(estimate_usd)},
-                                     "gens": {"N": str(gens)}}}}
+                                     "gens": {"N": str(gens)}, "gens_attr": {"S": gens_attr}}}}
             if enforce:
                 # Budget ceilings are checked in APPLICATION CODE, not in the DynamoDB ConditionExpression:
                 # a DynamoDB condition expression does NOT support arithmetic (`+`), so an expression like
@@ -174,7 +184,7 @@ class UserQuota:
                     TableName=self.usage_table, Key=self._key(story_user_id, period)).get("Item") or {}
                 cur_res = float(cur.get("reserved_usd", {}).get("N", "0"))
                 cur_set = float(cur.get("settled_usd", {}).get("N", "0"))
-                cur_gens = float(cur.get("gens_used", {}).get("N", "0"))
+                cur_gens = float(cur.get(gens_attr, {}).get("N", "0"))  # TODAY's gens only
                 if cur_res + cur_set + estimate_usd > c.user_monthly_usd:
                     raise QuotaDenied("user_monthly_usd")
                 if cur_gens + gens > c.user_daily_gens:
@@ -234,7 +244,7 @@ class UserQuota:
         # is accurate. Daily-gens is checked before monthly-usd so "you've hit today's limit" wins when both
         # would trip. (A global breach is raised earlier by the pre-check, never here.)
         c = self.cfg
-        cur_gens = float(again.get("gens_used", {}).get("N", "0"))
+        cur_gens = float(again.get(_day(), {}).get("N", "0"))  # TODAY's daily gens bucket
         cur_res = float(again.get("reserved_usd", {}).get("N", "0"))
         cur_set = float(again.get("settled_usd", {}).get("N", "0"))
         if cur_gens + gens > c.user_daily_gens:
@@ -331,11 +341,14 @@ class UserQuota:
                 return  # already settled/released — idempotent
             est = float(m.get("usd", {}).get("N", "0"))
             rgens = int(float(m.get("gens", {}).get("N", str(gens))))
+            # Refund the SAME daily bucket this reservation incremented (recorded in the marker). Fall back to
+            # the legacy flat "gens_used" for markers written before the daily-bucket change.
+            gens_attr = m.get("gens_attr", {}).get("S") or "gens_used"
             self._c().update_item(
                 TableName=self.usage_table, Key=self._key(story_user_id, period),
                 UpdateExpression="SET #r.#st = :released ADD #g :neg, #su :inc, #ru :relneg",
                 ConditionExpression="#r.#st = :reserved",
-                ExpressionAttributeNames={"#r": marker, "#st": "state", "#g": "gens_used",
+                ExpressionAttributeNames={"#r": marker, "#st": "state", "#g": gens_attr,
                                           "#su": "settled_usd", "#ru": "reserved_usd"},
                 ExpressionAttributeValues={":released": {"S": "released"}, ":reserved": {"S": "reserved"},
                                            ":neg": {"N": str(-rgens)}, ":inc": {"N": str(incurred_usd)},
