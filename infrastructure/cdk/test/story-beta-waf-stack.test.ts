@@ -46,6 +46,18 @@ describe("StoryBetaWafStack (P0 Beta Security Phase 2)", () => {
     expect(byName.BodySizeOver2MB.Action).toEqual({ Count: {} });
   });
 
+  test("rateBlock=true flips the RATE rule to Block; CRS STAYS Count (owner GO 2026-10-22)", () => {
+    const app = new cdk.App();
+    const stack = new StoryBetaWafStack(app, "story-beta-waf-block", {
+      environment: "beta", appRunnerServiceArn: APP_RUNNER_ARN, alarmTopicArn: TOPIC_ARN,
+      rateBlock: true, env: { account: "224033508028", region: "us-east-1" },
+    });
+    const acl = Object.values(Template.fromStack(stack).findResources("AWS::WAFv2::WebACL"))[0] as any;
+    const byName = Object.fromEntries(acl.Properties.Rules.map((r: any) => [r.Name, r]));
+    expect(byName.RateLimitPerIp.Action).toEqual({ Block: {} });        // rate rule now blocks
+    expect(byName.CommonRuleSet.OverrideAction).toEqual({ Count: {} });  // CRS MUST remain Count
+  });
+
   test("associates directly to the App Runner service (no CloudFront)", () => {
     t.hasResourceProperties("AWS::WAFv2::WebACLAssociation", {
       ResourceArn: APP_RUNNER_ARN,

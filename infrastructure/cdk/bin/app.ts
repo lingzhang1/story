@@ -77,6 +77,8 @@ if (app.node.tryGetContext("deployWaf") === "true") {
     environment,
     appRunnerServiceArn,
     alarmTopicArn,
+    // Owner GO 2026-10-22: -c rateBlock=true flips the per-IP RATE rule Count->Block (CRS stays Count).
+    rateBlock: app.node.tryGetContext("rateBlock") === "true" || app.node.tryGetContext("rateBlock") === true,
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: "us-east-1" },
     tags: { Project: "Story", Environment: environment, ManagedBy: "CDK", Component: "waf" },
   });
