@@ -98,23 +98,24 @@ struct StoryImageCard: View {
     var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
         Color.clear
-            .aspectRatio(16.0/9.0, contentMode: .fit)
+            .aspectRatio(5.0/4.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay(
                 // Aspect-FILL, full brightness. The source art is intentionally bright/vibrant; we do NOT
-                // dim the whole image (only a disabled card is knocked back). Center crop keeps the frame
-                // full-bleed across iPhone widths.
+                // dim the whole image (only a disabled card is knocked back). A TALLER card (5:4) gives the
+                // image room and keeps the text band clear of the bright highlights (owner mockup).
                 Image(image).resizable().scaledToFill()
                     .opacity(enabled ? 1.0 : 0.4)
             )
             .overlay(
-                // LOCALIZED bottom-to-top scrim — opaque only across the bottom ~45% (behind the text), fully
-                // clear by ~58% so the upper 60%+ of the photo stays bright. Not a full-image darkening.
+                // LOCALIZED bottom-to-top scrim — opaque across the bottom ~42% (behind the text), fully clear
+                // by ~55% so the upper ~60% of the photo stays bright. Taller card => the text sits lower in
+                // the dark foreground, not over the bright highlight area.
                 LinearGradient(
-                    stops: [.init(color: StoryTheme.ink.opacity(0.88), location: 0),
-                            .init(color: StoryTheme.ink.opacity(0.55), location: 0.30),
-                            .init(color: StoryTheme.ink.opacity(0.12), location: 0.48),
-                            .init(color: .clear, location: 0.58)],
+                    stops: [.init(color: StoryTheme.ink.opacity(0.90), location: 0),
+                            .init(color: StoryTheme.ink.opacity(0.58), location: 0.28),
+                            .init(color: StoryTheme.ink.opacity(0.12), location: 0.45),
+                            .init(color: .clear, location: 0.55)],
                     startPoint: .bottom, endPoint: .top)
             )
             .overlay(alignment: .topLeading) {
