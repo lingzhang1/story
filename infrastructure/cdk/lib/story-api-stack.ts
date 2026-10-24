@@ -521,9 +521,9 @@ export class StoryApiStack extends cdk.Stack {
               // Guide v2.1 (AI shooting script) + Unsplash scene images — feature-gated; dev-on, higher envs
               // off until rolled out. Also DURABLE here (previously CLI-set, hence wiped by a cdk deploy).
               { name: "STORY_GUIDE_V2",
-                value: (this.node.tryGetContext("guideV2") as string) ?? (environment === "development" ? "1" : "0") },
+                value: (this.node.tryGetContext("guideV2") as string) ?? "1" },
               { name: "STORY_SCENE_IMAGES",
-                value: (this.node.tryGetContext("sceneImages") as string) ?? (environment === "development" ? "1" : "0") },
+                value: (this.node.tryGetContext("sceneImages") as string) ?? "1" },
               // P0 Beta Auth Increment 3: wire the (separately-provisioned) dev Cognito pool + identity
               // tables. These are non-secret resource identifiers (NOT credentials), read from context so prod
               // supplies its own; dev defaults match the provisioned story-development-auth stack.
