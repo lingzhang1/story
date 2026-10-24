@@ -94,6 +94,16 @@ describe("StoryApiStack (Milestone A)", () => {
     expect(blob).not.toContain(":secret:*");
   });
 
+  test("grants least-privilege read on the two direct-provider keys (OpenAI + Gemini), name-scoped", () => {
+    const policies = template.findResources("AWS::IAM::Policy");
+    const blob = JSON.stringify(Object.values(policies));
+    expect(blob).toContain("DirectProviderKeyRead");
+    expect(blob).toContain(":secret:YoTale-OpenAI-API-Key-??????");
+    expect(blob).toContain(":secret:YoTale-Gemini-API-Key-??????");
+    // still no wildcard-over-all-secrets after the addition
+    expect(blob).not.toContain(":secret:*");
+  });
+
   test("provisions the APPROVED async edit-planning resources (owner-approved 2026-10-13)", () => {
     // Phase A forbade these; the owner-approved async milestone adds exactly: 1 jobs table, 2 queues
     // (main + DLQ), the worker (+ the S3 auto-delete helper), the staging bucket, an SQS event source,

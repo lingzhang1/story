@@ -74,7 +74,16 @@ class StructuredOutputError(RuntimeError):
 
 
 class ProviderError(RuntimeError):
-    """Provider/transport failure (network, throttling, timeout, auth)."""
+    """Provider/transport failure (network, throttling, timeout, 5xx). RECOVERABLE — eligible for a
+    bounded retry and for provider FALLBACK."""
+
+
+class ProviderPolicyError(ProviderError):
+    """A content-policy OR account/access denial from a provider (e.g. HTTP 403 policy block, an
+    Anthropic-style account revocation, an auth/authorization failure). A SUBCLASS of ProviderError so
+    existing ``except ProviderError`` sites still surface it — but FallbackModelGateway refuses to fail
+    over on it (a denial must stop the operation and be surfaced/recorded, never silently retried on the
+    other provider). Also used for malformed-request 4xx that another provider would reject identically."""
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +248,11 @@ class FallbackModelGateway:
         self.last_error = None
         try:
             return self._primary.generate_structured(req)
+        except ProviderPolicyError:
+            # Content-policy / account-access / auth denial, or a 4xx another provider would reject the
+            # same way. NEVER fail over — stop and surface so the caller records the incident. (Subclass of
+            # ProviderError, so this except must come FIRST.)
+            raise
         except ProviderError as e:
             self.last_fallback = True
             self.last_error = str(e)[:300]
@@ -282,6 +296,7 @@ __all__ = [
     "StructuredResult",
     "StructuredOutputError",
     "ProviderError",
+    "ProviderPolicyError",
     "ModelGateway",
     "BedrockModelGateway",
     "FallbackModelGateway",

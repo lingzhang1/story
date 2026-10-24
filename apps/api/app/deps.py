@@ -105,6 +105,9 @@ def get_creative_intent_engine() -> CreativeIntentEngine:
     """
     if os.environ.get("STORY_CREATIVE_INTENT_MOCK") == "1":
         return MockCreativeIntentEngine()
+    if _provider_mode() == "direct":
+        from model_gateway.provider import make_gateway
+        return RealCreativeIntentEngine(make_gateway("creative_intent"))
     return RealCreativeIntentEngine(get_model_gateway())
 
 
@@ -120,7 +123,7 @@ def get_scene_understanding_engine() -> SceneUnderstandingEngine:
     if os.environ.get("STORY_SCENE_UNDERSTANDING_MOCK") == "1":
         return MockSceneUnderstandingEngine()
     model = os.environ.get("STORY_SCENE_MODEL", "amazon.nova-pro-v1:0")
-    return RealSceneUnderstandingEngine(BedrockModelGateway(model_id=model))
+    return RealSceneUnderstandingEngine(routed_gateway("scene_understanding", model))
 
 
 def get_story_director_engine() -> StoryDirectorEngine:
@@ -149,7 +152,7 @@ def get_asset_understanding_engine() -> AssetUnderstandingEngine:
     if os.environ.get("STORY_ASSET_UNDERSTANDING_MOCK") == "1":
         return MockAssetUnderstandingEngine()
     model = os.environ.get("STORY_AU_MODEL", DEFAULT_AU_MODEL)
-    return RealAssetUnderstandingEngine(BedrockModelGateway(model_id=model), model_id=model)
+    return RealAssetUnderstandingEngine(routed_gateway("asset_understanding", model), model_id=model)
 
 
 def get_story_coverage_engine() -> StoryCoverageEngine:
@@ -165,7 +168,7 @@ def get_story_coverage_engine() -> StoryCoverageEngine:
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_MODEL)
     # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle), so a create
     # degrades rather than 503s at this stage. Same-version is a no-op (helper returns the bare gateway).
-    return RealStoryCoverageEngine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryCoverageEngine(routed_gateway("story_coverage", model), model_id=model)
 
 
 def get_story_guide_engine() -> StoryGuideEngine:
@@ -181,7 +184,7 @@ def get_story_guide_engine() -> StoryGuideEngine:
     model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
     # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle). Same-version
     # is a no-op (helper returns the bare gateway).
-    return RealStoryGuideEngine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryGuideEngine(routed_gateway("story_guide", model), model_id=model)
 
 
 def get_story_guide_v2_engine():
@@ -195,7 +198,7 @@ def get_story_guide_v2_engine():
     if os.environ.get("STORY_GUIDE_MOCK") == "1":
         return MockStoryGuideV2Engine()
     model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
-    return RealStoryGuideV2Engine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryGuideV2Engine(routed_gateway("story_guide", model), model_id=model)
 
 
 def get_story_guide_refine_engine():
@@ -210,7 +213,7 @@ def get_story_guide_refine_engine():
     if os.environ.get("STORY_GUIDE_MOCK") == "1":
         return MockStoryGuideRefineEngine()
     model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
-    return RealStoryGuideRefineEngine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryGuideRefineEngine(routed_gateway("story_guide", model), model_id=model)
 
 
 def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
@@ -226,7 +229,7 @@ def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
     # throttle failed hiking creates ('story_coverage_v2_unavailable: Too many tokens per day') before the
     # (already fallback-protected) edit planner was ever reached. BOTH internal calls (mapper + judge) share
     # this gateway, so both degrade to Sonnet together. Same-version is a no-op (helper returns bare gateway).
-    return RealStoryCoverageV2Engine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryCoverageV2Engine(routed_gateway("story_coverage", model), model_id=model)
 
 
 def get_music_direction_engine() -> MusicDirectionEngine:
@@ -255,6 +258,24 @@ def _gateway_with_fallback(primary_model: str) -> ModelGateway:
     return FallbackModelGateway(primary, BedrockModelGateway(model_id=FALLBACK_MODEL))
 
 
+# P0 provider restore (2026-10-23): a master switch selects the active inference provider mode.
+#   STORY_MODEL_PROVIDER = "direct"  -> route each capability to OpenAI/Gemini via the provider router
+#                                        (the Anthropic-restriction contingency path).
+#                        = "bedrock" -> legacy per-stage Bedrock model (default while Anthropic is restored).
+# `routed_gateway(capability, bedrock_model)` is the ONE helper every get_*_engine calls: in direct mode it
+# returns make_gateway(capability) (OpenAI/Gemini + FallbackModelGateway); otherwise the Bedrock fallback
+# gateway. No engine, prompt, or contract changes — only which gateway the engine is handed.
+def _provider_mode() -> str:
+    return (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower()
+
+
+def routed_gateway(capability: str, bedrock_model: str) -> ModelGateway:
+    if _provider_mode() == "direct":
+        from model_gateway.provider import make_gateway
+        return make_gateway(capability)
+    return _gateway_with_fallback(bedrock_model)
+
+
 def get_edit_planner_engine() -> EditPlannerEngine:
     """Provide the production Edit Planner engine (Milestone M-d, frozen edit_plan/2).
 
@@ -273,7 +294,7 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     # plan the engine escalates ONCE to the ceiling (16384). Both env-tunable without a redeploy.
     max_tokens = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS", "8192"))
     ceiling = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS_CEILING", "16384"))
-    return RealEditPlannerEngine(_gateway_with_fallback(model), executability_repair_attempts=repairs,
+    return RealEditPlannerEngine(routed_gateway("edit_plan", model), executability_repair_attempts=repairs,
                                  max_tokens=max_tokens, max_tokens_ceiling=ceiling)
 
 
@@ -287,7 +308,7 @@ def get_music_plan_engine() -> MusicPlanEngine:
     caller falls back to no-music creation.
     """
     model = os.environ.get("STORY_MUSIC_PLAN_MODEL", MUSIC_PLAN_MODEL)
-    return RealMusicPlanEngine(_gateway_with_fallback(model))
+    return RealMusicPlanEngine(routed_gateway("music", model))
 
 
 def get_duration_planner_engine() -> DurationPlannerEngine:

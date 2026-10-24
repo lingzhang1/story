@@ -185,24 +185,33 @@ def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan", stor
 
 def _build_engine():
     """Mirror apps/api/app/deps.get_edit_planner_engine so the worker runs the IDENTICAL model path
-    (Opus primary -> Sonnet fallback, 2 executability repairs)."""
-    from model_gateway import BedrockModelGateway, FallbackModelGateway
+    (direct OpenAI/Gemini in STORY_MODEL_PROVIDER=direct, else Opus primary -> Sonnet fallback)."""
     model = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
-    fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
-    primary = BedrockModelGateway(model_id=model)
-    gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
+    if (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower() == "direct":
+        from model_gateway.provider import make_gateway
+        gw = make_gateway("edit_plan")
+    else:
+        from model_gateway import BedrockModelGateway, FallbackModelGateway
+        fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+        primary = BedrockModelGateway(model_id=model)
+        gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
     return RealEditPlannerEngine(gw, executability_repair_attempts=2)
 
 
 def _build_coverage_engine():
     """Mirror apps/api/app/deps.get_story_coverage_v2_engine so the worker runs the IDENTICAL two-call
-    Coverage path (Mapper + Judge, Opus primary -> Sonnet fallback). Frozen prompts/contract untouched."""
-    from model_gateway import BedrockModelGateway, FallbackModelGateway
+    Coverage path (direct OpenAI/Gemini in STORY_MODEL_PROVIDER=direct, else Opus->Sonnet). Frozen
+    prompts/contract untouched."""
     from story_coverage_v2 import RealStoryCoverageV2Engine
     model = os.environ.get("STORY_COVERAGE_MODEL", "us.anthropic.claude-opus-4-6-v1")
-    fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
-    primary = BedrockModelGateway(model_id=model)
-    gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
+    if (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower() == "direct":
+        from model_gateway.provider import make_gateway
+        gw = make_gateway("story_coverage")
+    else:
+        from model_gateway import BedrockModelGateway, FallbackModelGateway
+        fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+        primary = BedrockModelGateway(model_id=model)
+        gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
     return RealStoryCoverageV2Engine(gw, model_id=model)
 
 

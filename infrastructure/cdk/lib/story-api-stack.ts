@@ -149,6 +149,25 @@ export class StoryApiStack extends cdk.Stack {
       })
     );
 
+    // --- Direct-provider inference keys (P0 Anthropic-restriction contingency, 2026-10-23) --------------
+    // When STORY_MODEL_PROVIDER=direct, the ModelGateway routes to OpenAI/Gemini direct APIs instead of
+    // Bedrock. Both the App Runner service (most AI stages) AND the async EditPlan worker Lambda read these
+    // keys from Secrets Manager in-process. Least-privilege GetSecretValue, name-scoped to the two existing
+    // dev secrets only (NOT a wildcard). Secrets Manager appends a random 6-char suffix -> '-??????' match.
+    // NOTE: this REPLACES the runtime-CLI-added UnsplashKeyRead-style drift pattern by doing it in CDK.
+    const providerKeyArns = [
+      `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-OpenAI-API-Key-??????`,
+      `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-Gemini-API-Key-??????`,
+    ];
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "DirectProviderKeyRead",
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: providerKeyArns,
+      })
+    );
+
     // --- ASYNC EDIT PLANNING infra (owner-approved 2026-10-13, dev) ------
     // Beats App Runner's ~120s request ceiling: App Runner submits a job, a Lambda worker runs the SAME
     // plan/critique/validate core (up to 15 min), iOS polls. Resources: DynamoDB job table (TTL), SQS + DLQ,
@@ -287,6 +306,13 @@ export class StoryApiStack extends cdk.Stack {
         STORY_WORKER_DEADLINE_S: "840",
         STORY_EDIT_PLAN_VERSION: "5.2",
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
+        // P0 direct-provider mode (off unless context sets it): when STORY_MODEL_PROVIDER=direct the worker's
+        // EditPlan runs on OpenAI/Gemini instead of Bedrock. Model ids are config-driven; verified in Phase D.
+        STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "bedrock",
+        ...((this.node.tryGetContext("openaiModel") as string)
+          ? { STORY_OPENAI_MODEL: this.node.tryGetContext("openaiModel") as string } : {}),
+        ...((this.node.tryGetContext("geminiModel") as string)
+          ? { STORY_GEMINI_MODEL: this.node.tryGetContext("geminiModel") as string } : {}),
         // P0 Beta Security Phase 4: the worker settles/releases the AI quota reservation on terminal. It
         // needs the UserUsage table name; STORY_QUOTA_MODE is carried for parity (settle/release behave the
         // same in observe/enforce — they only reverse what reserve recorded).
@@ -396,6 +422,17 @@ export class StoryApiStack extends cdk.Stack {
     }));
     worker.addToRolePolicy(new iam.PolicyStatement({
       sid: "UserQuotaSettle", effect: iam.Effect.ALLOW, actions: quotaActions, resources: [userUsageArn],
+    }));
+
+    // P0 direct-provider keys for the worker (EditPlan runs here). Same two secrets, least-privilege.
+    worker.addToRolePolicy(new iam.PolicyStatement({
+      sid: "DirectProviderKeyRead",
+      effect: iam.Effect.ALLOW,
+      actions: ["secretsmanager:GetSecretValue"],
+      resources: [
+        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-OpenAI-API-Key-??????`,
+        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-Gemini-API-Key-??????`,
+      ],
     }));
 
     // --- App Runner service ---------------------------------------------
