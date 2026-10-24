@@ -306,9 +306,12 @@ export class StoryApiStack extends cdk.Stack {
         STORY_WORKER_DEADLINE_S: "840",
         STORY_EDIT_PLAN_VERSION: "5.2",
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
-        // P0 direct-provider mode (off unless context sets it): when STORY_MODEL_PROVIDER=direct the worker's
-        // EditPlan runs on OpenAI/Gemini instead of Bedrock. Model ids are config-driven; verified in Phase D.
-        STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "bedrock",
+        // P0 direct-provider mode: default DIRECT (OpenAI/Gemini) for ALL envs. Anthropic revoked Bedrock
+        // model access on an abuse determination, so Bedrock is no longer a viable default anywhere — the
+        // ModelGateway routes to OpenAI/Gemini direct APIs. Override per-deploy with `-c modelProvider=bedrock`
+        // only if Bedrock access is restored. Keys are read in-process from Secrets Manager (YoTale-OpenAI-API-Key,
+        // YoTale-Gemini-API-Key); both the API instance role and the worker role are granted GetSecretValue.
+        STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "direct",
         ...((this.node.tryGetContext("openaiModel") as string)
           ? { STORY_OPENAI_MODEL: this.node.tryGetContext("openaiModel") as string } : {}),
         ...((this.node.tryGetContext("geminiModel") as string)
@@ -512,7 +515,7 @@ export class StoryApiStack extends cdk.Stack {
               // flipped via `-c modelProvider=direct`. Model ids are config-driven, verified against the live
               // provider catalogs.
               { name: "STORY_MODEL_PROVIDER",
-                value: (this.node.tryGetContext("modelProvider") as string) ?? (environment === "development" ? "direct" : "bedrock") },
+                value: (this.node.tryGetContext("modelProvider") as string) ?? "direct" },
               { name: "STORY_OPENAI_MODEL", value: (this.node.tryGetContext("openaiModel") as string) ?? "gpt-5.1" },
               { name: "STORY_GEMINI_MODEL", value: (this.node.tryGetContext("geminiModel") as string) ?? "gemini-3.8-flash" },
               // Guide v2.1 (AI shooting script) + Unsplash scene images — feature-gated; dev-on, higher envs
