@@ -648,6 +648,11 @@ struct StoryIdeaSection: View {
     let idea: CoverageStoryIdeaV2DTO
     /// Tapping routes into the existing Show Me / Director flow (high-level -> executable).
     var onShowMe: () -> Void
+    /// OPTIONAL dismiss (Phase B decision 5): hide THIS specific idea. Scoped + non-persistent (the caller
+    /// holds an in-memory fingerprint) — a materially different future idea is NOT suppressed. Defaults to a
+    /// no-op; when nil-equivalent (no caller) the dismiss control is still shown but does nothing, so callers
+    /// should wire it. Rendered as a small ✕ in the header.
+    var onDismiss: (() -> Void)? = nil
     /// OPTIONAL Guide image reuse (Phase B / decision 5): resolve an ALREADY-available Guide scene image for
     /// this idea's `targetStoryGuideDimensionId`. Returns nil when the idea targets no current scene, the
     /// scene has no image, or image reuse is not wired — in which case the card is text-only (never a new
@@ -684,6 +689,18 @@ struct StoryIdeaSection: View {
                     .foregroundStyle(StoryTheme.cream.opacity(0.55))
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(StoryTheme.cream.opacity(0.07), in: Capsule())
+                if let onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.45))
+                            .padding(6)
+                            .background(StoryTheme.cream.opacity(0.06), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss suggestion")
+                    .accessibilityIdentifier("dismiss-story-idea-button")
+                }
             }
             .padding(.bottom, 12)
 

@@ -39,6 +39,13 @@ struct StoryHomeView: View {
     // the scan flow carries this selected_opportunity into Director. Identifiable wrapper for cover(item:).
     @State private var pendingOpportunity: OpportunityLaunch?
 
+    /// Scoped, NON-persistent Story Idea dismissal (Phase B decision 5: scoped to the specific idea, no new
+    /// persistent contract, never permanently suppresses a materially different future suggestion). Holds the
+    /// fingerprint (title + target dimension) of the idea the user dismissed in THIS view session. The card is
+    /// hidden only while the current idea matches that fingerprint; a Coverage refresh that yields a different
+    /// idea (new title/target) clears the match and the card returns. Resets on view teardown.
+    @State private var dismissedIdeaKey: String?
+
     // Milestone E2 — persistent StoryGuide + Coverage/2 (real Story Guide + Story Idea).
     @State private var guide: StoryGuideDTO?
     @State private var guideV2: StoryGuideV2DTO?          // AI shooting script (when STORY_GUIDE_V2 on)
@@ -53,6 +60,13 @@ struct StoryHomeView: View {
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
+    }
+
+    /// Semantic fingerprint of a Story Idea for scoped dismissal: its title + target dimension. A Coverage
+    /// refresh that yields a materially different idea (different title/target) produces a different key, so a
+    /// prior dismissal does NOT suppress it (Phase B decision 5). Pure string identity — no persistence.
+    private func ideaKey(_ idea: CoverageStoryIdeaV2DTO) -> String {
+        "\(idea.title)|\(idea.targetStoryGuideDimensionId ?? "")"
     }
 
     var body: some View {
@@ -134,7 +148,8 @@ struct StoryHomeView: View {
                 // Story Idea — real StoryCoverage.story_idea. ONE optional card,
                 // shown ONLY when non-null; omitted entirely otherwise (no "no ideas"
                 // placeholder — do-nothing intelligence is no interruption).
-                if let idea = coverage?.storyIdea {
+                if let idea = coverage?.storyIdea,
+                   ideaKey(idea) != dismissedIdeaKey {
                     // Story Idea -> Show me (Director entry point A): carry the Idea's semantic
                     // opportunity (title + description; target dimension if present) into Director.
                     StoryIdeaSection(
@@ -144,6 +159,10 @@ struct StoryHomeView: View {
                                 storyGuideDimensionId: idea.targetStoryGuideDimensionId,
                                 label: idea.title, purpose: idea.description,
                                 capturePossibilityLabel: nil))
+                        },
+                        onDismiss: {
+                            // Scoped, non-persistent: hide THIS idea for the current view session only.
+                            withAnimation { dismissedIdeaKey = ideaKey(idea) }
                         },
                         resolveGuideImage: { dimId in
                             // Reuse the Guide's SceneImageService (same backend proxy, metadata-only hotlink,
