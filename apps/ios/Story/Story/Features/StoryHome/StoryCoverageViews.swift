@@ -623,32 +623,79 @@ struct StoryIdeaSection: View {
     let idea: CoverageStoryIdeaV2DTO
     /// Tapping routes into the existing Show Me / Director flow (high-level -> executable).
     var onShowMe: () -> Void
+    /// OPTIONAL Guide image reuse (Phase B / decision 5): resolve an ALREADY-available Guide scene image for
+    /// this idea's `targetStoryGuideDimensionId`. Returns nil when the idea targets no current scene, the
+    /// scene has no image, or image reuse is not wired — in which case the card is text-only (never a new
+    /// inference or image provider, never a decorative fetch). Defaults to nil so the card is safe before the
+    /// caller wires it.
+    var resolveGuideImage: (_ dimensionId: String) async -> SceneImageDTO? = { _ in nil }
+
+    @State private var image: SceneImageDTO?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            // Eyebrow — same gold ✦ language as the Guide, but distinct copy so it never reads as a permanent
+            // Guide scene (it is a contextual recommendation).
             HStack(spacing: 6) {
-                Text("✦").font(.system(size: 9)).foregroundStyle(StoryTheme.gold.opacity(0.8))
-                StoryEyebrow(text: "Story Idea")
+                Text("✦").font(.system(size: 9)).foregroundStyle(StoryTheme.gold.opacity(0.85))
+                StoryEyebrow(text: "A moment worth capturing")
             }
+
+            // Optional visual reference — ONLY a Guide image that already exists for the targeted scene
+            // (decision 5). Omitted entirely otherwise; never a placeholder or decorative image.
+            if let img = image, let url = URL(string: img.imageURL) {
+                AsyncImage(url: url) { phase in
+                    if case let .success(i) = phase {
+                        i.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Rectangle().fill(StoryTheme.surfaceAlt.opacity(0.5))
+                    }
+                }
+                .frame(height: 150).frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: StoryTheme.field))
+                .overlay(alignment: .bottomLeading) {
+                    if !img.attributionText.isEmpty {
+                        Text(img.attributionText).font(StoryTheme.body(9)).foregroundStyle(StoryTheme.cream.opacity(0.7))
+                            .padding(6).background(.black.opacity(0.35), in: Capsule()).padding(8)
+                    }
+                }
+            }
+
             Text(idea.title)
-                .font(StoryTheme.display(18))
-                .foregroundStyle(StoryTheme.cream.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
-            Text(idea.description)
-                .font(StoryTheme.body(13))
-                .foregroundStyle(StoryTheme.cream.opacity(0.58))
+                .font(StoryTheme.display(20))
+                .foregroundStyle(StoryTheme.cream)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Optional / inspirational, never a requirement — a quiet gold affordance.
+            // WHY it helps — prefer rationale; fall back to description. Never labelled as a precise
+            // capture instruction (decision 5) — it is the concept / why.
+            Text(idea.rationale ?? idea.description)
+                .font(StoryTheme.body(14))
+                .foregroundStyle(StoryTheme.cream.opacity(0.62))
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Show me — unchanged Director entry; styled like the Guide's Shoot affordance.
             Button(action: onShowMe) {
-                Text("Show me")
-                    .font(StoryTheme.body(13, .medium))
-                    .foregroundStyle(StoryTheme.gold)
+                HStack(spacing: 4) {
+                    Text("Show me").font(StoryTheme.body(14, .semibold))
+                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(StoryTheme.ink)
+                .padding(.horizontal, 18).padding(.vertical, 10)
+                .background(StoryTheme.cream, in: Capsule())
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
             .accessibilityHint("Optional idea — opens capture guidance")
         }
+        .padding(16)
+        .background(StoryTheme.surfaceAlt.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.08), lineWidth: 1))
         .padding(.top, 20)
+        .task(id: idea.targetStoryGuideDimensionId) {
+            // Reuse an EXISTING Guide image only when the idea targets a current scene (decision 5). No fetch
+            // when there is no target; the resolver returns nil for an unavailable/irrelevant image.
+            guard let dim = idea.targetStoryGuideDimensionId, !dim.isEmpty else { image = nil; return }
+            image = await resolveGuideImage(dim)
+        }
     }
 }

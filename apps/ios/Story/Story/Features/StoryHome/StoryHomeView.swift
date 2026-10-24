@@ -137,12 +137,22 @@ struct StoryHomeView: View {
                 if let idea = coverage?.storyIdea {
                     // Story Idea -> Show me (Director entry point A): carry the Idea's semantic
                     // opportunity (title + description; target dimension if present) into Director.
-                    StoryIdeaSection(idea: idea) {
-                        pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
-                            storyGuideDimensionId: idea.targetStoryGuideDimensionId,
-                            label: idea.title, purpose: idea.description,
-                            capturePossibilityLabel: nil))
-                    }
+                    StoryIdeaSection(
+                        idea: idea,
+                        onShowMe: {
+                            pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                                storyGuideDimensionId: idea.targetStoryGuideDimensionId,
+                                label: idea.title, purpose: idea.description,
+                                capturePossibilityLabel: nil))
+                        },
+                        resolveGuideImage: { dimId in
+                            // Decision 5: reuse an EXISTING Guide image only when the idea targets a CURRENT
+                            // Guide scene that has a reference query. No new provider, no decorative fetch —
+                            // the same SceneImageService the Guide uses, keyed by the matched scene id.
+                            guard let scene = guideV2?.scenes.first(where: { $0.id == dimId }),
+                                  let q = scene.visualReferenceQuery else { return nil }
+                            return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
+                        })
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
 
