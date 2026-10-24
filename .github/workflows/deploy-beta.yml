@@ -45,6 +45,12 @@ jobs:
       # explicit edit to these two lines, not a side effect of an unrelated deploy.
       STORY_QUOTA_MODE: enforce
       STORY_THROTTLE_MODE: enforce
+      # Beta quota caps (owner-set 2026-10-24). user_daily_gens is now a genuine PER-UTC-DAY allowance
+      # (resets daily; the gens counter lives in a gens#YYYY-MM-DD attribute), so 100/day is a daily budget,
+      # not monthly. USER_MONTHLY_USD raised for active beta testing; the $60 GLOBAL breaker stays the
+      # aggregate safety cap. The CDK stack reads these from process.env (defaults 20/8/60).
+      STORY_QUOTA_USER_DAILY_GENS: "100"
+      STORY_QUOTA_USER_MONTHLY_USD: "50"
     steps:
       - uses: actions/checkout@v4
 

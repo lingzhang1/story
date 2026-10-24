@@ -14,7 +14,7 @@ import threading
 import pytest
 
 from user_quota import (UserQuota, QuotaConfig, QuotaDenied, QuotaStoreError, reservation_id,
-                        GLOBAL_PK, _period)
+                        GLOBAL_PK, _period, _day)
 from user_quota.fakes import FakeDDB  # shared in-memory DynamoDB double
 
 
@@ -40,6 +40,10 @@ def _P():
     return _period()
 
 
+def _G():
+    return _day()  # daily gens bucket attribute name: gens#YYYY-MM-DD
+
+
 # correction 1: idempotent + atomic reservation under concurrent retries ----------------------------------
 
 def test_duplicate_reservation_is_idempotent_no_double_count():
@@ -50,7 +54,7 @@ def test_duplicate_reservation_is_idempotent_no_double_count():
     assert r1.reservation_id == r2.reservation_id == reservation_id("op-123")
     it = q._ddb.items[("u1", _P())]
     assert float(it["reserved_usd"]["N"]) == 0.10   # counted ONCE
-    assert float(it["gens_used"]["N"]) == 1
+    assert float(it[_G()]["N"]) == 1
 
 
 def test_concurrent_same_op_reserves_once():
@@ -77,7 +81,7 @@ def test_concurrent_distinct_users_isolated():
     for n in range(6):
         it = q._ddb.items[(f"user{n}", _P())]
         assert round(float(it["reserved_usd"]["N"]), 2) == 0.50   # 5 * 0.10, no cross-user bleed
-        assert float(it["gens_used"]["N"]) == 5
+        assert float(it[_G()]["N"]) == 5
 
 
 # per-user enforce boundary: monthly USD + daily gens -----------------------------------------------------
@@ -181,11 +185,11 @@ def test_failed_inference_refunds_allowance_but_keeps_spend():
     q.reserve("u1", "op-1", estimate_usd=0.10, gens=1)
     q.release_allowance("u1", "op-1", gens=1, incurred_usd=0.03)  # failed after spending 0.03
     it = q._ddb.items[("u1", _P())]
-    assert float(it["gens_used"]["N"]) == 0            # allowance refunded
+    assert float(it[_G()]["N"]) == 0            # allowance refunded
     assert float(it["settled_usd"]["N"]) == 0.03       # spend NOT erased
     assert round(float(it["reserved_usd"]["N"]), 2) == 0.0   # reserved estimate removed
     q.release_allowance("u1", "op-1", gens=1, incurred_usd=0.03)   # idempotent
-    assert float(it["gens_used"]["N"]) == 0
+    assert float(it[_G()]["N"]) == 0
     assert float(it["settled_usd"]["N"]) == 0.03
 
 
@@ -198,7 +202,7 @@ def test_double_settle_then_release_no_double_move():
     q.release_allowance("u1", "op-1", gens=1, incurred_usd=0.05)   # already settled -> no-op
     it = q._ddb.items[("u1", _P())]
     assert float(it["settled_usd"]["N"]) == 0.08   # release did NOT also add 0.05
-    assert float(it["gens_used"]["N"]) == 1        # allowance NOT refunded (it was a real settle)
+    assert float(it[_G()]["N"]) == 1        # allowance NOT refunded (it was a real settle)
 
 
 # correction 6: active-job slots (queued+running) exactly-once under dup/retry/crash ---------------------
@@ -257,7 +261,7 @@ def test_orphan_reservation_releasable_after_crash():
     q.release_allowance("u1", "op-orphan", gens=1, incurred_usd=0.0)
     it = q._ddb.items[("u1", _P())]
     assert round(float(it["reserved_usd"]["N"]), 2) == 0.0
-    assert float(it["gens_used"]["N"]) == 0
+    assert float(it[_G()]["N"]) == 0
     q.settle("u1", "op-orphan", actual_usd=0.10)   # stale settle after release -> no-op
     assert float(it["settled_usd"]["N"]) == 0.0
 
@@ -337,3 +341,28 @@ def test_beta_global_60_trips_before_budget_100():
     with pytest.raises(QuotaDenied) as ei:
         q.reserve("ulast", "glast", estimate_usd=7.0)     # 56 + 7 = 63 > 60
     assert ei.value.scope == "global_monthly_usd"
+
+
+# daily-vs-monthly: the gens allowance resets per UTC DAY (bucket gens#YYYY-MM-DD), USD stays monthly ------
+def test_daily_gens_resets_each_utc_day(monkeypatch):
+    """user_daily_gens is a DAILY cap: gens accumulate in a per-day attribute so a new day starts fresh,
+    while reserved/settled USD stays in the monthly item. Verifies the daily-vs-monthly semantic fix."""
+    import user_quota as uq
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_cfg(user_monthly_usd=99, user_daily_gens=2))
+    # Day 1: two gens allowed, third denied (daily cap = 2)
+    t1 = 1_700_000_000.0  # fixed day
+    monkeypatch.setattr(uq.time, "time", lambda: t1)
+    q.reserve("u1", "d1-a", estimate_usd=0.01, gens=1)
+    q.reserve("u1", "d1-b", estimate_usd=0.01, gens=1)
+    with pytest.raises(QuotaDenied) as e:
+        q.reserve("u1", "d1-c", estimate_usd=0.01, gens=1)
+    assert e.value.scope == "user_daily_gens"
+    # Next UTC day (+86400s): same month, fresh daily bucket -> allowed again
+    t2 = t1 + 86_400.0
+    monkeypatch.setattr(uq.time, "time", lambda: t2)
+    r = q.reserve("u1", "d2-a", estimate_usd=0.01, gens=1)
+    assert r.state == "reserved"
+    it = q._ddb.items[("u1", uq._period(t1))]
+    assert float(it[uq._day(t1)]["N"]) == 2   # day 1 bucket unchanged
+    assert float(it[uq._day(t2)]["N"]) == 1   # day 2 fresh bucket

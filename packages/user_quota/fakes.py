@@ -86,7 +86,7 @@ class FakeDDB:
         if "ADD" in ue:
             if "#ru :eu" in ue:  it["reserved_usd"] = {"N": str(num("reserved_usd") + float(vals[":eu"]["N"]))}
             if "#gru :eu" in ue: it["reserved_usd"] = {"N": str(num("reserved_usd") + float(vals[":eu"]["N"]))}
-            if "#g :g" in ue:    it["gens_used"] = {"N": str(num("gens_used") + float(vals[":g"]["N"]))}
+            if "#g :g" in ue:    it[names["#g"]] = {"N": str(float(it.get(names["#g"],{}).get("N","0")) + float(vals[":g"]["N"]))}
             if "#su :au" in ue:  it["settled_usd"] = {"N": str(num("settled_usd") + float(vals[":au"]["N"]))}
             if "#gs :au" in ue:  it["settled_usd"] = {"N": str(num("settled_usd") + float(vals[":au"]["N"]))}
             if "#su :inc" in ue: it["settled_usd"] = {"N": str(num("settled_usd") + float(vals[":inc"]["N"]))}
@@ -95,7 +95,7 @@ class FakeDDB:
             if "#gru :neg" in ue: it["reserved_usd"] = {"N": str(num("reserved_usd") + float(vals[":neg"]["N"]))}
             if "#ru :relneg" in ue:  it["reserved_usd"] = {"N": str(num("reserved_usd") + float(vals[":relneg"]["N"]))}
             if "#gru :relneg" in ue: it["reserved_usd"] = {"N": str(num("reserved_usd") + float(vals[":relneg"]["N"]))}
-            if "#g :neg" in ue:  it["gens_used"] = {"N": str(num("gens_used") + float(vals[":neg"]["N"]))}
+            if "#g :neg" in ue:  it[names["#g"]] = {"N": str(float(it.get(names["#g"],{}).get("N","0")) + float(vals[":neg"]["N"]))}
             if "#aj :one" in ue: it["active_jobs"] = {"N": str(num("active_jobs") + 1)}
             if "#aj :neg" in ue: it["active_jobs"] = {"N": str(num("active_jobs") - 1)}
         if "SET #r = :rid" in ue:   it[names["#r"]] = copy.deepcopy(vals[":rid"])
