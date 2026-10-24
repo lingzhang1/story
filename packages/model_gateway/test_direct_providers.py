@@ -68,6 +68,16 @@ def test_openai_text_structured():
     assert r.data == {"summary": "ok", "n": 2}
     assert r.provider == "openai" and r.usage.total_tokens == 15
 
+def test_openai_uses_max_completion_tokens_not_max_tokens():
+    captured = {}
+    def t(url, headers, body, timeout):
+        captured["body"] = json.loads(body.decode())
+        return 200, json.dumps({"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
+            {"function": {"name": "emit_structured", "arguments": "{\"summary\":\"x\"}"}}]}}]}).encode(), {}
+    OpenAIModelGateway("gpt-5.1", api_key="k", http_post=t).generate_structured(_req())
+    assert "max_completion_tokens" in captured["body"]  # GPT-5-era requirement
+    assert "max_tokens" not in captured["body"]
+
 # 2 — Gemini text-only structured generation
 def test_gemini_text_structured():
     gw = GeminiModelGateway("gem-x", api_key="k", http_post=_gemini_ok({"summary": "ok"}))

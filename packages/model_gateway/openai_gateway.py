@@ -97,7 +97,9 @@ class OpenAIModelGateway:
                 },
             }],
             "tool_choice": {"type": "function", "function": {"name": _TOOL_NAME}},
-            "max_tokens": req.max_tokens,
+            # GPT-5-era models require `max_completion_tokens` and reject the legacy `max_tokens`
+            # (unsupported_parameter 400). Older models accept it too, so use it unconditionally.
+            "max_completion_tokens": req.max_tokens,
             "temperature": req.temperature,
         }
 
