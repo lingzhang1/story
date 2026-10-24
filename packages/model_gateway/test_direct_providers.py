@@ -107,9 +107,26 @@ def test_gemini_schema_translation_drops_additionalproperties():
     assert out["type"] == "object" and out["required"] == ["summary"]
     assert out["properties"]["summary"]["type"] == "string"
 
-def test_gemini_schema_translation_rejects_ref():
+def test_gemini_schema_translation_rejects_unresolvable_ref():
     with pytest.raises(SchemaTranslationError):
-        translate_schema({"type": "object", "properties": {"x": {"$ref": "#/$defs/Y"}}})
+        translate_schema({"type": "object", "properties": {"x": {"$ref": "#/$defs/Missing"}}})
+
+def test_gemini_schema_inlines_defs_and_nullable_anyof():
+    # Pydantic-style nested model + nullable field -> must inline + collapse, NOT raise.
+    schema = {
+        "type": "object",
+        "$defs": {"Ev": {"type": "object", "properties": {"d": {"type": "string"}}, "required": ["d"]}},
+        "properties": {
+            "events": {"type": "array", "items": {"$ref": "#/$defs/Ev"}},
+            "note": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+        },
+        "required": ["events"],
+    }
+    out = translate_schema(schema)
+    assert "$defs" not in out and "$ref" not in json.dumps(out)
+    assert out["properties"]["events"]["items"]["properties"]["d"]["type"] == "string"  # inlined
+    assert out["properties"]["note"]["type"] == "string" and out["properties"]["note"]["nullable"] is True
+    assert out["required"] == ["events"]
 
 # 5 — missing / malformed credentials
 def test_missing_credential_raises_auth():

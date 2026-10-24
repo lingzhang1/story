@@ -46,32 +46,77 @@ class SchemaTranslationError(StructuredOutputError):
 
 
 # Gemini Schema supports a subset of OpenAPI/JSON-Schema. These keys translate; others are dropped
-# (structural only) or, when load-bearing ($ref), rejected.
+# (structural only) or, when load-bearing and unresolvable, rejected.
 _SUPPORTED = {"type", "format", "description", "nullable", "enum", "items", "properties", "required",
               "minItems", "maxItems", "minimum", "maximum"}
-_REJECT_IF_PRESENT = {"$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf", "not"}
+
+
+def _inline_refs(node: Any, defs: dict[str, Any], _seen: tuple[str, ...] = ()) -> Any:
+    """Resolve local $ref against $defs/definitions and collapse `anyOf:[X, null]` (Pydantic's nullable
+    encoding) into X + nullable=true. Pure, bounded; raises SchemaTranslationError on a recursive $ref
+    (Gemini cannot express recursion) rather than looping. Produces a $ref/$defs-free JSON Schema that
+    translate_schema can then down-convert — PRESERVING semantics (inlining is expansion, not weakening)."""
+    if isinstance(node, list):
+        return [_inline_refs(n, defs, _seen) for n in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        ref = node["$ref"]
+        name = ref.split("/")[-1]
+        if name in _seen:
+            raise SchemaTranslationError(f"recursive $ref '{ref}' cannot be represented for Gemini")
+        target = defs.get(name)
+        if target is None:
+            raise SchemaTranslationError(f"unresolvable $ref '{ref}'")
+        merged = _inline_refs(target, defs, _seen + (name,))
+        # merge sibling keywords (e.g. description) over the resolved target
+        if isinstance(merged, dict):
+            for k, v in node.items():
+                if k != "$ref":
+                    merged[k] = v
+        return merged
+    # collapse anyOf/oneOf of [X, null] -> X + nullable
+    for combiner in ("anyOf", "oneOf"):
+        if combiner in node and isinstance(node[combiner], list):
+            variants = node[combiner]
+            non_null = [v for v in variants if not (isinstance(v, dict) and v.get("type") == "null")]
+            has_null = any(isinstance(v, dict) and v.get("type") == "null" for v in variants)
+            if len(non_null) == 1:
+                resolved = _inline_refs(non_null[0], defs, _seen)
+                if isinstance(resolved, dict):
+                    rest = {k: v for k, v in node.items() if k != combiner}
+                    resolved = {**resolved, **_inline_refs(rest, defs, _seen)}
+                    if has_null:
+                        resolved["nullable"] = True
+                    return resolved
+            # a genuine union of >1 non-null types is not Gemini-expressible
+            raise SchemaTranslationError(f"'{combiner}' union of multiple types cannot be represented for Gemini")
+    return {k: _inline_refs(v, defs, _seen) for k, v in node.items()}
 
 
 def translate_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Down-convert a JSON Schema to Gemini's Schema dialect. Conservative + non-silent (raises on
-    inexpressible constructs). Preserves type/properties/required/enum/items; drops only non-semantic
-    structural keywords (additionalProperties). Pure + unit-testable."""
+    """Down-convert a JSON Schema to Gemini's Schema dialect. First INLINES $ref/$defs and collapses
+    nullable anyOf (so Pydantic-generated schemas with nested models work), then conservatively maps the
+    supported keywords. Raises SchemaTranslationError only on genuinely inexpressible constructs
+    (recursive $ref, multi-type unions). Pure + unit-testable."""
     if not isinstance(schema, dict):
         raise SchemaTranslationError("schema node is not an object")
-    present_reject = _REJECT_IF_PRESENT.intersection(schema.keys())
-    if present_reject:
-        raise SchemaTranslationError(
-            f"schema uses constructs Gemini cannot represent faithfully: {sorted(present_reject)}")
+    defs = schema.get("$defs") or schema.get("definitions") or {}
+    inlined = _inline_refs({k: v for k, v in schema.items() if k not in ("$defs", "definitions")}, defs)
+    return _translate_node(inlined)
+
+
+def _translate_node(schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        raise SchemaTranslationError("schema node is not an object")
     out: dict[str, Any] = {}
     for k, v in schema.items():
-        if k == "additionalProperties":
-            continue  # Gemini has no equivalent; harmless to drop (upstream validation still forbids extras)
         if k not in _SUPPORTED:
-            continue  # drop unknown non-semantic keywords
+            continue  # drop unknown/non-semantic keywords (additionalProperties, title, default, ...)
         if k == "properties" and isinstance(v, dict):
-            out["properties"] = {pk: translate_schema(pv) for pk, pv in v.items()}
+            out["properties"] = {pk: _translate_node(pv) for pk, pv in v.items()}
         elif k == "items" and isinstance(v, dict):
-            out["items"] = translate_schema(v)
+            out["items"] = _translate_node(v)
         else:
             out[k] = v
     return out
