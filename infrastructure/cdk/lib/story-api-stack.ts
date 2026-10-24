@@ -316,8 +316,11 @@ export class StoryApiStack extends cdk.Stack {
         // Reconcile the deployed-vs-source drift (Phase B/C finding): the live dev worker carries the four
         // EditPlan v2 creative-freedom flags = "1". They are part of the FROZEN EditPlan v2 behavior and must
         // not be dropped by this deploy. Context-gated (editplanV2Flags), defaulting ON so the dev deploy
-        // preserves the live values; the escape hatch stays off.
-        ...(((this.node.tryGetContext("editplanV2Flags") as string) ?? "1") === "1"
+        // preserves the live values; the escape hatch stays off. GATED to development/beta ONLY — a default
+        // or `test` stack must carry NONE of these flags (the gate is (development || beta), same as the
+        // editplanV2 block below), so this never leaks into unrelated environments.
+        ...((environment === "development" || environment === "beta")
+            && ((this.node.tryGetContext("editplanV2Flags") as string) ?? "1") === "1"
           ? {
               STORY_EDITPLAN_OBJECTIVE_DIRECTIVES: "1",
               STORY_EDITPLAN_BEST_VALID_RETENTION: "1",
