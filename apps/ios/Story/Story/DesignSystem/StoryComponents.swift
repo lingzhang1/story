@@ -82,7 +82,10 @@ struct StoryUnavailableButton: View {
 /// but the native app has no real media yet. Deterministic by key so a given
 /// surface always shows the same tone. See Assets.xcassets/ph_*.
 enum StoryPlaceholderPhoto {
-    static let all = ["ph_alpine", "ph_trail", "ph_lake", "ph_city"]
+    // Mosaic placeholders only. The home hero art (ph_city_hero / ph_alpine_hero)
+    // is intentionally NOT in this pool — those are pre-cropped 16:9 hero images,
+    // not generic fallback tiles.
+    static let all = ["ph_trail", "ph_lake"]
     static func name(_ i: Int) -> String { all[((i % all.count) + all.count) % all.count] }
 }
 
@@ -97,6 +100,11 @@ struct StoryImageCard: View {
     var titleSize: CGFloat = 21
     var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
+        // Fixed 16:9 card. The hero art is authored at EXACTLY 16:9 (768x432) to match
+        // this box, so scaledToFill fills it edge-to-edge with ZERO crop. Color.clear with
+        // aspectRatio(.fit) is the self-sizing shape (height derives from width inside a
+        // VStack/ScrollView); the image is an overlay clipped to that box, so Button vs
+        // NavigationLink wrappers both render the identical frame.
         Color.clear
             .aspectRatio(16.0/9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
@@ -104,6 +112,7 @@ struct StoryImageCard: View {
                 Image(image).resizable().scaledToFill()
                     .opacity(enabled ? 0.75 : 0.4)
             )
+            .clipped()
             .overlay(
                 LinearGradient(
                     stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
