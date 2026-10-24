@@ -184,13 +184,6 @@ struct CreativeDirectionView: View {
                 requireAuthThen { Task { await createAndGo() } }
             }
             .disabled(isCreating).opacity(isCreating ? 0.6 : 1)
-
-            // Secondary: the original guided path (feel → understood → guide) remains available for users who
-            // want to shape feeling up front. Optional, never required.
-            Button("Shape the feeling first →") { step = .feel }
-                .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
-                .frame(maxWidth: .infinity)
-                .disabled(isCreating)
         }
     }
 
