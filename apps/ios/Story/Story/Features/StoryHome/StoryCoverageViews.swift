@@ -225,6 +225,10 @@ struct StoryGuideV2Section: View {
     /// Which scene is featured (hero). Defaults to the first NOT-yet-covered scene, else the first.
     @State private var featuredId: String?
     @State private var showAllOthers = false
+    /// Whole section is CLOSED UP by default — the shooting script is a reference, not the home screen's
+    /// centerpiece. Tap the header chevron to open the scene cards. Collapsed state keeps the title + scene
+    /// count + Update Guide visible as a discoverable spine.
+    @State private var sectionExpanded = false
 
     private func stateFor(_ sceneId: String) -> NarrativeCoverageDTO? {
         coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == sceneId })?.state
@@ -258,7 +262,7 @@ struct StoryGuideV2Section: View {
         VStack(alignment: .leading, spacing: 14) {
             if let g = guide, !g.scenes.isEmpty {
                 header(g)
-                if let hero = resolvedFeatured(g) {
+                if sectionExpanded, let hero = resolvedFeatured(g) {
                     FeaturedSceneCard(
                         scene: hero,
                         number: sceneNumber(g, hero),
@@ -274,7 +278,7 @@ struct StoryGuideV2Section: View {
                     let others = g.scenes.filter { $0.id != hero.id }
                     if !others.isEmpty { otherScenes(others) }
                 }
-                if let pendingLine {
+                if sectionExpanded, let pendingLine {
                     Text(pendingLine).font(StoryTheme.body(12).italic())
                         .foregroundStyle(StoryTheme.cream.opacity(0.34))
                         .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
@@ -300,8 +304,19 @@ struct StoryGuideV2Section: View {
     @ViewBuilder
     private func header(_ g: StoryGuideV2DTO) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            StoryEyebrow(text: "Your Shooting Script")
-            if !g.framingSummary.isEmpty {
+            Button { withAnimation { sectionExpanded.toggle() } } label: {
+                HStack(spacing: 8) {
+                    StoryEyebrow(text: "Your Shooting Script")
+                    Spacer(minLength: 8)
+                    Image(systemName: sectionExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.45))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("shooting-script-disclosure")
+            if sectionExpanded, !g.framingSummary.isEmpty {
                 Text(g.framingSummary)
                     .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.cream.opacity(0.6))
                     .fixedSize(horizontal: false, vertical: true)
