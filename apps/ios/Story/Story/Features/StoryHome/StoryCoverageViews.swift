@@ -619,6 +619,18 @@ private struct OtherSceneRow: View {
 // Renders NOTHING when storyIdea is nil (the whole section is omitted by the
 // parent via `if coverage?.storyIdea != nil`). This view assumes a non-nil idea.
 
+// Contextual recommendation card. Visually RELATED to the Guide's cinematic scene card — same dark/serif/gold
+// language, prominent (optional) reference image, bordered surface — but deliberately NOT identical to a
+// persistent Guide scene: it is MORE COMPACT (smaller image + title, lighter chrome), carries an "AI
+// suggestion" badge (a contextual recommendation, not a planned scene), and omits the Guide's SCENE NN /
+// pin / coverage-status / expandable "Why this matters" machinery. It answers three questions fast — what to
+// capture (title), why it helps (a short line), and, WHEN the contract actually carries one, how to capture
+// it — then continues into the existing Director flow via "Show me".
+//
+// Decision-5 contract honesty: the DTO has only {title, description, rationale?}. When `rationale` is present
+// it is the WHY and `description` is the concept/how; we render a labelled "How to capture it" panel from
+// `description` ONLY then. When `rationale` is ABSENT there is a single text field, so it renders as one
+// unlabelled concept/why line and NO "How to capture it" label is fabricated.
 struct StoryIdeaSection: View {
     let idea: CoverageStoryIdeaV2DTO
     /// Tapping routes into the existing Show Me / Director flow (high-level -> executable).
@@ -629,63 +641,118 @@ struct StoryIdeaSection: View {
     /// inference or image provider, never a decorative fetch). Defaults to nil so the card is safe before the
     /// caller wires it.
     var resolveGuideImage: (_ dimensionId: String) async -> SceneImageDTO? = { _ in nil }
+    /// OPTIONAL one-line "why it complements the Story" tag shown in the footer (e.g. "Complements your
+    /// landscape footage"). Deterministic caller-supplied context; nil => omitted. Never fabricated here.
+    var complementNote: String? = nil
 
     @State private var image: SceneImageDTO?
 
+    /// True when the contract carries BOTH a why (`rationale`) and a separate concept/how (`description`),
+    /// so the card can honestly show a distinct "How to capture it" panel. When false there is only one
+    /// text field and we never label it a capture instruction (decision 5).
+    private var hasDistinctHowTo: Bool {
+        guard let r = idea.rationale, !r.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return !idea.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    /// The WHY line. Prefer rationale; fall back to description when rationale is absent (then there is no
+    /// separate how-to panel).
+    private var whyLine: String { idea.rationale ?? idea.description }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Eyebrow — same gold ✦ language as the Guide, but distinct copy so it never reads as a permanent
-            // Guide scene (it is a contextual recommendation).
-            HStack(spacing: 6) {
-                Text("✦").font(.system(size: 9)).foregroundStyle(StoryTheme.gold.opacity(0.85))
+        VStack(alignment: .leading, spacing: 0) {
+            // Eyebrow row — same gold ✦ language as the Guide, distinct copy + an "AI suggestion" badge so it
+            // reads as a contextual recommendation, never a permanent Guide scene.
+            HStack(alignment: .center, spacing: 6) {
+                Text("✦").font(.system(size: 10)).foregroundStyle(StoryTheme.gold.opacity(0.9))
                 StoryEyebrow(text: "A moment worth capturing")
+                Spacer(minLength: 8)
+                Text("AI suggestion")
+                    .font(StoryTheme.body(11, .medium))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.55))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(StoryTheme.cream.opacity(0.07), in: Capsule())
             }
+            .padding(.bottom, 12)
 
             // Optional visual reference — ONLY a Guide image that already exists for the targeted scene
-            // (decision 5). Omitted entirely otherwise; never a placeholder or decorative image.
+            // (decision 5). Omitted entirely otherwise; never a placeholder or decorative image. More compact
+            // than the Guide hero (160 vs 210) with a source-host chip, matching the mockup.
             if let img = image, let url = URL(string: img.imageURL) {
-                AsyncImage(url: url) { phase in
-                    if case let .success(i) = phase {
-                        i.resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        Rectangle().fill(StoryTheme.surfaceAlt.opacity(0.5))
+                ZStack(alignment: .bottomLeading) {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.25))) { phase in
+                        if case let .success(i) = phase {
+                            i.resizable().scaledToFill()
+                        } else {
+                            LinearGradient(colors: [StoryTheme.cream.opacity(0.06), StoryTheme.cream.opacity(0.02)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                        }
+                    }
+                    .frame(height: 160).frame(maxWidth: .infinity).clipped()
+                    if let host = sourceHost(img) {
+                        Text(host).font(StoryTheme.body(11))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.9))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(StoryTheme.ink.opacity(0.55), in: Capsule())
+                            .padding(10)
                     }
                 }
-                .frame(height: 150).frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: StoryTheme.field))
-                .overlay(alignment: .bottomLeading) {
-                    if !img.attributionText.isEmpty {
-                        Text(img.attributionText).font(StoryTheme.body(9)).foregroundStyle(StoryTheme.cream.opacity(0.7))
-                            .padding(6).background(.black.opacity(0.35), in: Capsule()).padding(8)
-                    }
-                }
+                .padding(.bottom, 12)
             }
 
+            // What to capture — the idea title (serif, slightly smaller than the Guide hero's 22 => compact).
             Text(idea.title)
-                .font(StoryTheme.display(20))
+                .font(StoryTheme.display(19))
                 .foregroundStyle(StoryTheme.cream)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 8)
 
-            // WHY it helps — prefer rationale; fall back to description. Never labelled as a precise
-            // capture instruction (decision 5) — it is the concept / why.
-            Text(idea.rationale ?? idea.description)
+            // Why it helps — short, NOT labelled as a precise capture instruction (decision 5).
+            Text(whyLine)
                 .font(StoryTheme.body(14))
                 .foregroundStyle(StoryTheme.cream.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Show me — unchanged Director entry; styled like the Guide's Shoot affordance.
-            Button(action: onShowMe) {
-                HStack(spacing: 4) {
-                    Text("Show me").font(StoryTheme.body(14, .semibold))
-                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .semibold))
+            // How to capture it — ONLY when the contract carries a distinct concept/how (rationale present).
+            // Labelled honestly; never fabricated. Rendered as a compact boxed panel with a video glyph,
+            // matching the mockup and the Guide's "How to shoot" visual language.
+            if hasDistinctHowTo {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "video").font(.system(size: 12)).foregroundStyle(StoryTheme.cream.opacity(0.85))
+                        Text("How to capture it").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.cream.opacity(0.9))
+                    }
+                    Text(idea.description).font(StoryTheme.body(13))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.6)).fixedSize(horizontal: false, vertical: true)
                 }
-                .foregroundStyle(StoryTheme.ink)
-                .padding(.horizontal, 18).padding(.vertical, 10)
-                .background(StoryTheme.cream, in: Capsule())
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(StoryTheme.cream.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.top, 12)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 2)
-            .accessibilityHint("Optional idea — opens capture guidance")
+
+            // Footer — optional complement note on the left, "Show me" (unchanged Director entry) on the right.
+            HStack(alignment: .center) {
+                if let note = complementNote, !note.isEmpty {
+                    Text(note)
+                        .font(StoryTheme.body(12))
+                        .foregroundStyle(StoryTheme.cream.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button(action: onShowMe) {
+                    HStack(spacing: 4) {
+                        Text("Show me").font(StoryTheme.body(14, .semibold))
+                        Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(StoryTheme.ink)
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .background(StoryTheme.cream, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Optional idea — opens capture guidance")
+            }
+            .padding(.top, 14)
         }
         .padding(16)
         .background(StoryTheme.surfaceAlt.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
@@ -697,5 +764,13 @@ struct StoryIdeaSection: View {
             guard let dim = idea.targetStoryGuideDimensionId, !dim.isEmpty else { image = nil; return }
             image = await resolveGuideImage(dim)
         }
+    }
+
+    /// Source-host chip label (reuses the Guide card's rule): prefer the photographer profile host, else the
+    /// source URL host; nil => no chip.
+    private func sourceHost(_ img: SceneImageDTO) -> String? {
+        if let h = URL(string: img.photographerURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
+        if let h = URL(string: img.sourceURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
+        return nil
     }
 }
