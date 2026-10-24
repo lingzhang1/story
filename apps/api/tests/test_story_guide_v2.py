@@ -35,10 +35,12 @@ def _body() -> dict:
     return {"story_id": str(uuid.uuid4()), "creative_intent": {"summary": "Three days in New York"}, "scope": {}}
 
 
-def test_v2_route_404_when_flag_off(monkeypatch):
+def test_v2_available_regardless_of_flag(monkeypatch):
+    # v2 is now the SOLE generation path — no STORY_GUIDE_V2 gate. It works even with the flag unset/off.
     c = _client(False, monkeypatch)
     r = c.post("/v1/story-guide-v2", json=_body())
-    assert r.status_code == 404
+    assert r.status_code == 200, r.text
+    assert r.json()["schema_version"] == "story_guide/2"
 
 
 def test_v2_returns_scene_shooting_script_when_flag_on(monkeypatch):
@@ -56,12 +58,13 @@ def test_v2_returns_scene_shooting_script_when_flag_on(monkeypatch):
     assert "image_id" not in s0 and "source_url" not in s0 and "attribution" not in s0
 
 
-def test_v1_story_guide_unchanged_with_v2_enabled(monkeypatch):
+def test_v1_story_guide_generation_retired_410(monkeypatch):
+    # v1 guide GENERATION is retired: /v1/story-guide returns 410 Gone (use v2). v1 persisted guides still
+    # render client-side as a legacy fallback — only generation is removed.
     c = _client(True, monkeypatch)
     r = c.post("/v1/story-guide", json=_body())
-    assert r.status_code == 200, r.text
-    assert r.json()["schema_version"] == "story_guide/1"
-    assert "dimensions" in r.json() and "scenes" not in r.json()
+    assert r.status_code == 410, r.text
+    assert "retired" in r.json()["detail"]
 
 
 def test_mint_ids_canonicalizes_and_strips_fabricated_image_fields():

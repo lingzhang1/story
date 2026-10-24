@@ -182,10 +182,11 @@ def _refine_body() -> dict:
     }
 
 
-def test_refine_route_404_when_flag_off(monkeypatch):
+def test_refine_available_regardless_of_flag(monkeypatch):
+    # refine (v2.1) is always available now that v2 is the sole guide path (no STORY_GUIDE_V2 gate).
     c = _client(False, monkeypatch)
     r = c.post("/v1/story-guide-refine", json=_refine_body())
-    assert r.status_code == 404
+    assert r.status_code == 200, r.text
 
 
 def test_refine_returns_result_with_changes_when_on(monkeypatch):

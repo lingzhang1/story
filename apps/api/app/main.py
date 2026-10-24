@@ -1183,29 +1183,13 @@ def create_app() -> FastAPI:
         engine: StoryGuideEngine = Depends(get_story_guide_engine),
         principal: Principal = Depends(optional_user),
     ) -> StoryGuideContract:
-        """Generate the persistent StoryGuide from CreativeIntent (Milestone E2-a, FROZEN). ONCE per
-        Story, text-only, Opus 4.6. Server mints canonical stable dimension/possibility ids. On failure
-        return 503 so Story creation is NOT lost and NO generic Guide is fabricated — the client keeps
-        CreativeIntent and retries."""
-        correlation_id = str(uuid4())
-        started = time.monotonic()
-        base = {"operation": "story_guide", "correlation_id": correlation_id,
-                "task": "story_guide.generate", "prompt_version": "story_guide/v1",
-                "schema_version": "story_guide/1"}
-        try:
-            guide = engine.generate(GuideInput(
-                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
-                source_creative_intent_version=body.source_creative_intent_version))
-        except GuideUnavailableError as e:
-            log.warning("story_guide_unavailable",
-                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
-                       "success": False, "error": str(e)[:300]})
-            raise HTTPException(status_code=503,
-                detail="story_guide_unavailable: could not generate; preserve CreativeIntent and retry")
-        log.info("story_guide_resolved",
-            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
-                   "success": True, "dimension_count": len(guide.dimensions)})
-        return guide
+        """RETIRED (owner 2026-10-24): v1 Story Guide GENERATION is removed — the shooting-script
+        /v1/story-guide-v2 (story_guide/2) is the sole generation path. Returns 410 Gone so a stale client
+        gets a clear signal to use v2 (not a silent 404). The story_guide/1 CONTRACT/decode is retained
+        elsewhere so previously-persisted v1 guides still RENDER as a legacy fallback; only generation is gone."""
+        raise HTTPException(
+            status_code=410,
+            detail="story_guide_v1_retired: v1 guide generation is removed; use /v1/story-guide-v2")
 
     @app.post("/v1/story-guide-v2", response_model=StoryGuideV2Contract, status_code=200)
     def story_guide_v2(
@@ -1213,13 +1197,10 @@ def create_app() -> FastAPI:
         engine=Depends(get_story_guide_v2_engine),
         principal: Principal = Depends(optional_user),
     ) -> StoryGuideV2Contract:
-        """Generate the AI SHOOTING SCRIPT (story_guide/2) from CreativeIntent. ADDITIVE/versioned —
-        v1 /v1/story-guide is unchanged. FEATURE-GATED by STORY_GUIDE_V2: when the flag is off the
-        route returns 404 so a stale client cannot reach an un-rolled-out path. Same contract as v1
-        on failure: 503, preserve CreativeIntent, NO fabricated Guide. Server mints canonical stable
-        scene ids; the model never emits image ids/urls/attribution."""
-        if os.environ.get("STORY_GUIDE_V2") != "1":
-            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        """Generate the AI SHOOTING SCRIPT (story_guide/2) from CreativeIntent. This is now the SOLE
+        guide-generation path (v1 /v1/story-guide generation is retired -> 410; v1 persisted guides still
+        render client-side as a legacy fallback). On failure: 503, preserve CreativeIntent, NO fabricated
+        Guide. Server mints canonical stable scene ids; the model never emits image ids/urls/attribution."""
         correlation_id = str(uuid4())
         started = time.monotonic()
         base = {"operation": "story_guide_v2", "correlation_id": correlation_id,
@@ -1253,11 +1234,9 @@ def create_app() -> FastAPI:
         keep their stable ids, genuinely-new scenes get fresh ids beyond the max existing ordinal
         (retired ids never reused), and dropped uncaptured+unpinned scenes are archived (recorded).
 
-        ADDITIVE/versioned — frozen /v1/story-guide and the generate-once /v1/story-guide-v2 are
-        unchanged. FEATURE-GATED by STORY_GUIDE_V2 (404 when off). On failure: 503, preserve the
-        CURRENT Guide, NO fabrication — the client keeps the existing shooting script and retries."""
-        if os.environ.get("STORY_GUIDE_V2") != "1":
-            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        ADDITIVE/versioned. v1 generation is retired (410); v2 is the sole guide path, so refine is always
+        available (no STORY_GUIDE_V2 gate). On failure: 503, preserve the CURRENT Guide, NO fabrication —
+        the client keeps the existing shooting script and retries."""
         correlation_id = str(uuid4())
         started = time.monotonic()
         base = {"operation": "story_guide_refine", "correlation_id": correlation_id,

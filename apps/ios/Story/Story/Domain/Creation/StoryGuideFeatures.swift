@@ -24,7 +24,10 @@ enum StoryGuideFeatures {
     }
     static let guideV2Key = "STORY_GUIDE_V2"
     static func setGuideV2Override(_ on: Bool) { UserDefaults.standard.set(on, forKey: guideV2Key) }
-    private static let _guideV2Default = false   // OFF until device acceptance
+    // v2 (shooting script) is now the ONLY generation path (owner 2026-10-24: v1 generation removed; v1
+    // persisted guides still RENDER as a legacy fallback). Defaults ON; the env "0" / UserDefaults override
+    // remain as a debug kill-switch only.
+    private static let _guideV2Default = true
 
     // MARK: - Scene reference images (Unsplash via backend proxy)
 
@@ -41,5 +44,5 @@ enum StoryGuideFeatures {
     }
     static let sceneImagesKey = "STORY_SCENE_IMAGES"
     static func setSceneImagesOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: sceneImagesKey) }
-    private static let _sceneImagesDefault = false   // OFF until Production API key provisioned
+    private static let _sceneImagesDefault = true   // ships with v2; backend provisioned. Env "0" disables.
 }
