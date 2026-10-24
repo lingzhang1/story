@@ -146,20 +146,28 @@ struct StoryHomeView: View {
                                 capturePossibilityLabel: nil))
                         },
                         resolveGuideImage: { dimId in
-                            // Decision 5: reuse an EXISTING Guide image ONLY when the idea targets a CURRENT
-                            // Guide scene that has a reference query — the same SceneImageService the Guide
-                            // uses, keyed by the matched scene id, the compliant GENERIC scene query (never
-                            // the idea's free-form text). No new provider, no decorative fetch.
-                            //
-                            // NO cross-scene fallback: borrowing an unrelated scene's image (e.g. an OPENING
-                            // "boots on the trail" shot for a "quiet connection" idea) misrepresents the
-                            // suggestion. A relevant image for an UNTARGETED idea would need a backend-provided
-                            // visual_reference_query on the Story Idea contract (deferred) — until then an
-                            // untargeted idea renders text-only, which is honest.
-                            guard !dimId.isEmpty,
-                                  let scene = guideV2?.scenes.first(where: { $0.id == dimId }),
-                                  let q = scene.visualReferenceQuery else { return nil }
-                            return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
+                            // Reuse the Guide's SceneImageService (same backend proxy, metadata-only hotlink,
+                            // server-side sanitize + hard-bound of the query). Two compliant query sources, in
+                            // order of how curated they are:
+                            //   1) The idea's TARGET Guide scene's server-authored visual_reference_query.
+                            //   2) A SHORT GENERIC phrase derived from the idea TITLE (e.g. "Quiet Connection
+                            //      Off the Trail") — so the image is about THIS idea, not an unrelated scene.
+                            //      We send only the title (a scene-like phrase), never the description (which
+                            //      can carry more specific user-context wording); the server re-sanitizes and
+                            //      rejects URLs/emails/overlong input regardless.
+                            // Any miss => nil => text-only card. No new provider, no image bytes re-hosted.
+                            if !dimId.isEmpty,
+                               let scene = guideV2?.scenes.first(where: { $0.id == dimId }),
+                               let q = scene.visualReferenceQuery,
+                               let img = await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id) {
+                                return img
+                            }
+                            let ideaQuery = idea.title
+                                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?—-"))
+                            guard ideaQuery.count >= 3 else { return nil }
+                            return await sceneImages.fetch(
+                                query: ideaQuery, storyId: story.id,
+                                sceneId: "story-idea:\(idea.targetStoryGuideDimensionId ?? "untargeted")")
                         })
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }

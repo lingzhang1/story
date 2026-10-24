@@ -687,30 +687,30 @@ struct StoryIdeaSection: View {
             }
             .padding(.bottom, 12)
 
-            // Optional visual reference — ONLY a Guide image that already exists for the targeted scene
-            // (decision 5). Omitted entirely otherwise; never a placeholder or decorative image. More compact
-            // than the Guide hero (160 vs 210) with a source-host chip, matching the mockup.
+            // Optional visual reference — a reference image for THIS idea (see the resolver). Omitted
+            // entirely when none resolves; never a placeholder. More compact than the Guide hero (160 vs 210).
+            // No decorative source-host chip — only the REQUIRED Unsplash "Photo by X" credit (below).
             if let img = image, let url = URL(string: img.imageURL) {
-                ZStack(alignment: .bottomLeading) {
-                    AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.25))) { phase in
-                        if case let .success(i) = phase {
-                            i.resizable().scaledToFill()
-                        } else {
-                            LinearGradient(colors: [StoryTheme.cream.opacity(0.06), StoryTheme.cream.opacity(0.02)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-                        }
-                    }
-                    .frame(height: 160).frame(maxWidth: .infinity).clipped()
-                    if let host = sourceHost(img) {
-                        Text(host).font(StoryTheme.body(11))
-                            .foregroundStyle(StoryTheme.cream.opacity(0.9))
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(StoryTheme.ink.opacity(0.55), in: Capsule())
-                            .padding(10)
+                AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.25))) { phase in
+                    if case let .success(i) = phase {
+                        i.resizable().scaledToFill()
+                    } else {
+                        LinearGradient(colors: [StoryTheme.cream.opacity(0.06), StoryTheme.cream.opacity(0.02)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
                     }
                 }
+                .frame(height: 160).frame(maxWidth: .infinity).clipped()
                 .clipShape(RoundedRectangle(cornerRadius: StoryTheme.field))
-                .padding(.bottom, 12)
+                .padding(.bottom, 6)
+                // Required Unsplash attribution ("Photo by <name> on Unsplash") — small + subtle, linking to
+                // the photographer/source. Mandatory whenever an Unsplash image is displayed.
+                if !img.attributionText.isEmpty, let u = URL(string: img.sourceURL) {
+                    Link(destination: u) {
+                        Text(img.attributionText).font(StoryTheme.body(10))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.35)).lineLimit(1)
+                    }
+                    .padding(.bottom, 10)
+                }
             }
 
             // What to capture — the idea title (serif, slightly smaller than the Guide hero's 22 => compact).
@@ -772,21 +772,10 @@ struct StoryIdeaSection: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.08), lineWidth: 1))
         .padding(.top, 20)
         .task(id: idea.targetStoryGuideDimensionId) {
-            // Reuse an EXISTING Guide image (decision 5). Always ask the resolver — passing the target
-            // dimension id when present, else "" — and let the RESOLVER own the policy: an exact-target
-            // image first, and (caller's choice) a relevant Guide scene's already-compliant image as a
-            // fallback so an untargeted idea can still carry a Story-consistent reference. The resolver
-            // returns nil for an unavailable/irrelevant image => text-only card. Still no new inference or
-            // image provider; only the Guide's generic reference queries are ever sent.
+            // Resolve a reference image for THIS idea (resolver prefers the target scene's curated query,
+            // then a short generic phrase from the idea title). Always ask — pass the target id when present,
+            // else "". nil => text-only card. No image bytes re-hosted; required attribution shown with it.
             image = await resolveGuideImage(idea.targetStoryGuideDimensionId ?? "")
         }
-    }
-
-    /// Source-host chip label (reuses the Guide card's rule): prefer the photographer profile host, else the
-    /// source URL host; nil => no chip.
-    private func sourceHost(_ img: SceneImageDTO) -> String? {
-        if let h = URL(string: img.photographerURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
-        if let h = URL(string: img.sourceURL)?.host, !h.isEmpty { return h.replacingOccurrences(of: "www.", with: "") }
-        return nil
     }
 }
