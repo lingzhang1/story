@@ -390,9 +390,22 @@ struct StoryHomeView: View {
                    !CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
                     Task { await musicCoord.ensure(for: story, guideFramingSummary: gv2.framingSummary) }
                 }
-                // Coverage: the existing Coverage/2 state (cached) is shown as-is, keyed by stable scene id —
-                // we do NOT regenerate the Guide on ordinary Coverage updates (owner Phase 5). The Coverage/2
-                // mapper already keys state by the Guide's stable ids, which v2 scenes preserve.
+                // Coverage/2 for a v2 shooting script. The mapper keys state by the scene's stable id, so we
+                // adapt the scenes onto the dimensions shape it expects (no new identity system). This is
+                // GATED by isStale inside recomputeIfNeeded + the process-wide CoverageRecomputeGate, so a
+                // plain re-open with unchanged moments/intent/guide is a NO-OP (no model call, no queue
+                // pressure — the per-moment storm fix is intact). It fires only when a Moment/intent/guide
+                // actually changed, OR when there is no valid snapshot yet (first coverage, or recovery of a
+                // previously-failed one). Without this call a v2 Story NEVER computed coverage at all, so
+                // every scene stayed "Not captured" and no Story Idea appeared.
+                let covGuide = gv2.asCoverageGuideDTO()
+                let guideFingerprint = coordinator.guideFingerprint(for: story.id)
+                let engineInputs = engine.currentInputs(for: story)
+                if !engineInputs.completedMUValues.isEmpty {
+                    let fresh = await engine.recomputeIfNeeded(
+                        for: story, guide: covGuide, guideFingerprint: guideFingerprint)
+                    if let fresh { coverage = fresh }   // keep previous on failure
+                }
                 return
             }
         }
