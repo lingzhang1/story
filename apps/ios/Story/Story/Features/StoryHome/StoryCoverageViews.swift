@@ -310,16 +310,29 @@ struct StoryGuideV2Section: View {
                 pill("\(g.scenes.count) scene\(g.scenes.count == 1 ? "" : "s")", gold: true)
                 if let ev = eventLabel, !ev.isEmpty { pill(ev, gold: false) }
                 Spacer(minLength: 8)
-                Button { updateText = ""; refineError = nil; showUpdateSheet = true } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "wand.and.stars").font(.system(size: 11, weight: .semibold))
-                        Text("Update Guide").font(StoryTheme.body(12, .medium))
-                    }.foregroundStyle(StoryTheme.gold)
-                }
-                .buttonStyle(.plain)
-                .disabled(isRefining)
-                .accessibilityIdentifier("update-guide-button")
             }
+            // Update Guide — a PROMINENT, clearly-tappable action on its own row (not a faint inline link
+            // crowded beside the info pills). This is a primary, important feature; give it a visible,
+            // bordered gold affordance that reads as a button.
+            Button { updateText = ""; refineError = nil; showUpdateSheet = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars").font(.system(size: 13, weight: .semibold))
+                    Text("Update Guide").font(StoryTheme.body(14, .semibold))
+                    Spacer(minLength: 0)
+                    Text("Tell your director what changed")
+                        .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.gold.opacity(0.6))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(StoryTheme.gold)
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(StoryTheme.gold.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(StoryTheme.gold.opacity(0.4), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(isRefining)
+            .accessibilityIdentifier("update-guide-button")
+            .padding(.top, 2)
             if isRefining {
                 Text("Updating your shooting script…")
                     .font(StoryTheme.body(12).italic()).foregroundStyle(StoryTheme.cream.opacity(0.4))

@@ -146,32 +146,20 @@ struct StoryHomeView: View {
                                 capturePossibilityLabel: nil))
                         },
                         resolveGuideImage: { dimId in
-                            // Decision 5: reuse ONLY an EXISTING Guide image via the same SceneImageService
-                            // the Guide uses — the compliant GENERIC scene reference query, never the idea's
-                            // free-form text, no new provider, no decorative fetch.
-                            //   1) Exact target: the Guide scene the idea points at (if it has a query).
-                            //   2) Fallback (when there is no usable target): borrow a RELEVANT Guide scene's
-                            //      already-compliant image so an untargeted idea still carries a
-                            //      Story-consistent reference — prefer the first not-yet-covered scene with a
-                            //      query, else the first scene with one.
-                            // Any miss => nil => text-only card.
-                            func imageFor(_ scene: StoryGuideSceneDTO) async -> SceneImageDTO? {
-                                guard let q = scene.visualReferenceQuery else { return nil }
-                                return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
-                            }
-                            if !dimId.isEmpty,
-                               let target = guideV2?.scenes.first(where: { $0.id == dimId }),
-                               let img = await imageFor(target) {
-                                return img
-                            }
-                            guard let scenes = guideV2?.scenes, !scenes.isEmpty else { return nil }
-                            func isCovered(_ sceneId: String) -> Bool {
-                                coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == sceneId })?.state == .strong
-                            }
-                            let fallback = scenes.first(where: { !isCovered($0.id) && $0.visualReferenceQuery != nil })
-                                ?? scenes.first(where: { $0.visualReferenceQuery != nil })
-                            guard let fallback else { return nil }
-                            return await imageFor(fallback)
+                            // Decision 5: reuse an EXISTING Guide image ONLY when the idea targets a CURRENT
+                            // Guide scene that has a reference query — the same SceneImageService the Guide
+                            // uses, keyed by the matched scene id, the compliant GENERIC scene query (never
+                            // the idea's free-form text). No new provider, no decorative fetch.
+                            //
+                            // NO cross-scene fallback: borrowing an unrelated scene's image (e.g. an OPENING
+                            // "boots on the trail" shot for a "quiet connection" idea) misrepresents the
+                            // suggestion. A relevant image for an UNTARGETED idea would need a backend-provided
+                            // visual_reference_query on the Story Idea contract (deferred) — until then an
+                            // untargeted idea renders text-only, which is honest.
+                            guard !dimId.isEmpty,
+                                  let scene = guideV2?.scenes.first(where: { $0.id == dimId }),
+                                  let q = scene.visualReferenceQuery else { return nil }
+                            return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
                         })
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
