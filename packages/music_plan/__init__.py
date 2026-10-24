@@ -39,7 +39,8 @@ from contracts.schemas.ai_contracts import (
     SoundtrackRole,
     TrackSelectionCriteria,
 )
-from model_gateway import ModelGateway, StructuredRequest
+from model_gateway import ModelGateway, StructuredRequest, StructuredOutputError
+from pydantic import ValidationError
 
 PROMPT_VERSION = "music_plan/1"
 TASK = "music_plan.generate"
@@ -178,16 +179,38 @@ def _to_contract(data: dict, inputs: MusicPlanInputs, *, model_id: str) -> Music
     the model's character snapshot straight through (it echoes the direction, it does not override it)."""
     char = data.get("character", {}) or {}
     character = MusicCharacter(mood_tags=char.get("mood_tags", []) or [], energy=char.get("energy"))
-    arc = [
-        EnergyArcRegion(
-            label=r.get("label", ""),
-            start_fraction=r.get("start_fraction", 0.0),
-            end_fraction=r.get("end_fraction", 1.0),
-            intensity=r.get("intensity"),
-            note=r.get("note"),
-        )
-        for r in (data.get("energy_arc", []) or [])
-    ]
+    # Normalize energy_arc before strict validation (adapter-side normalization; the contract VALIDATES the
+    # normalized result). A direct-provider model (gpt-5.1) occasionally returns a fraction out of [0,1] (e.g.
+    # a percentage or seconds) or an intensity outside the enum — previously that raised a raw pydantic
+    # ValidationError, which escaped as a 500 and made the app drop music ungracefully (the music page
+    # flashed then jumped to creation with no music). Clamp fractions; keep only valid intensities; a region
+    # that still cannot be coerced is dropped rather than crashing the whole plan.
+    _VALID_INTENSITY = {"low", "rising", "high", "falling"}
+    def _frac(v: Any, default: float) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return default
+        if f != f:  # NaN
+            return default
+        return max(0.0, min(1.0, f))
+    arc: list[EnergyArcRegion] = []
+    for r in (data.get("energy_arc", []) or []):
+        if not isinstance(r, dict):
+            continue
+        intensity = r.get("intensity")
+        if intensity not in _VALID_INTENSITY:
+            continue  # cannot guess a categorical direction — skip this region, keep the rest
+        start = _frac(r.get("start_fraction"), 0.0)
+        end = _frac(r.get("end_fraction"), 1.0)
+        if end < start:
+            start, end = end, start
+        try:
+            arc.append(EnergyArcRegion(
+                label=r.get("label", "") or "", start_fraction=start, end_fraction=end,
+                intensity=intensity, note=r.get("note")))
+        except ValidationError:
+            continue  # residual bad region -> drop, do not fail the plan
     strat = data.get("audio_strategy", {}) or {}
     audio_strategy = AudioStrategy(
         soundtrack_role=strat.get("soundtrack_role"),
@@ -220,6 +243,18 @@ def _to_contract(data: dict, inputs: MusicPlanInputs, *, model_id: str) -> Music
     )
 
 
+def _to_contract_safe(data: dict, inputs: MusicPlanInputs, *, model_id: str) -> MusicPlanContract:
+    """_to_contract wrapped so a residual pydantic ValidationError (a model value the normalizers could not
+    coerce — e.g. an out-of-vocabulary soundtrack_role/native_audio_priority/energy) becomes a
+    StructuredOutputError. The endpoint already maps that to a graceful 503 -> the client falls back to
+    no-music creation, instead of an unhandled 500 that made the music page flash and skip. NEVER fabricates:
+    it does not invent a plan, it declares the structured output unusable."""
+    try:
+        return _to_contract(data, inputs, model_id=model_id)
+    except ValidationError as e:
+        raise StructuredOutputError(f"music plan failed canonical validation: {e}") from e
+
+
 class RealMusicPlanEngine:
     """Opus 4.6 via the generic ModelGateway + the frozen music_plan/1 prompt. One call, structured
     tool-use. NEVER fabricates: a provider/model failure propagates (ProviderError/StructuredOutputError)
@@ -246,7 +281,7 @@ class RealMusicPlanEngine:
             "output_tokens": (u.output_tokens if u else 0) or 0,
             "regions": len(result.data.get("energy_arc", []) or []),
         }
-        return _to_contract(result.data, inputs, model_id=MODEL_ID)
+        return _to_contract_safe(result.data, inputs, model_id=MODEL_ID)
 
 
 __all__ = [
