@@ -168,7 +168,13 @@ struct CreativeDirectionView: View {
                            text: $description, minHeight: 120)
 
             // Lightweight EXAMPLE prompts — not mandatory categories. Tapping inserts an editable starter.
-            FlowExampleChips(examples: ["Weekend trip", "Birthday", "Wedding", "Daily vlog", "Family vacation"]) { ex in
+            // A broad, consumer-friendly spread (travel, celebrations, everyday, seasonal) — optional
+            // inspiration, never a frozen taxonomy; the flow layout wraps them cleanly.
+            FlowExampleChips(examples: [
+                "Weekend trip", "Road trip", "Hiking trip", "City walk", "Beach day", "Camping",
+                "Birthday", "Wedding", "Graduation", "Anniversary", "Family trip", "Date night",
+                "Concert", "Halloween", "Holidays", "Daily vlog", "Pet moments"
+            ]) { ex in
                 if description.trimmingCharacters(in: .whitespaces).isEmpty { description = ex }
                 else { description += (description.hasSuffix(" ") ? "" : " ") + ex }
             }
@@ -588,10 +594,14 @@ private struct FlowExampleChips: View {
     let examples: [String]
     let onTap: (String) -> Void
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], alignment: .leading, spacing: 8) {
+        // Content-sized wrapping flow: each chip hugs its own text and wraps to the next line naturally, so a
+        // longer label ("Family trip") stays on ONE line instead of being squeezed into a fixed-width grid
+        // column and wrapping to two. Reuses the shared FlowLayout (MomentReferencePicker).
+        FlowLayout(spacing: 8) {
             ForEach(examples, id: \.self) { ex in
                 Button { onTap(ex) } label: {
                     Text(ex).font(StoryTheme.body(13))
+                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(StoryTheme.cream.opacity(0.7))
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.18), lineWidth: 1))
