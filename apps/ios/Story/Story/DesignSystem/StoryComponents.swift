@@ -97,25 +97,24 @@ struct StoryImageCard: View {
     var titleSize: CGFloat = 21
     var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
+        // 16:9 aspect-FILL: shows the wide scene with the people small and right-of-centre (not the 5:4
+        // over-zoom that cropped them), text overlaid on the bottom (owner mockup). Full brightness; a center
+        // crop of the ultra-wide source keeps the subjects and the full-height scene.
         Color.clear
-            .aspectRatio(5.0/4.0, contentMode: .fit)
+            .aspectRatio(16.0/9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay(
-                // Aspect-FILL, full brightness. The source art is intentionally bright/vibrant; we do NOT
-                // dim the whole image (only a disabled card is knocked back). A TALLER card (5:4) gives the
-                // image room and keeps the text band clear of the bright highlights (owner mockup).
                 Image(image).resizable().scaledToFill()
                     .opacity(enabled ? 1.0 : 0.4)
             )
             .overlay(
-                // LOCALIZED bottom-to-top scrim — opaque across the bottom ~42% (behind the text), fully clear
-                // by ~55% so the upper ~60% of the photo stays bright. Taller card => the text sits lower in
-                // the dark foreground, not over the bright highlight area.
+                // LOCALIZED bottom-to-top scrim — opaque across the bottom ~45% behind the text, clear by
+                // ~58% so the upper ~60% of the photo stays bright. Not a full-image darkening.
                 LinearGradient(
                     stops: [.init(color: StoryTheme.ink.opacity(0.90), location: 0),
-                            .init(color: StoryTheme.ink.opacity(0.58), location: 0.28),
-                            .init(color: StoryTheme.ink.opacity(0.12), location: 0.45),
-                            .init(color: .clear, location: 0.55)],
+                            .init(color: StoryTheme.ink.opacity(0.58), location: 0.30),
+                            .init(color: StoryTheme.ink.opacity(0.14), location: 0.48),
+                            .init(color: .clear, location: 0.58)],
                     startPoint: .bottom, endPoint: .top)
             )
             .overlay(alignment: .topLeading) {
@@ -133,11 +132,11 @@ struct StoryImageCard: View {
                     if !eyebrow.isEmpty { StoryEyebrow(text: eyebrow) }
                     Text(title).font(StoryTheme.display(titleSize))
                         .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
-                        .shadow(color: .black.opacity(0.55), radius: 8, y: 1)
+                        .shadow(color: .black.opacity(0.6), radius: 8, y: 1)
                     if !sub.isEmpty {
                         Text(sub).font(StoryTheme.body(12))
-                            .foregroundStyle(StoryTheme.cream.opacity(0.75))
-                            .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+                            .foregroundStyle(StoryTheme.cream.opacity(0.78))
+                            .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
                     }
                 }
                 .padding(.horizontal, 18).padding(.bottom, 16)
