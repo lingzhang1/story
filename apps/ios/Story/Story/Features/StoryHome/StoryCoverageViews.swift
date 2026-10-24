@@ -759,10 +759,13 @@ struct StoryIdeaSection: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(StoryTheme.cream.opacity(0.08), lineWidth: 1))
         .padding(.top, 20)
         .task(id: idea.targetStoryGuideDimensionId) {
-            // Reuse an EXISTING Guide image only when the idea targets a current scene (decision 5). No fetch
-            // when there is no target; the resolver returns nil for an unavailable/irrelevant image.
-            guard let dim = idea.targetStoryGuideDimensionId, !dim.isEmpty else { image = nil; return }
-            image = await resolveGuideImage(dim)
+            // Reuse an EXISTING Guide image (decision 5). Always ask the resolver — passing the target
+            // dimension id when present, else "" — and let the RESOLVER own the policy: an exact-target
+            // image first, and (caller's choice) a relevant Guide scene's already-compliant image as a
+            // fallback so an untargeted idea can still carry a Story-consistent reference. The resolver
+            // returns nil for an unavailable/irrelevant image => text-only card. Still no new inference or
+            // image provider; only the Guide's generic reference queries are ever sent.
+            image = await resolveGuideImage(idea.targetStoryGuideDimensionId ?? "")
         }
     }
 
