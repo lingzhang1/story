@@ -152,12 +152,13 @@ export class StoryApiStack extends cdk.Stack {
     // --- Direct-provider inference keys (P0 Anthropic-restriction contingency, 2026-10-23) --------------
     // When STORY_MODEL_PROVIDER=direct, the ModelGateway routes to OpenAI/Gemini direct APIs instead of
     // Bedrock. Both the App Runner service (most AI stages) AND the async EditPlan worker Lambda read these
-    // keys from Secrets Manager in-process. Least-privilege GetSecretValue, name-scoped to the two existing
-    // dev secrets only (NOT a wildcard). Secrets Manager appends a random 6-char suffix -> '-??????' match.
-    // NOTE: this REPLACES the runtime-CLI-added UnsplashKeyRead-style drift pattern by doing it in CDK.
+    // keys from Secrets Manager in-process. Least-privilege GetSecretValue, name-scoped to the exact secret
+    // names (NOT a wildcard). Secrets Manager appends a random 6-char suffix -> '-??????' match.
+    // Includes the Unsplash Access Key used by the /v1/scene-image proxy for StoryGuide/2 reference images.
     const providerKeyArns = [
       `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-OpenAI-API-Key-??????`,
       `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-Gemini-API-Key-??????`,
+      `arn:aws:secretsmanager:${this.region}:${this.account}:secret:Unsplash-API-Key-??????`,
     ];
     instanceRole.addToPolicy(
       new iam.PolicyStatement({

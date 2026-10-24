@@ -60,6 +60,9 @@ jobs:
           role-to-assume: ${{ vars.BETA_DEPLOY_ROLE_ARN }}   # Environment VARIABLE (an ARN is not a secret); set in the `beta` Environment after the beta api stack is first deployed
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify required secrets present (fail-closed; never deploy with missing keys)
+        run: bash scripts/verify-required-secrets.sh "$ENVIRONMENT"
+
       - name: Login to ECR
         id: ecr
         run: |
