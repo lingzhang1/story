@@ -225,10 +225,10 @@ struct StoryGuideV2Section: View {
     /// Which scene is featured (hero). Defaults to the first NOT-yet-covered scene, else the first.
     @State private var featuredId: String?
     @State private var showAllOthers = false
-    /// Whole section is CLOSED UP by default — the shooting script is a reference, not the home screen's
-    /// centerpiece. Tap the header chevron to open the scene cards. Collapsed state keeps the title + scene
-    /// count + Update Guide visible as a discoverable spine.
-    @State private var sectionExpanded = false
+    /// Whole section OPEN by default — the generated shooting script is shown expanded; the chevron lets the
+    /// user collapse it. (Owner 2026-10-24: open, not collapsed-to-a-tab.) The header always shows the title,
+    /// scene count, and Update Guide.
+    @State private var sectionExpanded = true
 
     private func stateFor(_ sceneId: String) -> NarrativeCoverageDTO? {
         coverage?.dimensionCoverage.first(where: { $0.storyGuideDimensionId == sceneId })?.state
