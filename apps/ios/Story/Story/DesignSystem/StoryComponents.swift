@@ -101,14 +101,20 @@ struct StoryImageCard: View {
             .aspectRatio(16.0/9.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay(
+                // Aspect-FILL, full brightness. The source art is intentionally bright/vibrant; we do NOT
+                // dim the whole image (only a disabled card is knocked back). Center crop keeps the frame
+                // full-bleed across iPhone widths.
                 Image(image).resizable().scaledToFill()
-                    .opacity(enabled ? 0.75 : 0.4)
+                    .opacity(enabled ? 1.0 : 0.4)
             )
             .overlay(
+                // LOCALIZED bottom-to-top scrim — opaque only across the bottom ~45% (behind the text), fully
+                // clear by ~58% so the upper 60%+ of the photo stays bright. Not a full-image darkening.
                 LinearGradient(
-                    stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
-                            .init(color: StoryTheme.ink.opacity(0.25), location: 0.6),
-                            .init(color: .clear, location: 1)],
+                    stops: [.init(color: StoryTheme.ink.opacity(0.88), location: 0),
+                            .init(color: StoryTheme.ink.opacity(0.55), location: 0.30),
+                            .init(color: StoryTheme.ink.opacity(0.12), location: 0.48),
+                            .init(color: .clear, location: 0.58)],
                     startPoint: .bottom, endPoint: .top)
             )
             .overlay(alignment: .topLeading) {
@@ -117,24 +123,29 @@ struct StoryImageCard: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(StoryTheme.cream)
                         .frame(width: 38, height: 38)
-                        .background(StoryTheme.ink.opacity(0.4), in: Circle())
+                        .background(.black.opacity(0.35), in: Circle())
                         .padding(14)
                 }
             }
             .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 2) {
-                    StoryEyebrow(text: eyebrow)
+                VStack(alignment: .leading, spacing: 3) {
+                    if !eyebrow.isEmpty { StoryEyebrow(text: eyebrow) }
                     Text(title).font(StoryTheme.display(titleSize))
                         .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
+                        .shadow(color: .black.opacity(0.55), radius: 8, y: 1)
                     if !sub.isEmpty {
-                        Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                        Text(sub).font(StoryTheme.body(12))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.75))
+                            .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
                     }
                 }
-                .padding(.horizontal, 18).padding(.bottom, 15)
+                .padding(.horizontal, 18).padding(.bottom, 16)
             }
             .overlay(alignment: .topTrailing) {
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(StoryTheme.cream.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .background(.black.opacity(0.28), in: Circle())
                     .padding(14)
             }
             .clipShape(RoundedRectangle(cornerRadius: 20))
