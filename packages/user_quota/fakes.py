@@ -44,6 +44,13 @@ class FakeDDB:
             return float(it.get(a, {}).get("N", "0"))
         if ConditionExpression:
             cond = ConditionExpression
+            # Real DynamoDB REJECTS arithmetic (`+`) in a ConditionExpression with a ValidationException
+            # (it is only valid in an UpdateExpression SET). Mirror that here so a regression that puts a
+            # budget sum back into the condition fails the unit tests instead of silently passing.
+            if "+" in cond:
+                raise ValueError(
+                    "Invalid ConditionExpression: Syntax error; token: \"+\" "
+                    "(DynamoDB conditions cannot contain arithmetic — enforce budgets in app code)")
             rname = names.get("#r") or names.get("#sm") or names.get("#gm") or ""
             if "attribute_not_exists(#r)" in cond and rname in it:
                 raise Cancel()

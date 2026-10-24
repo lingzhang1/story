@@ -165,19 +165,22 @@ class UserQuota:
                       ":rid": {"M": {"state": {"S": "reserved"}, "usd": {"N": str(estimate_usd)},
                                      "gens": {"N": str(gens)}}}}
             if enforce:
-                values[":umax"] = {"N": str(c.user_monthly_usd)}
-                values[":gmax"] = {"N": str(c.user_daily_gens)}
-                values[":z"] = {"N": "0"}
-                cond = ("attribute_not_exists(#r) AND "
-                        "(if_not_exists(#ru,:z) + :eu) <= :umax AND "
-                        "(if_not_exists(#g,:z) + :g) <= :gmax")
-                names["#su"] = "settled_usd"
-                # include settled in the monthly ceiling: reserved + settled + est <= umax
-                cond = ("attribute_not_exists(#r) AND "
-                        "(if_not_exists(#ru,:z) + if_not_exists(#su,:z) + :eu) <= :umax AND "
-                        "(if_not_exists(#g,:z) + :g) <= :gmax")
-            else:
-                cond = "attribute_not_exists(#r)"  # only idempotency guard in observe
+                # Budget ceilings are checked in APPLICATION CODE, not in the DynamoDB ConditionExpression:
+                # a DynamoDB condition expression does NOT support arithmetic (`+`), so an expression like
+                # `(if_not_exists(#ru,:z) + if_not_exists(#su,:z) + :eu) <= :umax` is rejected at runtime with
+                # `ValidationException: Invalid ConditionExpression: Syntax error; token: "+"`. Read the current
+                # per-user item and compare in Python; the write then only guards idempotency (attribute_not_exists).
+                cur = self._c().get_item(
+                    TableName=self.usage_table, Key=self._key(story_user_id, period)).get("Item") or {}
+                cur_res = float(cur.get("reserved_usd", {}).get("N", "0"))
+                cur_set = float(cur.get("settled_usd", {}).get("N", "0"))
+                cur_gens = float(cur.get("gens_used", {}).get("N", "0"))
+                if cur_res + cur_set + estimate_usd > c.user_monthly_usd:
+                    raise QuotaDenied("user_monthly_usd")
+                if cur_gens + gens > c.user_daily_gens:
+                    raise QuotaDenied("user_daily_gens")
+            # Idempotency-only guard (both modes). Arithmetic budget enforcement is done above in app code.
+            cond = "attribute_not_exists(#r)"
 
             user_update = {
                 "TableName": self.usage_table, "Key": self._key(story_user_id, period),
@@ -191,13 +194,9 @@ class UserQuota:
                 gnames = {"#gru": "reserved_usd", "#gm": gmarker}
                 gvals = {":eu": {"N": str(estimate_usd)},
                          ":gm": {"M": {"state": {"S": "reserved"}, "usd": {"N": str(estimate_usd)}}}}
+                # Global ceiling is enforced in app code above (the enforce pre-check reads the __global__ item
+                # and raises QuotaDenied); the write guards idempotency only — NO arithmetic in the condition.
                 gcond = "attribute_not_exists(#gm)"
-                if enforce:
-                    gnames["#gs"] = "settled_usd"
-                    gvals[":gmax"] = {"N": str(c.global_monthly_usd)}
-                    gvals[":z"] = {"N": "0"}
-                    gcond = ("attribute_not_exists(#gm) AND "
-                             "(if_not_exists(#gru,:z) + if_not_exists(#gs,:z) + :eu) <= :gmax")
                 try:
                     self._c().transact_write_items(TransactItems=[
                         {"Update": {k: v for k, v in user_update.items()}},
@@ -386,17 +385,20 @@ class UserQuota:
             names = {"#sm": marker, "#aj": "active_jobs"}
             values = {":held": {"M": {"state": {"S": "held"}}}, ":one": {"N": "1"}}
             if enforce:
-                values[":max"] = {"N": str(c.max_active_jobs)}
-                values[":z"] = {"N": "0"}
-                cond = "attribute_not_exists(#sm) AND (if_not_exists(#aj,:z) + :one) <= :max"
-            else:
-                cond = "attribute_not_exists(#sm)"
+                # Cap check in APP CODE — DynamoDB conditions cannot contain arithmetic (`+`). The old
+                # `(if_not_exists(#aj,:z) + :one) <= :max` was rejected with a ValidationException at runtime.
+                cur_active = float(item.get("active_jobs", {}).get("N", "0"))
+                if cur_active + 1 > c.max_active_jobs:
+                    raise QuotaDenied("active_jobs")
+            cond = "attribute_not_exists(#sm)"  # idempotency guard only
             self._c().update_item(
                 TableName=self.usage_table, Key=self._key(story_user_id, period),
                 UpdateExpression="ADD #aj :one SET #sm = :held",
                 ConditionExpression=cond,
                 ExpressionAttributeNames=names, ExpressionAttributeValues=values)
             return True
+        except QuotaDenied:
+            raise
         except Exception as e:  # noqa: BLE001
             if _is_conditional_failure(e):
                 again = self._c().get_item(
