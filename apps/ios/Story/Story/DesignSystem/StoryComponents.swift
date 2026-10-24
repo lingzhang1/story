@@ -97,14 +97,16 @@ struct StoryImageCard: View {
     var titleSize: CGFloat = 21
     var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
-        // 4:3 aspect-FILL — taller than 16:9 (more image, text clears the highlights) but a MODEST crop, not
-        // the 5:4 over-zoom that cut the people off. Shows the people small and right-of-centre with the full
-        // scene, text overlaid on the dark bottom band (owner mockup).
+        // 4:3 aspect-FIT on native 4:3 hero art (ph_city / ph_alpine are 1200x900 = 4:3): the image fills
+        // the 4:3 card edge-to-edge with ZERO zoom and ZERO crop, so the full scene is shown — sun fully
+        // exposed, subjects at their natural (smaller) size, nothing cut off the right edge. scaledToFill
+        // was zooming-to-cover and cropping the sides (cut the sun / enlarged the people); scaledToFit shows
+        // the whole frame. Hero art MUST be 4:3 or it will letterbox instead of crop.
         Color.clear
             .aspectRatio(4.0/3.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay(
-                Image(image).resizable().scaledToFill()
+                Image(image).resizable().scaledToFit()
                     .opacity(enabled ? 1.0 : 0.4)
             )
             .overlay(

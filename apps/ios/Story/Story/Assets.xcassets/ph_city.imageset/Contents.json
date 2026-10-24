@@ -2,7 +2,8 @@
   "images" : [
     {
       "idiom" : "universal",
-      "filename" : "ph_city.png"
+      "filename" : "ph_city.png",
+      "scale" : "1x"
     }
   ],
   "info" : {
