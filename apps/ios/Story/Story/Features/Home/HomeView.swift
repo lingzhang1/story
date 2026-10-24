@@ -41,7 +41,7 @@ struct HomeView: View {
                     // ── Primary 1: Capture a Moment — opens the shared camera immediately,
                     //    no Story / CreativeIntent / AI call required to open it.
                     Button { showCapture = true } label: {
-                        StoryImageCard(image: "ph_city", eyebrow: "Right now",
+                        StoryImageCard(image: "ph_city", eyebrow: "Capture",
                                        title: "Capture a Moment",
                                        sub: "Capture something worth remembering. Get an AI shot idea whenever you want.",
                                        icon: "camera.fill")
@@ -52,7 +52,7 @@ struct HomeView: View {
 
                     // ── Primary 2: Start a Story — existing C1 flow, unchanged.
                     NavigationLink { CreativeDirectionView() } label: {
-                        StoryImageCard(image: "ph_alpine", eyebrow: "Over time",
+                        StoryImageCard(image: "ph_alpine", eyebrow: "Create",
                                        title: "Start a Story",
                                        sub: "Collect moments, tell your story, and create a film.",
                                        icon: "film.fill")

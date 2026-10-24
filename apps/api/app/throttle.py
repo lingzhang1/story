@@ -65,6 +65,8 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("POST", "/v1/story-coverage"): "ai_sync",
     ("POST", "/v1/story-coverage/v2"): "ai_sync",
     ("POST", "/v1/story-guide"): "ai_sync",
+    ("POST", "/v1/story-guide-v2"): "ai_sync",
+    ("POST", "/v1/story-guide-refine"): "ai_sync",
     ("POST", "/v1/edit-plan"): "ai_sync",
     ("POST", "/v1/edit-plan-mm"): "ai_sync",
     ("POST", "/v1/music-plan"): "ai_sync",
@@ -76,6 +78,9 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("POST", "/v1/music/search"): "music_provider",
     ("POST", "/v1/music/analysis"): "music_provider",
     ("POST", "/v1/music/soundtrack"): "music_provider",
+    # --- scene_image: paid Unsplash reference-image proxy (bounded; fail-soft) ---
+    ("POST", "/v1/scene-image"): "music_provider",
+    ("POST", "/v1/scene-image/track"): "read",  # cheap fire-and-forget download beacon
     # --- ai_job_submit: async AI submissions ---
     ("POST", "/v1/edit-plan-jobs"): "ai_job_submit",
     ("POST", "/v1/story-coverage/v2/jobs"): "ai_job_submit",

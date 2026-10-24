@@ -149,6 +149,25 @@ export class StoryApiStack extends cdk.Stack {
       })
     );
 
+    // --- Direct-provider inference keys (P0 Anthropic-restriction contingency, 2026-10-23) --------------
+    // When STORY_MODEL_PROVIDER=direct, the ModelGateway routes to OpenAI/Gemini direct APIs instead of
+    // Bedrock. Both the App Runner service (most AI stages) AND the async EditPlan worker Lambda read these
+    // keys from Secrets Manager in-process. Least-privilege GetSecretValue, name-scoped to the two existing
+    // dev secrets only (NOT a wildcard). Secrets Manager appends a random 6-char suffix -> '-??????' match.
+    // NOTE: this REPLACES the runtime-CLI-added UnsplashKeyRead-style drift pattern by doing it in CDK.
+    const providerKeyArns = [
+      `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-OpenAI-API-Key-??????`,
+      `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-Gemini-API-Key-??????`,
+    ];
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "DirectProviderKeyRead",
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: providerKeyArns,
+      })
+    );
+
     // --- ASYNC EDIT PLANNING infra (owner-approved 2026-10-13, dev) ------
     // Beats App Runner's ~120s request ceiling: App Runner submits a job, a Lambda worker runs the SAME
     // plan/critique/validate core (up to 15 min), iOS polls. Resources: DynamoDB job table (TTL), SQS + DLQ,
@@ -287,6 +306,28 @@ export class StoryApiStack extends cdk.Stack {
         STORY_WORKER_DEADLINE_S: "840",
         STORY_EDIT_PLAN_VERSION: "5.2",
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
+        // P0 direct-provider mode (off unless context sets it): when STORY_MODEL_PROVIDER=direct the worker's
+        // EditPlan runs on OpenAI/Gemini instead of Bedrock. Model ids are config-driven; verified in Phase D.
+        STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "bedrock",
+        ...((this.node.tryGetContext("openaiModel") as string)
+          ? { STORY_OPENAI_MODEL: this.node.tryGetContext("openaiModel") as string } : {}),
+        ...((this.node.tryGetContext("geminiModel") as string)
+          ? { STORY_GEMINI_MODEL: this.node.tryGetContext("geminiModel") as string } : {}),
+        // Reconcile the deployed-vs-source drift (Phase B/C finding): the live dev worker carries the four
+        // EditPlan v2 creative-freedom flags = "1". They are part of the FROZEN EditPlan v2 behavior and must
+        // not be dropped by this deploy. Context-gated (editplanV2Flags), defaulting ON so the dev deploy
+        // preserves the live values; the escape hatch stays off. GATED to development/beta ONLY — a default
+        // or `test` stack must carry NONE of these flags (the gate is (development || beta), same as the
+        // editplanV2 block below), so this never leaks into unrelated environments.
+        ...((environment === "development" || environment === "beta")
+            && ((this.node.tryGetContext("editplanV2Flags") as string) ?? "1") === "1"
+          ? {
+              STORY_EDITPLAN_OBJECTIVE_DIRECTIVES: "1",
+              STORY_EDITPLAN_BEST_VALID_RETENTION: "1",
+              STORY_EDITPLAN_APPROX_DURATION_SOFT: "1",
+              STORY_EDITPLAN_USEFUL_RANGE_SOFT: "1",
+            }
+          : {}),
         // P0 Beta Security Phase 4: the worker settles/releases the AI quota reservation on terminal. It
         // needs the UserUsage table name; STORY_QUOTA_MODE is carried for parity (settle/release behave the
         // same in observe/enforce — they only reverse what reserve recorded).
@@ -398,6 +439,17 @@ export class StoryApiStack extends cdk.Stack {
       sid: "UserQuotaSettle", effect: iam.Effect.ALLOW, actions: quotaActions, resources: [userUsageArn],
     }));
 
+    // P0 direct-provider keys for the worker (EditPlan runs here). Same two secrets, least-privilege.
+    worker.addToRolePolicy(new iam.PolicyStatement({
+      sid: "DirectProviderKeyRead",
+      effect: iam.Effect.ALLOW,
+      actions: ["secretsmanager:GetSecretValue"],
+      resources: [
+        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-OpenAI-API-Key-??????`,
+        `arn:aws:secretsmanager:${this.region}:${this.account}:secret:YoTale-Gemini-API-Key-??????`,
+      ],
+    }));
+
     // --- App Runner service ---------------------------------------------
     const service = new apprunner.CfnService(this, "StoryApiService", {
       serviceName: `story-${environment}-api`,
@@ -453,6 +505,22 @@ export class StoryApiStack extends cdk.Stack {
               // Frozen edit-planner prompt pin + model fallback (so the sync + async paths both use v5.2).
               { name: "STORY_EDIT_PLAN_VERSION", value: "5.2" },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
+              // P0 direct-provider mode (Anthropic-Bedrock-revocation contingency). DURABLE in CDK so a
+              // redeploy does not silently drop it back to bedrock (that regression broke all dev AI once —
+              // a CLI `update-service` env set is wiped by the next `cdk deploy`, which is a FULL env replace).
+              // Context-gated: dev defaults to direct; beta/gamma/prod default to bedrock until explicitly
+              // flipped via `-c modelProvider=direct`. Model ids are config-driven, verified against the live
+              // provider catalogs.
+              { name: "STORY_MODEL_PROVIDER",
+                value: (this.node.tryGetContext("modelProvider") as string) ?? (environment === "development" ? "direct" : "bedrock") },
+              { name: "STORY_OPENAI_MODEL", value: (this.node.tryGetContext("openaiModel") as string) ?? "gpt-5.1" },
+              { name: "STORY_GEMINI_MODEL", value: (this.node.tryGetContext("geminiModel") as string) ?? "gemini-3.8-flash" },
+              // Guide v2.1 (AI shooting script) + Unsplash scene images — feature-gated; dev-on, higher envs
+              // off until rolled out. Also DURABLE here (previously CLI-set, hence wiped by a cdk deploy).
+              { name: "STORY_GUIDE_V2",
+                value: (this.node.tryGetContext("guideV2") as string) ?? (environment === "development" ? "1" : "0") },
+              { name: "STORY_SCENE_IMAGES",
+                value: (this.node.tryGetContext("sceneImages") as string) ?? (environment === "development" ? "1" : "0") },
               // P0 Beta Auth Increment 3: wire the (separately-provisioned) dev Cognito pool + identity
               // tables. These are non-secret resource identifiers (NOT credentials), read from context so prod
               // supplies its own; dev defaults match the provisioned story-development-auth stack.

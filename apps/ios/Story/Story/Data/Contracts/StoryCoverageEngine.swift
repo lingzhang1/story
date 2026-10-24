@@ -213,3 +213,33 @@ final class StoryCoverageEngine {
         SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
+
+
+// MARK: - v2 shooting-script -> coverage guide adapter
+//
+// The Coverage/2 backend mapper understands a v1-shaped StoryGuide (framing_summary + dimensions[] keyed by
+// stable id). A v2 shooting script carries `scenes[]` instead — but a scene's stable id is the SAME identity
+// Coverage keys state on (scene.id == story_guide_dimension_id), and SceneCapturePossibilityDTO mirrors
+// CapturePossibilityDTO. So a v2 guide maps losslessly onto the dimensions shape the mapper expects: this
+// is a transport adaptation, NOT a new identity system (owner Phase C: reuse existing contracts, do not
+// introduce another scene-identity scheme). Coverage computed from this is keyed by scene id, which is
+// exactly what capturedSceneIds() reads back.
+extension StoryGuideV2DTO {
+    func asCoverageGuideDTO() -> StoryGuideDTO {
+        StoryGuideDTO(
+            schemaVersion: schemaVersion,
+            storyId: storyId,
+            sourceCreativeIntentVersion: sourceCreativeIntentVersion,
+            framingSummary: framingSummary,
+            dimensions: scenes.map { s in
+                StoryGuideDimensionDTO(
+                    id: s.id,
+                    label: s.title,
+                    purpose: s.whatToCapture,
+                    capturePossibilities: s.capturePossibilities.map {
+                        CapturePossibilityDTO(id: $0.id, label: $0.label, semanticPurpose: $0.semanticPurpose)
+                    })
+            },
+            generatedAt: generatedAt)
+    }
+}

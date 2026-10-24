@@ -97,18 +97,24 @@ struct StoryImageCard: View {
     var titleSize: CGFloat = 21
     var icon: String? = nil      // optional SF Symbol badge, top-left (Figma V0.2.2 primary cards)
     var body: some View {
+        // 4:3 aspect-FILL — taller than 16:9 (more image, text clears the highlights) but a MODEST crop, not
+        // the 5:4 over-zoom that cut the people off. Shows the people small and right-of-centre with the full
+        // scene, text overlaid on the dark bottom band (owner mockup).
         Color.clear
-            .aspectRatio(16.0/9.0, contentMode: .fit)
+            .aspectRatio(4.0/3.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .overlay(
                 Image(image).resizable().scaledToFill()
-                    .opacity(enabled ? 0.75 : 0.4)
+                    .opacity(enabled ? 1.0 : 0.4)
             )
             .overlay(
+                // LOCALIZED bottom-to-top scrim — opaque across the bottom ~40% behind the text, clear by
+                // ~55% so the upper ~60% of the photo stays bright. Not a full-image darkening.
                 LinearGradient(
-                    stops: [.init(color: StoryTheme.ink.opacity(0.94), location: 0),
-                            .init(color: StoryTheme.ink.opacity(0.25), location: 0.6),
-                            .init(color: .clear, location: 1)],
+                    stops: [.init(color: StoryTheme.ink.opacity(0.90), location: 0),
+                            .init(color: StoryTheme.ink.opacity(0.58), location: 0.28),
+                            .init(color: StoryTheme.ink.opacity(0.14), location: 0.45),
+                            .init(color: .clear, location: 0.55)],
                     startPoint: .bottom, endPoint: .top)
             )
             .overlay(alignment: .topLeading) {
@@ -117,24 +123,29 @@ struct StoryImageCard: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(StoryTheme.cream)
                         .frame(width: 38, height: 38)
-                        .background(StoryTheme.ink.opacity(0.4), in: Circle())
+                        .background(.black.opacity(0.35), in: Circle())
                         .padding(14)
                 }
             }
             .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 2) {
-                    StoryEyebrow(text: eyebrow)
+                VStack(alignment: .leading, spacing: 3) {
+                    if !eyebrow.isEmpty { StoryEyebrow(text: eyebrow) }
                     Text(title).font(StoryTheme.display(titleSize))
                         .foregroundStyle(enabled ? StoryTheme.cream : StoryTheme.cream.opacity(0.55))
+                        .shadow(color: .black.opacity(0.6), radius: 8, y: 1)
                     if !sub.isEmpty {
-                        Text(sub).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.cream.opacity(0.5))
+                        Text(sub).font(StoryTheme.body(12))
+                            .foregroundStyle(StoryTheme.cream.opacity(0.78))
+                            .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
                     }
                 }
-                .padding(.horizontal, 18).padding(.bottom, 15)
+                .padding(.horizontal, 18).padding(.bottom, 16)
             }
             .overlay(alignment: .topTrailing) {
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 13)).foregroundStyle(StoryTheme.cream.opacity(0.4))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(StoryTheme.cream.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .background(.black.opacity(0.28), in: Circle())
                     .padding(14)
             }
             .clipShape(RoundedRectangle(cornerRadius: 20))

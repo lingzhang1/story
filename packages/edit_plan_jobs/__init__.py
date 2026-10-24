@@ -42,6 +42,20 @@ OP_EDIT_PLAN = "edit_plan"
 OP_COVERAGE_V2 = "coverage_v2"
 KNOWN_OPERATIONS = {OP_EDIT_PLAN, OP_COVERAGE_V2}
 
+# Bounded Coverage recovery (P0 reliability). A terminal `failed` Coverage job whose failure was a
+# TRANSIENT provider/transport outage (not a deterministic input problem) may be re-attempted when the
+# identical evidence is re-submitted AFTER the provider recovers — otherwise the failed record, keyed by a
+# deterministic operation_id, permanently blocks recomputation (the TMB-after-Anthropic-outage bug).
+# Deterministic failures (bad/empty output, daily-quota exhaustion) are NOT auto-retried — re-running them
+# just burns inference. A per-item recovery_count caps retries so even a "recoverable" category cannot loop.
+COVERAGE_RECOVERABLE_FAILURES = {
+    "mapper_unavailable", "judge_unavailable", "coverage_unavailable", "provider_error",
+}
+COVERAGE_NONRECOVERABLE_FAILURES = {
+    "empty_mapping", "invalid_output", "provider_exhausted", "internal",
+}
+COVERAGE_MAX_RECOVERY_ATTEMPTS = 3
+
 
 class UnknownOperation(Exception):
     """A job item carries an operation_type the worker does not know how to run — fail safe, never guess."""
@@ -272,7 +286,58 @@ class JobStore:
                 if existing and existing.get("payload_fingerprint") not in (None, payload_fingerprint):
                     raise PayloadConflict(
                         f"operation_id already used with a different payload (job {jid})")
+                # BOUNDED RECOVERY: a terminal `failed` job whose failure was a transient provider/transport
+                # outage (NOT a deterministic input failure) is re-attemptable for the SAME evidence once the
+                # provider recovers. Reset it to queued (same job_id, same payload) under a recovery cap so a
+                # genuinely-deterministic failure cannot loop. queued/running/completed are NEVER reset here —
+                # they coalesce idempotently as before, so no duplicate concurrent job is ever created.
+                if existing and self._coverage_is_recoverable(existing):
+                    if self._recover_failed_coverage(jid, payload_fingerprint):
+                        return jid, True   # treated as a fresh attempt -> caller enqueues
                 return jid, False
+            raise
+
+    @staticmethod
+    def _coverage_is_recoverable(existing: dict) -> bool:
+        """True iff the existing job is a terminal `failed` with a TRANSIENT failure category and still under
+        the recovery cap. Deterministic failures and exhausted retries are not re-run."""
+        if existing.get("status") != "failed":
+            return False
+        cat = existing.get("failure_category") or ""
+        if cat not in COVERAGE_RECOVERABLE_FAILURES:
+            return False
+        try:
+            used = int(existing.get("recovery_count", 0) or 0)
+        except (TypeError, ValueError):
+            used = 0
+        return used < COVERAGE_MAX_RECOVERY_ATTEMPTS
+
+    def _recover_failed_coverage(self, job_id: str, payload_fingerprint: str) -> bool:
+        """Reset a recoverable terminal-failed Coverage job back to queued for a fresh attempt. Conditional on
+        it STILL being `failed` with the SAME payload_fingerprint (so a concurrent recover or a payload change
+        cannot double-reset or clobber), and bumps recovery_count. Clears the prior failure fields."""
+        now = _now()
+        try:
+            self._ddb_c().update_item(
+                TableName=self.cfg.table,
+                Key={"job_id": {"S": job_id}},
+                UpdateExpression=("SET #s = :queued, updated_at = :now, expires_at = :exp, "
+                                  "attempt_count = :zero, lease_until = :zero, lease_token = :empty "
+                                  "ADD recovery_count :one REMOVE failure_category, failure_detail, #r, diagnostics"),
+                ConditionExpression="#s = :failed AND payload_fingerprint = :fp",
+                ExpressionAttributeNames={"#s": "status", "#r": "result"},
+                ExpressionAttributeValues={
+                    ":queued": {"S": "queued"}, ":failed": {"S": "failed"},
+                    ":now": {"N": str(now)}, ":exp": {"N": str(now + JOB_TTL_SECONDS)},
+                    ":zero": {"N": "0"}, ":one": {"N": "1"}, ":empty": {"S": ""},
+                    ":fp": {"S": payload_fingerprint},
+                })
+            return True
+        except Exception as e:
+            # Lost the race (another submitter already recovered it, or it changed) -> treat as not-created;
+            # the caller falls back to idempotent reuse of whatever state it is now in.
+            if "ConditionalCheckFailed" in type(e).__name__ or "ConditionalCheckFailed" in str(e):
+                return False
             raise
 
     def complete_coverage(self, job_id: str, result: dict, diagnostics: dict, lease_token: str) -> bool:

@@ -145,3 +145,55 @@ def test_endpoint_rejects_missing_music_direction():
     del body["music_direction"]
     r = c.post("/v1/music-plan", json=body)
     assert r.status_code == 422  # pydantic: music_direction required
+
+
+# ---- P0: direct-provider (gpt-5.1) energy_arc normalization + graceful fallback ----
+
+def test_energy_arc_out_of_range_fractions_are_clamped():
+    # gpt-5.1 sometimes returns a percentage (50) or seconds instead of a 0..1 fraction -> previously a raw
+    # pydantic ValidationError escaped as a 500 (music page flashed, created with no music). Now clamped.
+    plan_data = _good_plan()
+    plan_data["energy_arc"] = [
+        {"label": "bad hi", "start_fraction": 0.0, "end_fraction": 50, "intensity": "rising"},
+        {"label": "reversed", "start_fraction": 0.9, "end_fraction": 0.2, "intensity": "falling"},
+    ]
+    eng = RealMusicPlanEngine(FakeModelGateway(response=plan_data))
+    plan = eng.generate(_inputs())
+    assert len(plan.energy_arc) == 2
+    assert plan.energy_arc[0].end_fraction == 1.0, "50 clamped to 1.0"
+    assert plan.energy_arc[1].start_fraction <= plan.energy_arc[1].end_fraction, "reversed order fixed"
+
+
+def test_energy_arc_invalid_intensity_region_is_dropped_not_fatal():
+    plan_data = _good_plan()
+    plan_data["energy_arc"] = [
+        {"label": "ok", "start_fraction": 0.0, "end_fraction": 0.5, "intensity": "rising"},
+        {"label": "bogus", "start_fraction": 0.5, "end_fraction": 1.0, "intensity": "crescendo"},  # not in enum
+    ]
+    eng = RealMusicPlanEngine(FakeModelGateway(response=plan_data))
+    plan = eng.generate(_inputs())
+    assert len(plan.energy_arc) == 1, "the bad-intensity region is dropped, the valid one survives"
+    assert plan.energy_arc[0].intensity.value == "rising"
+
+
+def test_unrepairable_enum_becomes_structured_output_error_not_500():
+    # A residual bad value (e.g. soundtrack_role outside the enum) must raise StructuredOutputError so the
+    # endpoint returns a graceful 503 / no-music fallback — never an unhandled 500.
+    plan_data = _good_plan()
+    plan_data["audio_strategy"] = {"soundtrack_role": "orchestral-swell", "native_audio_priority": "selective"}
+    eng = RealMusicPlanEngine(FakeModelGateway(response=plan_data))
+    with pytest.raises(StructuredOutputError):
+        eng.generate(_inputs())
+
+
+def test_endpoint_returns_503_not_500_on_unrepairable_plan():
+    app = create_app()
+    bad = _good_plan()
+    bad["audio_strategy"] = {"soundtrack_role": "orchestral-swell", "native_audio_priority": "selective"}
+    app.dependency_overrides[get_music_plan_engine] = lambda: RealMusicPlanEngine(FakeModelGateway(response=bad))
+    c = TestClient(app, raise_server_exceptions=False)
+    r = c.post("/v1/music-plan", json={
+        "story_id": SID, "creative_intent": {"target_duration_seconds": 60.0},
+        "music_direction": {"mood_tags": ["x"]}, "target_duration_seconds": 60.0})
+    assert r.status_code == 503, f"graceful fallback, got {r.status_code}"
+    app.dependency_overrides.clear()

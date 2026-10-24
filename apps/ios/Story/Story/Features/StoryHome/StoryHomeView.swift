@@ -39,10 +39,20 @@ struct StoryHomeView: View {
     // the scan flow carries this selected_opportunity into Director. Identifiable wrapper for cover(item:).
     @State private var pendingOpportunity: OpportunityLaunch?
 
+    /// Scoped, NON-persistent Story Idea dismissal (Phase B decision 5: scoped to the specific idea, no new
+    /// persistent contract, never permanently suppresses a materially different future suggestion). Holds the
+    /// fingerprint (title + target dimension) of the idea the user dismissed in THIS view session. The card is
+    /// hidden only while the current idea matches that fingerprint; a Coverage refresh that yields a different
+    /// idea (new title/target) clears the match and the card returns. Resets on view teardown.
+    @State private var dismissedIdeaKey: String?
+
     // Milestone E2 — persistent StoryGuide + Coverage/2 (real Story Guide + Story Idea).
     @State private var guide: StoryGuideDTO?
+    @State private var guideV2: StoryGuideV2DTO?          // AI shooting script (when STORY_GUIDE_V2 on)
     @State private var coverage: StoryCoverageV2DTO?
     @State private var coverageLoading = false
+    // One scene-image service for the whole screen (its metadata cache is shared across scene cards).
+    private let sceneImages = SceneImageService()
 
     private var coverageEngine: StoryCoverageEngine {
         StoryCoverageEngine(context: context)
@@ -50,6 +60,13 @@ struct StoryHomeView: View {
 
     private var useCases: StoryUseCases {
         StoryUseCases(repository: StoryRepository(context: context))
+    }
+
+    /// Semantic fingerprint of a Story Idea for scoped dismissal: its title + target dimension. A Coverage
+    /// refresh that yields a materially different idea (different title/target) produces a different key, so a
+    /// prior dismissal does NOT suppress it (Phase B decision 5). Pure string identity — no persistence.
+    private func ideaKey(_ idea: CoverageStoryIdeaV2DTO) -> String {
+        "\(idea.title)|\(idea.targetStoryGuideDimensionId ?? "")"
     }
 
     var body: some View {
@@ -131,21 +148,104 @@ struct StoryHomeView: View {
                 // Story Idea — real StoryCoverage.story_idea. ONE optional card,
                 // shown ONLY when non-null; omitted entirely otherwise (no "no ideas"
                 // placeholder — do-nothing intelligence is no interruption).
-                if let idea = coverage?.storyIdea {
+                if let idea = coverage?.storyIdea,
+                   ideaKey(idea) != dismissedIdeaKey {
                     // Story Idea -> Show me (Director entry point A): carry the Idea's semantic
                     // opportunity (title + description; target dimension if present) into Director.
-                    StoryIdeaSection(idea: idea) {
-                        pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
-                            storyGuideDimensionId: idea.targetStoryGuideDimensionId,
-                            label: idea.title, purpose: idea.description,
-                            capturePossibilityLabel: nil))
-                    }
+                    StoryIdeaSection(
+                        idea: idea,
+                        onShowMe: {
+                            pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                                storyGuideDimensionId: idea.targetStoryGuideDimensionId,
+                                label: idea.title, purpose: idea.description,
+                                capturePossibilityLabel: nil))
+                        },
+                        onDismiss: {
+                            // Scoped, non-persistent: hide THIS idea for the current view session only.
+                            withAnimation { dismissedIdeaKey = ideaKey(idea) }
+                        },
+                        resolveGuideImage: { dimId in
+                            // Reuse the Guide's SceneImageService (same backend proxy, metadata-only hotlink,
+                            // server-side sanitize + hard-bound of the query). Two compliant query sources, in
+                            // order of how curated they are:
+                            //   1) The idea's TARGET Guide scene's server-authored visual_reference_query.
+                            //   2) A SHORT GENERIC phrase derived from the idea TITLE (e.g. "Quiet Connection
+                            //      Off the Trail") — so the image is about THIS idea, not an unrelated scene.
+                            //      We send only the title (a scene-like phrase), never the description (which
+                            //      can carry more specific user-context wording); the server re-sanitizes and
+                            //      rejects URLs/emails/overlong input regardless.
+                            // Any miss => nil => text-only card. No new provider, no image bytes re-hosted.
+                            if !dimId.isEmpty,
+                               let scene = guideV2?.scenes.first(where: { $0.id == dimId }),
+                               let q = scene.visualReferenceQuery,
+                               let img = await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id) {
+                                return img
+                            }
+                            let ideaQuery = idea.title
+                                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?—-"))
+                            guard ideaQuery.count >= 3 else { return nil }
+                            return await sceneImages.fetch(
+                                query: ideaQuery, storyId: story.id,
+                                sceneId: "story-idea:\(idea.targetStoryGuideDimensionId ?? "untargeted")")
+                        })
                     Divider().overlay(StoryTheme.cream.opacity(0.06)).padding(.top, 24)
                 }
 
                 // Story Guide — the persistent StoryGuide creative map (renders as soon as the
                 // Guide exists, independent of Coverage) + optional Coverage/2 overlay (state tags +
                 // represented-possibility affordances). Advisory, never a checklist.
+                if StoryGuideFeatures.guideV2Enabled, guideV2 != nil {
+                    // AI shooting script (story_guide/2): cinematic scene cards with lazy reference images.
+                    StoryGuideV2Section(
+                        guide: guideV2, coverage: coverage, isLoading: coverageLoading,
+                        eventLabel: story.title,
+                        onShoot: { scene, poss in
+                            pendingOpportunity = OpportunityLaunch(opportunity: SelectedOpportunityDTO(
+                                storyGuideDimensionId: scene.id,
+                                label: poss?.label ?? scene.title,
+                                purpose: poss?.semanticPurpose ?? scene.whatToCapture,
+                                capturePossibilityLabel: poss?.label))
+                        },
+                        onRetry: { Task { await refreshGuideAndCoverage() } },
+                        fetchImage: { scene in
+                            guard let q = scene.visualReferenceQuery else { return nil }
+                            return await sceneImages.fetch(query: q, storyId: story.id, sceneId: scene.id)
+                        },
+                        trackImageUse: { img in await sceneImages.track(downloadLocation: img.downloadLocation) },
+                        onUpdateGuide: { instruction in
+                            // Guide v2.1 refinement: async, non-blocking; current script stays until a valid
+                            // refined one replaces it. Returns a short summary, or nil on a recoverable failure.
+                            let coordinator = StoryGuideCoordinator(context: context)
+                            do {
+                                let outcome = try await coordinator.refineGuideV2(for: story, instruction: instruction)
+                                await MainActor.run { guideV2 = outcome.guide }
+                                // Mark the Story dirty so R7 syncs the refined guide + scene history.
+                                StorySyncCoordinator.shared.touch(storyId: story.id, context: context,
+                                    activeOwner: story.ownerAccountId, token: { await AuthStore.shared?.validAccessToken() })
+                                let added = outcome.changes.filter { $0.disposition == "added" }.count
+                                let improved = outcome.changes.filter { $0.disposition == "improved" }.count
+                                let archived = outcome.archivedSceneIds.count
+                                var parts: [String] = []
+                                if added > 0 { parts.append("\(added) added") }
+                                if improved > 0 { parts.append("\(improved) improved") }
+                                if archived > 0 { parts.append("\(archived) archived") }
+                                return parts.isEmpty ? "Guide updated." : "Updated · " + parts.joined(separator: " · ")
+                            } catch {
+                                return nil   // current guide untouched; the section shows a recoverable error
+                            }
+                        },
+                        isPinned: { sceneId in StoryGuideCoordinator(context: context).isPinned(storyId: story.id, sceneId: sceneId) },
+                        onTogglePin: { sceneId in
+                            _ = StoryGuideCoordinator(context: context).togglePin(storyId: story.id, sceneId: sceneId)
+                            StorySyncCoordinator.shared.touch(storyId: story.id, context: context,
+                                activeOwner: story.ownerAccountId, token: { await AuthStore.shared?.validAccessToken() })
+                        },
+                        eventContext: story.eventContext ?? "",
+                        onSaveEventContext: { text in
+                            story.eventContext = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+                            try? context.save()
+                        })
+                } else {
                 StoryGuideSection(guide: guide, coverage: coverage, isLoading: coverageLoading, onShoot: { dim, poss in
                     // Guide possibility -> Shoot (Director entry point B): purpose = possibility
                     // semantic_purpose ?? owning dimension purpose; carry the possibility label.
@@ -156,6 +256,7 @@ struct StoryHomeView: View {
                 }, onRetry: {
                     Task { await refreshGuideAndCoverage() }   // #1: recover a failed/interrupted Guide
                 })
+                }
 
                 #if DEBUG
                 if AppMode.current.showsDiagnostics {
@@ -315,6 +416,44 @@ struct StoryHomeView: View {
         let coordinator = StoryGuideCoordinator(context: context)
         if let existing = coordinator.guide(for: story.id) { guide = existing }  // show at once if present
         coverageLoading = (guide == nil)
+        // Guide v2 (AI shooting script): when enabled, prefer the scene-based Guide. It persists into the SAME
+        // model row, so Coverage fingerprinting + R7 sync are unchanged. A v2 failure (incl. the backend route
+        // gated off) falls back to the v1 creative-map path below — never a fabricated Guide.
+        if StoryGuideFeatures.guideV2Enabled {
+            if let existingV2 = coordinator.guideV2(for: story.id) { guideV2 = existingV2 }
+            coverageLoading = (guideV2 == nil && guide == nil)
+            if let gv2 = await coordinator.ensureGuideV2(for: story) {
+                guideV2 = gv2
+                coverageLoading = false
+            }
+            // When a v2 shooting script is in effect, do NOT run the v1 ensureGuide path — it would fail to
+            // decode the v2 row as v1 dimensions and try to regenerate, overwriting the scene-based Guide.
+            if let gv2 = guideV2 {
+                // Music backfill (same as the v1 tail): ensure a default MusicDirection exists, non-blocking.
+                let musicCoord = MusicDirectionCoordinator(context: context)
+                if musicCoord.direction(for: story.id) == nil,
+                   !CloudHydrationGate.shared.isHydratingAfterSeed(storyId: story.id, context: context) {
+                    Task { await musicCoord.ensure(for: story, guideFramingSummary: gv2.framingSummary) }
+                }
+                // Coverage/2 for a v2 shooting script. The mapper keys state by the scene's stable id, so we
+                // adapt the scenes onto the dimensions shape it expects (no new identity system). This is
+                // GATED by isStale inside recomputeIfNeeded + the process-wide CoverageRecomputeGate, so a
+                // plain re-open with unchanged moments/intent/guide is a NO-OP (no model call, no queue
+                // pressure — the per-moment storm fix is intact). It fires only when a Moment/intent/guide
+                // actually changed, OR when there is no valid snapshot yet (first coverage, or recovery of a
+                // previously-failed one). Without this call a v2 Story NEVER computed coverage at all, so
+                // every scene stayed "Not captured" and no Story Idea appeared.
+                let covGuide = gv2.asCoverageGuideDTO()
+                let guideFingerprint = coordinator.guideFingerprint(for: story.id)
+                let engineInputs = engine.currentInputs(for: story)
+                if !engineInputs.completedMUValues.isEmpty {
+                    let fresh = await engine.recomputeIfNeeded(
+                        for: story, guide: covGuide, guideFingerprint: guideFingerprint)
+                    if let fresh { coverage = fresh }   // keep previous on failure
+                }
+                return
+            }
+        }
         let g = await coordinator.ensureGuide(for: story)
         coverageLoading = false          // ALWAYS clear (success, failure, or cancellation)
         guard let g else { return }      // Guide unavailable (retryable) — neutral state + Retry button

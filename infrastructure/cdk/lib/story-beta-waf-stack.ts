@@ -36,6 +36,8 @@ export interface StoryBetaWafStackProps extends cdk.StackProps {
   readonly rateLimit?: number;
   /** Max request body bytes before the size rule matches. */
   readonly maxBodyBytes?: number;
+  /** Owner-approved 2026-10-22: flip the per-IP RATE rule from Count to Block (CRS stays Count). */
+  readonly rateBlock?: boolean;
 }
 
 export class StoryBetaWafStack extends cdk.Stack {
@@ -81,7 +83,9 @@ export class StoryBetaWafStack extends cdk.Stack {
       {
         name: "RateLimitPerIp", priority: 3,
         statement: { rateBasedStatement: { limit: rateLimit, aggregateKeyType: "IP" } },
-        action: { count: {} },                  // COUNT first (flip to {block:{}} to enable blocking)
+        // Owner GO 2026-10-22: Block when rateBlock=true (0 false-positive counts in 72h), else Count. The CRS
+        // rule above STAYS Count (76 false-positive counts on AI JSON bodies — do NOT block it).
+        action: props.rateBlock ? { block: {} } : { count: {} },
         visibilityConfig: metric("RateLimitPerIp"),
       },
       {

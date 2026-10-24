@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "SceneCapturePossibility": {
+      "additionalProperties": false,
+      "description": "ONE example way a scene's `what_to_capture` COULD be realized \u2014 an illustration,\nNEVER a required shot. Mirrors v1 CapturePossibility so Coverage mapping is identical.\n`id` is server-minted stable identity (drives represented/Shoot/Reshoot affordances).",
+      "properties": {
+        "id": {
+          "description": "server/domain-minted stable id; model ordinal is coerced, never canonical",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "description": "short example expression, e.g. 'the first glimpse of the skyline'",
+          "title": "Label",
+          "type": "string"
+        },
+        "semantic_purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "what this example expresses (optional; used by Director handoff)",
+          "title": "Semantic Purpose"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "SceneCapturePossibility",
+      "type": "object"
+    },
+    "StoryGuideScene": {
+      "additionalProperties": false,
+      "description": "One concrete, event-specific shooting scene (the AI shooting-script unit). Written\nin a friendly-director voice for a non-filmmaker. `id` is server-minted STABLE\nStory-local identity (StoryCoverage/2 references it by id exactly like a v1 dimension).\n`visual_reference_query` is a GENERIC composition/action description for an image\nsearch \u2014 it carries NO user media, NO personal details, NO full event description, and\nthe model NEVER emits image ids/urls/attribution (those are attached server-side).",
+      "properties": {
+        "capture_possibilities": {
+          "description": "a FEW (prefer 1-3) illustrative expressions; examples, not requirements",
+          "items": {
+            "$ref": "#/$defs/SceneCapturePossibility"
+          },
+          "title": "Capture Possibilities",
+          "type": "array"
+        },
+        "how_to_shoot": {
+          "description": "practical, accessible advice: framing, movement, perspective, shot variety or duration \u2014 no jargon",
+          "title": "How To Shoot",
+          "type": "string"
+        },
+        "id": {
+          "description": "server/domain-minted STABLE id; model ordinal is coerced, never canonical",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "short, memorable, EVENT-SPECIFIC scene title (never a generic template)",
+          "title": "Title",
+          "type": "string"
+        },
+        "visual_reference_query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "GENERIC composition/action search phrase for a reference image (e.g. 'wide shot city skyline at dusk'). No personal details, no user media, no image ids/urls/attribution.",
+          "title": "Visual Reference Query"
+        },
+        "what_to_capture": {
+          "description": "a concrete filming opportunity, in plain language",
+          "title": "What To Capture",
+          "type": "string"
+        },
+        "why_it_matters": {
+          "description": "short explanation of the scene's storytelling value",
+          "title": "Why It Matters",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "what_to_capture",
+        "how_to_shoot",
+        "why_it_matters"
+      ],
+      "title": "StoryGuideScene",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "FROZEN-ON-SHIP story_guide/2 (additive to story_guide/1). Generated ONCE from\nCreativeIntent at Story creation (async, non-blocking); stable while StoryCoverage\nrecomputes. A friendly, event-specific shooting script of a SMALL number of scenes\nshown most-relevant-first. The `visual_reference_query` fields are text-only search\ndescriptions; provider image metadata is attached SEPARATELY and never by the model.",
+  "properties": {
+    "framing_summary": {
+      "description": "ONE short human-readable statement of what this Story is trying to capture (app's calm voice)",
+      "title": "Framing Summary",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "scenes": {
+      "description": "SMALL, scope-sensitive set of event-specific shooting scenes",
+      "items": {
+        "$ref": "#/$defs/StoryGuideScene"
+      },
+      "title": "Scenes",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "story_guide/2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_creative_intent_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "provenance: which resolved CreativeIntent this Guide was built from",
+      "title": "Source Creative Intent Version"
+    },
+    "story_id": {
+      "format": "uuid",
+      "title": "Story Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "story_id",
+    "framing_summary"
+  ],
+  "title": "StoryGuideV2",
+  "type": "object"
+}

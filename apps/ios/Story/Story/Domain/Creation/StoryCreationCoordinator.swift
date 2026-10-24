@@ -584,7 +584,26 @@ final class StoryCreationCoordinator {
             var sheets: [MomentContactSheet] = []
             var budgetDiag = (tier: "text_only", applied: [String](), textOnly: 0, imageBytes: 0)
             if wantMultimodal {
-                let budget = await MultimodalVisualBudget.build(Self.visualBudgetInputs(from: build))
+                // RELIABILITY (visual-first): a Moment whose local file is evicted (R5) or not-yet-restored is
+                // otherwise SILENTLY skipped by visualBudgetInputs (fileExists -> continue) and planned
+                // text-only — which made an initial create sheet only the Moments that happened to be local at
+                // that instant (observed: 7 of 16 sheets one run, 16/16 the next). Restore the included
+                // Moments to local FIRST (reusing the same R6 path as the render step), so visual-first covers
+                // every Moment regardless of eviction state. A Moment that genuinely cannot be restored still
+                // falls back to text-only (never fabricated), and is counted in momentsTextOnly for diagnostics.
+                let includedIds = Set(build.includedMedia.map { $0.momentId })
+                let includedMoments = story.moments.filter { includedIds.contains($0.id) }
+                let restored = await MomentResolver.resolveEnsuringLocal(
+                    moments: includedMoments, context: context,
+                    activeOwner: AuthStore.shared?.storyUserId,
+                    token: { await AuthStore.shared?.validAccessToken() })
+                var mediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+                for md in restored.media { mediaById[md.momentId] = md }
+                if !restored.unavailable.isEmpty {
+                    MediaEngineV1.beacon("visual-first restore: \(restored.unavailable.count) of \(includedMoments.count) Moment(s) could not be restored -> text-only")
+                }
+                let budget = await MultimodalVisualBudget.build(
+                    Self.visualBudgetInputs(fromMedia: Array(mediaById.values), auUsefulRanges: build.auUsefulRanges))
                 sheets = budget.sheets
                 budgetDiag = (budget.selectedTier, budget.appliedSteps, budget.momentsTextOnly,
                               budget.sheets.reduce(0) { $0 + $1.jpeg.count })
@@ -939,6 +958,23 @@ final class StoryCreationCoordinator {
             out.append(VisualBudgetInput(
                 momentId: m.momentId, url: url, durationSeconds: m.durationSeconds,
                 usefulSegmentCount: ranges[key]?.count ?? 0, eventCount: 0))
+        }
+        return out
+    }
+
+    /// Visual-budget inputs from an EXPLICIT media set (e.g. the post-R6-restore union), so a Moment that was
+    /// cloud-only/evicted and has just been restored is included rather than dropped. A file that STILL does
+    /// not exist locally (genuinely unrestorable) is skipped — it plans text-only, honestly, never fabricated.
+    static func visualBudgetInputs(fromMedia media: [MomentMedia],
+                                   auUsefulRanges: [String: [(Double, Double)]]) -> [VisualBudgetInput] {
+        var out: [VisualBudgetInput] = []
+        for m in media {
+            guard MediaStore.shared.fileExists(relativePath: m.relativePath) else { continue }
+            let url = MediaStore.shared.absoluteURL(for: m.relativePath)
+            let key = m.momentId.uuidString.lowercased()
+            out.append(VisualBudgetInput(
+                momentId: m.momentId, url: url, durationSeconds: m.durationSeconds,
+                usefulSegmentCount: auUsefulRanges[key]?.count ?? 0, eventCount: 0))
         }
         return out
     }

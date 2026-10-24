@@ -403,6 +403,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Story/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = YoTale;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Story uses the camera to capture your moments.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Story records audio with your video moments.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Story saves a copy of your captured moments to your Photos library so you own them outside Story.";
@@ -436,6 +437,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Story/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = YoTale;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Story uses the camera to capture your moments.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Story records audio with your video moments.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Story saves a copy of your captured moments to your Photos library so you own them outside Story.";

@@ -84,6 +84,11 @@ struct CustomizeYourStoryView: View {
     @State private var sound: SoundPreference
     @State private var approach: EditingApproach
     @State private var customSeconds: Double
+    /// OPTIONAL style presets (Phase B). Multi-select, OFF by default; applied per-output only (folded into
+    /// soft_direction + music seed in performInterpretation), never written to durable Story CreativeIntent.
+    @State private var selectedPresets: Set<StylePreset> = []
+    /// Advanced section (Editing Approach) collapsed by default — progressive disclosure (decision 4).
+    @State private var showAdvanced = false
     // Stage 2 Creative Direction (optional). Draft text + reference chips, resolved to directives on Create.
     @State private var creativeDirection: String
     @State private var chips: [MomentReferenceChipModel]
@@ -156,6 +161,33 @@ struct CustomizeYourStoryView: View {
         }
     }
 
+    /// DETERMINISTIC plain-language summary of the current generation settings (M1). No model call. Duration
+    /// is included ONLY when a concrete value is known for the chosen length (never invented). Style is named
+    /// only when a preset is selected (optional). Reads from live @State so it updates as the user adjusts.
+    private var directionSummary: String {
+        var parts: [String] = []
+        // Feel (only if the user picked one — optional).
+        let feels = StylePreset.allCases.filter { selectedPresets.contains($0) }.map { $0.label.lowercased() }
+        if !feels.isEmpty { parts.append("a \(feels.joined(separator: ", ")) feel") }
+        // Length — name the editorial choice; include seconds only when known.
+        switch length {
+        case .highlights:
+            parts.append(highlightsSeconds.map { "a highlights cut (~\(Int($0.rounded()))s)" } ?? "a highlights cut")
+        case .full:
+            parts.append(fullSeconds.map { "the full story (~\(Int($0.rounded()))s)" } ?? "the full story")
+        case .custom:
+            parts.append("about \(Int(clampedCustom.rounded()))s")
+        }
+        // Sound.
+        switch sound {
+        case .immersive: parts.append("natural sound forward")
+        case .balanced:  parts.append("balanced sound")
+        case .musicLed:  parts.append("music-led")
+        }
+        let body = parts.joined(separator: " · ")
+        return "Story will create \(body). Adjust anything below, or just tap Create."
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
@@ -165,6 +197,19 @@ struct CustomizeYourStoryView: View {
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
                 }
 
+                // STORY DIRECTION SUMMARY (M1) — a DETERMINISTIC, plain-language reflection of the current
+                // generation settings (length + sound + any chosen feel). No model call; built purely from live
+                // state. Duration is shown ONLY when known (never invented). This makes the sheet itself the
+                // compact "Story direction" summary + the single Create button below, so no extra confirmation
+                // step is added.
+                Text(directionSummary)
+                    .font(StoryTheme.body(13))
+                    .foregroundStyle(StoryTheme.cream.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(StoryTheme.surfaceAlt.opacity(0.5), in: RoundedRectangle(cornerRadius: StoryTheme.field))
+
                 // SECTION — Creative Direction (OPTIONAL; Stage 2) — TOP of the sheet (the primary creative
                 // input). Shown only when there are referenceable Moments. Natural-language instructions + typed
                 // "Moment N" references + a visual picker; typed references resolve against the stable numbering
@@ -173,34 +218,12 @@ struct CustomizeYourStoryView: View {
                 if numbering.count > 0 {
                     section(title: "Creative Direction",
                             subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
-                        // Part B — SAVED instructions summary. Shows every active persisted structural directive
-                        // (opening/adjacency/order/include/exclude) by stable Moment number, visually distinct
-                        // from the new free-text input below, with an explicit Clear. Clearing removes them from
-                        // the submitted request (never silently retained, never silently dropped).
-                        let savedLines = Self.savedDirectiveLines(savedDirectives, numbering: numbering)
-                        if !savedLines.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("SAVED INSTRUCTIONS").font(StoryTheme.body(10, .bold)).tracking(0.6)
-                                        .foregroundStyle(StoryTheme.cream.opacity(0.45))
-                                    Spacer()
-                                    Button { savedDirectives = nil } label: {
-                                        Text("Clear").font(StoryTheme.body(12, .medium)).foregroundStyle(StoryTheme.gold)
-                                    }.buttonStyle(.plain)
-                                }
-                                ForEach(Array(savedLines.enumerated()), id: \.offset) { _, line in
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "checkmark.circle").font(.system(size: 11))
-                                            .foregroundStyle(StoryTheme.cream.opacity(0.5))
-                                        Text(line).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.8))
-                                    }
-                                }
-                                Text("Saved from an earlier edit. Clear to start fresh, or add more below.")
-                                    .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textSecondary)
-                            }
-                            .padding(12)
-                            .background(StoryTheme.surfaceAlt, in: RoundedRectangle(cornerRadius: StoryTheme.field))
-                        }
+                        // #1 (owner 2026-10-24): the "Saved instructions" summary was removed — it added clutter
+                        // without value. The prior free-text direction is repopulated as the input default
+                        // (initialCreativeDirection) and prior Moment references show as chips below, which is
+                        // enough context. The saved STRUCTURAL directives (opening/include/order) are still
+                        // folded on Create (so a prior "start with Moment 17" is not lost), reflected by the
+                        // chip row rather than a separate panel.
                         StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
                                        text: $creativeDirection, minHeight: 110)
                             // Editing the instruction invalidates any in-flight interpretation (owner #1): a
@@ -250,53 +273,52 @@ struct CustomizeYourStoryView: View {
                     }
                 }
 
-                // SECTION — Editing approach (the primary structural decision). Shown ONLY when Visual-first
-                // can actually be honored (the feature flag is the deployment safety gate), so an unavailable
-                // option is never presented. Both approaches preserve length, music, and original sounds.
-                if visualFirstAvailable {
-                    section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
-                        approachRow(.storytelling)
-                        approachRow(.visualFirst)
-                        Text("Both approaches preserve your chosen length, music, and original sounds.")
-                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
-                    }
-                }
-
-                // SECTION A — Story Length
-                section(title: "Story length", subtitle: "Choose how much of the experience to show.") {
-                    if let hi = highlightsSeconds {
-                        row(selected: length == .highlights, title: "Highlights",
-                            detail: "The most memorable moments", trailing: "~\(Int(hi.rounded()))s") { length = .highlights }
-                    }
-                    if let full = fullSeconds {
-                        row(selected: length == .full, title: "Full Story",
-                            detail: "More of the journey, details and atmosphere",
-                            trailing: "~\(Int(full.rounded()))s") { length = .full }
-                    }
-                    row(selected: length == .custom, title: "Custom",
-                        detail: "Set a specific length", trailing: "Your choice") { length = .custom }
-
-                    if length == .custom {
-                        HStack(spacing: 12) {
-                            TextField("seconds", value: $customSeconds, format: .number)
-                                .keyboardType(.numberPad)
-                                .font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
-                                .frame(width: 90).padding(.horizontal, 12).padding(.vertical, 8)
-                                .background(StoryTheme.surfaceAlt).clipShape(RoundedRectangle(cornerRadius: 10))
-                            Text("seconds").font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
-                            Spacer()
-                            Stepper("", value: $customSeconds, in: floor...ceiling, step: 1).labelsHidden()
+                // SECTION — Feeling / Style presets (OPTIONAL; Phase B). Inspiration, not a rule: a tapped
+                // preset is folded into THIS generation's soft direction + music seed only, never the Story's
+                // durable creative identity. None selected by default. An explicit NL instruction above wins.
+                section(title: "Give it a feel", subtitle: "Optional. A quick creative direction for this video.") {
+                    let cols = [GridItem(.adaptive(minimum: 104), spacing: 8)]
+                    LazyVGrid(columns: cols, alignment: .leading, spacing: 8) {
+                        ForEach(StylePreset.allCases) { preset in
+                            let on = selectedPresets.contains(preset)
+                            Button {
+                                if on { selectedPresets.remove(preset) } else { selectedPresets.insert(preset) }
+                            } label: {
+                                Text(preset.label)
+                                    .font(StoryTheme.body(14, .medium))
+                                    .foregroundStyle(on ? StoryTheme.ink : StoryTheme.cream)
+                                    .padding(.horizontal, 16).padding(.vertical, 9)
+                                    .frame(maxWidth: .infinity)
+                                    .background(on ? StoryTheme.cream : StoryTheme.surfaceAlt.opacity(0.6),
+                                                in: Capsule())
+                                    .overlay(Capsule().stroke(on ? StoryTheme.gold : StoryTheme.cream.opacity(0.12),
+                                                              lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        Text("\(Int(floor))–\(Int(ceiling))s fits your footage")
-                            .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
                     }
+                    Text("Presets suggest a feel; anything you type above takes priority.")
+                        .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
                 }
 
-                // SECTION B — Sound
-                section(title: "Sound", subtitle: "How should your Story feel and sound?") {
-                    soundRow(.immersive, "Immersive", "Bring natural sounds, voices and atmosphere forward")
-                    soundRow(.balanced, "Balanced", "Blend original sounds with background music")
-                    soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
+                // SECTION — Advanced (collapsed; progressive disclosure). Holds Story Length, Sound, and —
+                // only when Visual-first can be honored — Editing Approach. The DEFAULT path needs none of
+                // these (the summary above shows the inferred length/sound; tapping Create uses them). Always
+                // present so a user who wants precise control can open it.
+                VStack(alignment: .leading, spacing: 14) {
+                    Button { withAnimation(.easeInOut(duration: 0.15)) { showAdvanced.toggle() } } label: {
+                        HStack {
+                            Text("Advanced").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+                            Spacer()
+                            Image(systemName: showAdvanced ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(StoryTheme.textMuted)
+                        }
+                    }.buttonStyle(.plain)
+                    if showAdvanced {
+                        lengthSection
+                        soundSection
+                        if visualFirstAvailable { approachSection }
+                    }
                 }
 
                 Button { attemptCreate() } label: {
@@ -405,10 +427,31 @@ struct CustomizeYourStoryView: View {
                     for p in saved.orderAdjacent where !directives.orderAdjacent.contains(p) { directives.orderAdjacent.append(p) }
                 }
                 let finalDirectives: ResolvedDirectives? = directives.isEmpty ? nil : directives
-                let music = MomentReferenceResolver.parseMusicIntent(snapshotText)
+                var music = MomentReferenceResolver.parseMusicIntent(snapshotText)
                 if !musicSuffix.isEmpty { clarification = outcome.unsupportedMusicNote }  // non-blocking note
+
+                // OPTIONAL style presets (Phase B, decisions 2B–2E). Applied PER OUTPUT ONLY: the preset phrase
+                // is APPENDED after the user's own soft text (NL wins, 2D); the music seed is used ONLY when the
+                // user expressed no music preference of their own (2D). Nothing here writes durable Story
+                // CreativeIntent — the phrase rides soft_direction and the moods ride ParsedMusicIntent, both
+                // per-attempt (2E). None selected => byte-identical to before.
+                let contribution = StylePresetContribution.from(
+                    selectedPresets, userHasMusicPreference: music.preference != nil)
+                var effectiveSoft = snapshotText
+                if !contribution.directionSuffix.isEmpty {
+                    effectiveSoft = effectiveSoft.isEmpty
+                        ? contribution.directionSuffix
+                        : effectiveSoft + ". " + contribution.directionSuffix
+                }
+                if music.preference == nil, !contribution.musicMoodTags.isEmpty {
+                    let phrase = selectedPresets.count == 1
+                        ? (selectedPresets.first?.label.lowercased() ?? "") + " music"
+                        : contribution.musicMoodTags.joined(separator: " · ") + " music"
+                    music.preference = (phrase: phrase, moodTags: contribution.musicMoodTags)
+                }
+
                 onCreate(chosenSeconds, sound, length.wire, approach, finalDirectives,
-                         snapshotText, snapshotChips.map(\.id), music)
+                         effectiveSoft, snapshotChips.map(\.id), music)
             }
         }
     }
@@ -436,6 +479,54 @@ struct CustomizeYourStoryView: View {
             Text(title).font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
             Text(subtitle).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
             VStack(spacing: 10) { content() }.padding(.top, 2)
+        }
+    }
+
+    // Advanced subsections (moved under progressive disclosure, owner #2 2026-10-24).
+    @ViewBuilder private var lengthSection: some View {
+        section(title: "Story length", subtitle: "Choose how much of the experience to show.") {
+            if let hi = highlightsSeconds {
+                row(selected: length == .highlights, title: "Highlights",
+                    detail: "The most memorable moments", trailing: "~\(Int(hi.rounded()))s") { length = .highlights }
+            }
+            if let full = fullSeconds {
+                row(selected: length == .full, title: "Full Story",
+                    detail: "More of the journey, details and atmosphere",
+                    trailing: "~\(Int(full.rounded()))s") { length = .full }
+            }
+            row(selected: length == .custom, title: "Custom",
+                detail: "Set a specific length", trailing: "Your choice") { length = .custom }
+            if length == .custom {
+                HStack(spacing: 12) {
+                    TextField("seconds", value: $customSeconds, format: .number)
+                        .keyboardType(.numberPad)
+                        .font(StoryTheme.display(20)).foregroundStyle(StoryTheme.cream)
+                        .frame(width: 90).padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(StoryTheme.surfaceAlt).clipShape(RoundedRectangle(cornerRadius: 10))
+                    Text("seconds").font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
+                    Spacer()
+                    Stepper("", value: $customSeconds, in: floor...ceiling, step: 1).labelsHidden()
+                }
+                Text("\(Int(floor))–\(Int(ceiling))s fits your footage")
+                    .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
+            }
+        }
+    }
+
+    @ViewBuilder private var soundSection: some View {
+        section(title: "Sound", subtitle: "How should your Story feel and sound?") {
+            soundRow(.immersive, "Immersive", "Bring natural sounds, voices and atmosphere forward")
+            soundRow(.balanced, "Balanced", "Blend original sounds with background music")
+            soundRow(.musicLed, "Music-led", "Let the soundtrack lead the experience")
+        }
+    }
+
+    @ViewBuilder private var approachSection: some View {
+        section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
+            approachRow(.storytelling)
+            approachRow(.visualFirst)
+            Text("Both approaches preserve your chosen length, music, and original sounds.")
+                .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
         }
     }
 

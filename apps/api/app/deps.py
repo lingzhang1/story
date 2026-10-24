@@ -105,6 +105,9 @@ def get_creative_intent_engine() -> CreativeIntentEngine:
     """
     if os.environ.get("STORY_CREATIVE_INTENT_MOCK") == "1":
         return MockCreativeIntentEngine()
+    if _provider_mode() == "direct":
+        from model_gateway.provider import make_gateway
+        return RealCreativeIntentEngine(make_gateway("creative_intent"))
     return RealCreativeIntentEngine(get_model_gateway())
 
 
@@ -120,7 +123,7 @@ def get_scene_understanding_engine() -> SceneUnderstandingEngine:
     if os.environ.get("STORY_SCENE_UNDERSTANDING_MOCK") == "1":
         return MockSceneUnderstandingEngine()
     model = os.environ.get("STORY_SCENE_MODEL", "amazon.nova-pro-v1:0")
-    return RealSceneUnderstandingEngine(BedrockModelGateway(model_id=model))
+    return RealSceneUnderstandingEngine(routed_gateway("scene_understanding", model))
 
 
 def get_story_director_engine() -> StoryDirectorEngine:
@@ -136,7 +139,9 @@ def get_story_director_engine() -> StoryDirectorEngine:
     if os.environ.get("STORY_DIRECTOR_MOCK") == "1":
         return MockStoryDirectorEngine()
     model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-opus-4-5-20251101-v1:0")
-    return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))
+    # P0 provider restore: route via the provider router so STORY_MODEL_PROVIDER=direct reaches OpenAI/Gemini
+    # (the hardcoded BedrockModelGateway bypassed it and kept calling the restricted Anthropic model).
+    return RealStoryDirectorEngine(routed_gateway("story_director", model))
 
 
 def get_asset_understanding_engine() -> AssetUnderstandingEngine:
@@ -149,7 +154,7 @@ def get_asset_understanding_engine() -> AssetUnderstandingEngine:
     if os.environ.get("STORY_ASSET_UNDERSTANDING_MOCK") == "1":
         return MockAssetUnderstandingEngine()
     model = os.environ.get("STORY_AU_MODEL", DEFAULT_AU_MODEL)
-    return RealAssetUnderstandingEngine(BedrockModelGateway(model_id=model), model_id=model)
+    return RealAssetUnderstandingEngine(routed_gateway("asset_understanding", model), model_id=model)
 
 
 def get_story_coverage_engine() -> StoryCoverageEngine:
@@ -165,7 +170,7 @@ def get_story_coverage_engine() -> StoryCoverageEngine:
     model = os.environ.get("STORY_COVERAGE_MODEL", DEFAULT_COVERAGE_MODEL)
     # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle), so a create
     # degrades rather than 503s at this stage. Same-version is a no-op (helper returns the bare gateway).
-    return RealStoryCoverageEngine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryCoverageEngine(routed_gateway("story_coverage", model), model_id=model)
 
 
 def get_story_guide_engine() -> StoryGuideEngine:
@@ -181,7 +186,36 @@ def get_story_guide_engine() -> StoryGuideEngine:
     model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
     # R-d.2 reliability: Opus primary -> Sonnet fallback on ProviderError (daily-quota throttle). Same-version
     # is a no-op (helper returns the bare gateway).
-    return RealStoryGuideEngine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryGuideEngine(routed_gateway("story_guide", model), model_id=model)
+
+
+def get_story_guide_v2_engine():
+    """Provide the StoryGuide/2 engine — the AI SHOOTING SCRIPT (additive, 2026-10-23).
+
+    CreativeIntent -> scene-based shooting script, ONCE per Story. Same model selection as v1
+    (config-driven STORY_GUIDE_MODEL, default Opus 4.6) with the Opus->Sonnet quota fallback. Set
+    STORY_GUIDE_MOCK=1 for the dev/offline mock. The ENDPOINT itself is feature-gated by STORY_GUIDE_V2;
+    this getter only constructs the engine. Guide failure preserves CreativeIntent (never fabricate)."""
+    from story_guide import RealStoryGuideV2Engine, MockStoryGuideV2Engine
+    if os.environ.get("STORY_GUIDE_MOCK") == "1":
+        return MockStoryGuideV2Engine()
+    model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
+    return RealStoryGuideV2Engine(routed_gateway("story_guide", model), model_id=model)
+
+
+def get_story_guide_refine_engine():
+    """Provide the StoryGuide/2 REFINEMENT engine — "Update Guide" (Guide v2.1, 2026-10-23).
+
+    current v2 shooting script + captured/pinned state + user update -> next v2 shooting script +
+    change log. The MODEL proposes; the engine reconciles identity + history server-side (captured/
+    pinned preserved, stable ids kept, new ids minted beyond max ordinal, dropped scenes archived).
+    Same model selection + Opus->Sonnet quota fallback as v1/v2. STORY_GUIDE_MOCK=1 -> dev mock. The
+    ENDPOINT is feature-gated by STORY_GUIDE_V2; refine failure preserves the CURRENT Guide (no fabricate)."""
+    from story_guide import RealStoryGuideRefineEngine, MockStoryGuideRefineEngine
+    if os.environ.get("STORY_GUIDE_MOCK") == "1":
+        return MockStoryGuideRefineEngine()
+    model = os.environ.get("STORY_GUIDE_MODEL", DEFAULT_GUIDE_MODEL)
+    return RealStoryGuideRefineEngine(routed_gateway("story_guide", model), model_id=model)
 
 
 def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
@@ -197,7 +231,7 @@ def get_story_coverage_v2_engine() -> StoryCoverageV2Engine:
     # throttle failed hiking creates ('story_coverage_v2_unavailable: Too many tokens per day') before the
     # (already fallback-protected) edit planner was ever reached. BOTH internal calls (mapper + judge) share
     # this gateway, so both degrade to Sonnet together. Same-version is a no-op (helper returns bare gateway).
-    return RealStoryCoverageV2Engine(_gateway_with_fallback(model), model_id=model)
+    return RealStoryCoverageV2Engine(routed_gateway("story_coverage", model), model_id=model)
 
 
 def get_music_direction_engine() -> MusicDirectionEngine:
@@ -226,6 +260,24 @@ def _gateway_with_fallback(primary_model: str) -> ModelGateway:
     return FallbackModelGateway(primary, BedrockModelGateway(model_id=FALLBACK_MODEL))
 
 
+# P0 provider restore (2026-10-23): a master switch selects the active inference provider mode.
+#   STORY_MODEL_PROVIDER = "direct"  -> route each capability to OpenAI/Gemini via the provider router
+#                                        (the Anthropic-restriction contingency path).
+#                        = "bedrock" -> legacy per-stage Bedrock model (default while Anthropic is restored).
+# `routed_gateway(capability, bedrock_model)` is the ONE helper every get_*_engine calls: in direct mode it
+# returns make_gateway(capability) (OpenAI/Gemini + FallbackModelGateway); otherwise the Bedrock fallback
+# gateway. No engine, prompt, or contract changes — only which gateway the engine is handed.
+def _provider_mode() -> str:
+    return (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower()
+
+
+def routed_gateway(capability: str, bedrock_model: str) -> ModelGateway:
+    if _provider_mode() == "direct":
+        from model_gateway.provider import make_gateway
+        return make_gateway(capability)
+    return _gateway_with_fallback(bedrock_model)
+
+
 def get_edit_planner_engine() -> EditPlannerEngine:
     """Provide the production Edit Planner engine (Milestone M-d, frozen edit_plan/2).
 
@@ -244,7 +296,7 @@ def get_edit_planner_engine() -> EditPlannerEngine:
     # plan the engine escalates ONCE to the ceiling (16384). Both env-tunable without a redeploy.
     max_tokens = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS", "8192"))
     ceiling = int(os.environ.get("STORY_EDIT_PLANNER_MAX_TOKENS_CEILING", "16384"))
-    return RealEditPlannerEngine(_gateway_with_fallback(model), executability_repair_attempts=repairs,
+    return RealEditPlannerEngine(routed_gateway("edit_plan", model), executability_repair_attempts=repairs,
                                  max_tokens=max_tokens, max_tokens_ceiling=ceiling)
 
 
@@ -258,7 +310,7 @@ def get_music_plan_engine() -> MusicPlanEngine:
     caller falls back to no-music creation.
     """
     model = os.environ.get("STORY_MUSIC_PLAN_MODEL", MUSIC_PLAN_MODEL)
-    return RealMusicPlanEngine(_gateway_with_fallback(model))
+    return RealMusicPlanEngine(routed_gateway("music", model))
 
 
 def get_duration_planner_engine() -> DurationPlannerEngine:
@@ -271,4 +323,6 @@ def get_duration_planner_engine() -> DurationPlannerEngine:
     fabricates — a failure propagates so the caller falls back to manual duration selection.
     """
     model = os.environ.get("STORY_DURATION_PLANNER_MODEL", DURATION_PLANNER_MODEL)
-    return RealDurationPlannerEngine(_gateway_with_fallback(model))
+    # P0 provider restore: route via the provider router so STORY_MODEL_PROVIDER=direct reaches OpenAI/Gemini
+    # (the _gateway_with_fallback helper is Bedrock-only and kept calling the restricted Anthropic model).
+    return RealDurationPlannerEngine(routed_gateway("duration", model))

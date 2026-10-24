@@ -68,14 +68,28 @@ def _quota_usage_table() -> str:
     return os.environ.get("STORY_USER_USAGE_TABLE", "")
 
 
+def _served_model_id(diag: dict) -> str:
+    """The model that ACTUALLY served this job, from the gateway diagnostics (`calls[].served_by`), so
+    cost/metrics/diag report the real provider model (e.g. gpt-5.1 in direct mode) rather than the
+    hardcoded Bedrock env. Falls back to the fallback/primary env only when the gateway did not report a
+    served model (older gateway, or no call recorded)."""
+    calls = diag.get("calls")
+    if isinstance(calls, list) and calls:
+        served = (calls[-1] or {}).get("served_by")
+        if served:
+            return str(served)
+    return _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
+
+
 def _job_cost_usd(diag: dict) -> float:
-    """Actual incurred Bedrock spend for this job from its diagnostics tokens (correction 3/8: ALL billable
-    attempts — retries, repairs, critiques, fallback — are summed into input/output_tokens by the engine)."""
+    """Actual incurred model spend for this job from its diagnostics tokens (correction 3/8: ALL billable
+    attempts — retries, repairs, critiques, fallback — are summed into input/output_tokens by the engine).
+    Priced against the ACTUAL served model (direct-provider aware)."""
     if _price_lookup is None:
         return 0.0
     in_tok = int(diag.get("input_tokens") or 0)
     out_tok = int(diag.get("output_tokens") or 0)
-    model_id = _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
+    model_id = _served_model_id(diag)
     try:
         cost, _priced = _price_lookup(in_tok, out_tok, model_id)
         return float(cost)
@@ -143,7 +157,7 @@ def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan", stor
         in_tok = int(diag.get("input_tokens") or 0)
         out_tok = int(diag.get("output_tokens") or 0)
         any_fallback = bool(diag.get("any_fallback"))
-        model_id = _FALLBACK_MODEL if any_fallback else _PRIMARY_MODEL
+        model_id = _served_model_id(diag)  # ACTUAL served model (direct-provider aware), not hardcoded Bedrock
         dims = {"env": _ENV, "service": "worker", "op_type": op_type, "stage": stage, "model_id": model_id}
         metrics: dict[str, float] = {
             "ModelInvocations": float(diag.get("model_calls") or diag.get("calls") or 0),
@@ -185,24 +199,33 @@ def _emit_ai_metrics(diag: dict, *, op_type: str, stage: str = "edit_plan", stor
 
 def _build_engine():
     """Mirror apps/api/app/deps.get_edit_planner_engine so the worker runs the IDENTICAL model path
-    (Opus primary -> Sonnet fallback, 2 executability repairs)."""
-    from model_gateway import BedrockModelGateway, FallbackModelGateway
+    (direct OpenAI/Gemini in STORY_MODEL_PROVIDER=direct, else Opus primary -> Sonnet fallback)."""
     model = os.environ.get("STORY_EDIT_PLANNER_MODEL", "us.anthropic.claude-opus-4-6-v1")
-    fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
-    primary = BedrockModelGateway(model_id=model)
-    gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
+    if (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower() == "direct":
+        from model_gateway.provider import make_gateway
+        gw = make_gateway("edit_plan")
+    else:
+        from model_gateway import BedrockModelGateway, FallbackModelGateway
+        fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+        primary = BedrockModelGateway(model_id=model)
+        gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
     return RealEditPlannerEngine(gw, executability_repair_attempts=2)
 
 
 def _build_coverage_engine():
     """Mirror apps/api/app/deps.get_story_coverage_v2_engine so the worker runs the IDENTICAL two-call
-    Coverage path (Mapper + Judge, Opus primary -> Sonnet fallback). Frozen prompts/contract untouched."""
-    from model_gateway import BedrockModelGateway, FallbackModelGateway
+    Coverage path (direct OpenAI/Gemini in STORY_MODEL_PROVIDER=direct, else Opus->Sonnet). Frozen
+    prompts/contract untouched."""
     from story_coverage_v2 import RealStoryCoverageV2Engine
     model = os.environ.get("STORY_COVERAGE_MODEL", "us.anthropic.claude-opus-4-6-v1")
-    fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
-    primary = BedrockModelGateway(model_id=model)
-    gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
+    if (os.environ.get("STORY_MODEL_PROVIDER", "bedrock") or "bedrock").strip().lower() == "direct":
+        from model_gateway.provider import make_gateway
+        gw = make_gateway("story_coverage")
+    else:
+        from model_gateway import BedrockModelGateway, FallbackModelGateway
+        fb = os.environ.get("STORY_LLM_FALLBACK_MODEL", "us.anthropic.claude-sonnet-4-6")
+        primary = BedrockModelGateway(model_id=model)
+        gw = primary if (not fb or fb == model) else FallbackModelGateway(primary, BedrockModelGateway(model_id=fb))
     return RealStoryCoverageV2Engine(gw, model_id=model)
 
 
@@ -482,7 +505,7 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
         # cost-legible. input_tokens/output_tokens are the SUMMED billable tokens across all attempts.
         diag_out["input_tokens"] = int(diag.get("input_tokens") or 0)
         diag_out["output_tokens"] = int(diag.get("output_tokens") or 0)
-        diag_out["model_id"] = _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
+        diag_out["model_id"] = _served_model_id(diag)
         # DIRECTIVE visibility: what revision_context the worker ACTUALLY received, the resolved opening id,
         # and whether the produced plan's first segment honored it. This is the only way to tell apart "the app
         # sent no/stale directive" from "the directive was sent but not enforced" from "Moment N resolved to an

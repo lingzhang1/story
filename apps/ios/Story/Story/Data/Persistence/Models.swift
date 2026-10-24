@@ -131,6 +131,15 @@ final class StoryModel {
     // creative instruction is never silently inherited by an unrelated later version.
     var creativeDirectionText: String?
 
+    // Guide v2.1 — PERSISTENT, editable event context for the AI shooting-script Guide. Distinct from
+    // intentRawText (the ORIGINAL Story description, never overwritten) and from creativeDirectionText (the
+    // one-time edit-plan soft direction). This is the ongoing "what this event actually is / is becoming"
+    // the user can edit at any time (itinerary, venue changes, what's already filmed) WITHOUT re-entering
+    // their original description. Fed to Guide refinement as persistent context; a one-time "Update Guide"
+    // instruction is passed separately and NOT stored here. Additive migration (optional + defaulted nil);
+    // nil => older Story / not set => refinement uses only the original intent + current scenes.
+    var eventContext: String?
+
     // Async Edit Planning (Phase 2): the in-flight planning job for THIS creation attempt. operation_id is the
     // idempotency key — persisted BEFORE submitting so a crash/restart/retry reuses the SAME job (no duplicate
     // inference). job_id is the server's handle for polling + restart recovery. A deliberate "Create Another
@@ -736,6 +745,28 @@ final class StoryCoverageModel {
         self.updatedAt = updatedAt
     }
 }
+
+// Guide v2.1 — PINNED shooting-script scenes. A user-pinned scene is PROTECTED: a Guide refinement
+// may never archive or rewrite it (enforced server-side via captured/pinned ids, and locally by
+// passing these ids as pinned_scene_ids). One row per (storyId, sceneId). Additive, lightweight-
+// migration-safe. Scene CONTENT stays in StoryGuideModel.guideJSON (canonical); this only records the
+// pin flag keyed by the scene's stable id, so it survives refinement + R7 sync without duplicating
+// scene text. Unpinning deletes the row. Pins are per-Story durable user decisions.
+@Model
+final class StoryScenePinModel {
+    @Attribute(.unique) var key: String      // "<storyId>#<sceneId>" — one pin per scene
+    var storyId: UUID
+    var sceneId: String
+    var createdAt: Date
+
+    init(storyId: UUID, sceneId: String, createdAt: Date = .now) {
+        self.key = "\(storyId.uuidString)#\(sceneId)"
+        self.storyId = storyId
+        self.sceneId = sceneId
+        self.createdAt = createdAt
+    }
+}
+
 
 // E2-c: the persistent StoryGuide (one active version per Story for MVP). Generated ONCE from
 // CreativeIntent; stable while Coverage recomputes. Canonical server-minted dimension/possibility

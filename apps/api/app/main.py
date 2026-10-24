@@ -13,10 +13,11 @@ routes live under /v1 (03-system-architecture.md §14).
 from __future__ import annotations
 
 import json
+import os
 import time
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,7 +64,7 @@ from story_coverage import (
     PROMPT_VERSION as COV_PROMPT_VERSION,
     SCHEMA_VERSION as COV_SCHEMA_VERSION,
 )
-from story_guide import GuideInput, GuideUnavailableError, StoryGuideEngine
+from story_guide import GuideInput, GuideUnavailableError, RefineInput, StoryGuideEngine
 from music_direction import MusicDirectionEngine
 from edit_planner import (
     EditPlannerEngine,
@@ -91,12 +92,13 @@ from duration_planner import (
 )
 from music_plan import MusicPlanEngine, MusicPlanInputs
 import music_provider as _mp
+import scene_image as _scene_image
 from story_coverage_v2 import (
     CoverageV2Input,
     CoverageUnavailableError as CoverageV2UnavailableError,
     StoryCoverageV2Engine,
 )
-from contracts.schemas.ai_contracts import StoryGuideContract, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
+from contracts.schemas.ai_contracts import StoryGuideContract, StoryGuideV2Contract, StoryGuideRefinementResult, StoryCoverageContractV2, MusicDirectionContract, EditPlanV2Contract, MusicPlanContract
 from model_gateway import ProviderError, StructuredOutputError
 from observability import get_logger
 from story_engine import StoryEngine
@@ -112,6 +114,8 @@ from app.deps import (
     get_asset_understanding_engine,
     get_story_coverage_engine,
     get_story_guide_engine,
+    get_story_guide_v2_engine,
+    get_story_guide_refine_engine,
     get_story_coverage_v2_engine,
     get_music_direction_engine,
     get_edit_planner_engine,
@@ -273,6 +277,45 @@ class StoryGuideRequest(BaseModel):
     creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
     scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
     source_creative_intent_version: str | None = Field(default=None)
+
+
+class StoryGuideRefineRequest(BaseModel):
+    """POST /v1/story-guide-refine body (Guide v2.1). The CURRENT v2 shooting script + per-scene
+    captured/pinned state + the user's update -> the NEXT v2 shooting script + change log. ADDITIVE;
+    the frozen generate-once v2 path is unchanged. captured/pinned ids are PROTECTED (never archived)."""
+
+    model_config = ConfigDict(extra="forbid")
+    story_id: UUID
+    creative_intent: dict = Field(..., description="the resolved CreativeIntent (compact)")
+    scope: dict = Field(default_factory=dict, description="{target_duration_seconds?, format?}")
+    current_framing_summary: str = Field(default="")
+    current_scenes: list[dict] = Field(default_factory=list,
+        description="the current canonical v2 scenes (id/title/what_to_capture/how_to_shoot/why_it_matters)")
+    captured_scene_ids: list[str] = Field(default_factory=list,
+        description="scene ids with Coverage evidence (PROTECTED — never archived)")
+    pinned_scene_ids: list[str] = Field(default_factory=list,
+        description="user-pinned scene ids (PROTECTED — never archived)")
+    user_instruction: str | None = Field(default=None, description="one-time Update Guide instruction")
+    event_context: str | None = Field(default=None, description="persistent editable event context")
+    source_creative_intent_version: str | None = Field(default=None)
+
+
+class SceneImageRequest(BaseModel):
+    """POST /v1/scene-image body. ONE reference image for a StoryGuide/2 scene. `query` is the scene's
+    GENERIC visual_reference_query (server-authored by the v2 prompt); the server re-sanitizes + hard-bounds
+    it. story_id/scene_id are provenance only (logging/cache scoping) — never sent to the provider."""
+
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(..., description="generic scene/composition phrase (bounded + sanitized server-side)")
+    story_id: UUID | None = Field(default=None)
+    scene_id: str | None = Field(default=None)
+
+
+class SceneImageTrackRequest(BaseModel):
+    """POST /v1/scene-image/track body. Fires Unsplash download-tracking when a photo is actually USED."""
+
+    model_config = ConfigDict(extra="forbid")
+    download_location: str = Field(..., description="the Unsplash download_location URL from a prior result")
 
 
 class MusicDirectionRequest(BaseModel):
@@ -441,6 +484,33 @@ class DirectorNextRequest(BaseModel):
 
 SERVICE_NAME = "story-api"
 SERVICE_VERSION = "0.1.0"  # Milestone A
+
+
+# Scene-image (Unsplash) proxy: process-global metadata cache + lazily-built client. The key is read
+# from Secrets Manager ONCE on first use and the client reused, so each request does not re-hit Secrets
+# Manager. `_SCENE_IMAGE_CLIENT_FACTORY` is a test seam — tests set it to a fake (no network, no key).
+_SCENE_IMAGE_CACHE = None
+_SCENE_IMAGE_CLIENT = None
+_SCENE_IMAGE_CLIENT_FACTORY = None  # type: ignore[var-annotated]
+
+
+def _scene_image_cache():
+    global _SCENE_IMAGE_CACHE
+    if _SCENE_IMAGE_CACHE is None:
+        _SCENE_IMAGE_CACHE = _scene_image.MetadataCache()
+    return _SCENE_IMAGE_CACHE
+
+
+def _scene_image_client():
+    """Return a cached Unsplash client. Builds it from the Secrets Manager key on first use (raising
+    SceneImageAuthError if the key cannot be read). A test factory, when set, wins and bypasses the key."""
+    global _SCENE_IMAGE_CLIENT
+    if _SCENE_IMAGE_CLIENT_FACTORY is not None:
+        return _SCENE_IMAGE_CLIENT_FACTORY()
+    if _SCENE_IMAGE_CLIENT is None:
+        key = _scene_image.load_key()  # SceneImageAuthError if missing/denied/empty
+        _SCENE_IMAGE_CLIENT = _scene_image.UnsplashClient(key)
+    return _SCENE_IMAGE_CLIENT
 
 
 def create_app() -> FastAPI:
@@ -1136,6 +1206,166 @@ def create_app() -> FastAPI:
             extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
                    "success": True, "dimension_count": len(guide.dimensions)})
         return guide
+
+    @app.post("/v1/story-guide-v2", response_model=StoryGuideV2Contract, status_code=200)
+    def story_guide_v2(
+        body: StoryGuideRequest,
+        engine=Depends(get_story_guide_v2_engine),
+        principal: Principal = Depends(optional_user),
+    ) -> StoryGuideV2Contract:
+        """Generate the AI SHOOTING SCRIPT (story_guide/2) from CreativeIntent. ADDITIVE/versioned —
+        v1 /v1/story-guide is unchanged. FEATURE-GATED by STORY_GUIDE_V2: when the flag is off the
+        route returns 404 so a stale client cannot reach an un-rolled-out path. Same contract as v1
+        on failure: 503, preserve CreativeIntent, NO fabricated Guide. Server mints canonical stable
+        scene ids; the model never emits image ids/urls/attribution."""
+        if os.environ.get("STORY_GUIDE_V2") != "1":
+            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "story_guide_v2", "correlation_id": correlation_id,
+                "task": "story_guide.generate_v2", "prompt_version": "story_guide/v2",
+                "schema_version": "story_guide/2"}
+        try:
+            guide = engine.generate(GuideInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                source_creative_intent_version=body.source_creative_intent_version))
+        except GuideUnavailableError as e:
+            log.warning("story_guide_v2_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_guide_unavailable: could not generate; preserve CreativeIntent and retry")
+        log.info("story_guide_v2_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "scene_count": len(guide.scenes)})
+        return guide
+
+    @app.post("/v1/story-guide-refine", response_model=StoryGuideRefinementResult, status_code=200)
+    def story_guide_refine(
+        body: StoryGuideRefineRequest,
+        engine=Depends(get_story_guide_refine_engine),
+        principal: Principal = Depends(optional_user),
+    ) -> StoryGuideRefinementResult:
+        """Refine (Update Guide) an existing story_guide/2 shooting script (Guide v2.1). The model
+        proposes preserve/improve/reorder/replace/add/archive over the CURRENT scenes + the user's
+        update; the ENGINE reconciles identity + history server-side: captured (Coverage-evidenced)
+        and user-PINNED scenes are preserved verbatim and NEVER archived, preserved/improved scenes
+        keep their stable ids, genuinely-new scenes get fresh ids beyond the max existing ordinal
+        (retired ids never reused), and dropped uncaptured+unpinned scenes are archived (recorded).
+
+        ADDITIVE/versioned — frozen /v1/story-guide and the generate-once /v1/story-guide-v2 are
+        unchanged. FEATURE-GATED by STORY_GUIDE_V2 (404 when off). On failure: 503, preserve the
+        CURRENT Guide, NO fabrication — the client keeps the existing shooting script and retries."""
+        if os.environ.get("STORY_GUIDE_V2") != "1":
+            raise HTTPException(status_code=404, detail="story_guide_v2 not enabled")
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "story_guide_refine", "correlation_id": correlation_id,
+                "task": "story_guide.refine_v2", "prompt_version": "story_guide/refine-v1",
+                "schema_version": "story_guide/2"}
+        try:
+            result = engine.refine(RefineInput(
+                story_id=body.story_id, creative_intent=body.creative_intent, scope=body.scope,
+                current_framing_summary=body.current_framing_summary,
+                current_scenes=body.current_scenes,
+                captured_scene_ids=body.captured_scene_ids, pinned_scene_ids=body.pinned_scene_ids,
+                user_instruction=body.user_instruction, event_context=body.event_context,
+                source_creative_intent_version=body.source_creative_intent_version))
+        except GuideUnavailableError as e:
+            log.warning("story_guide_refine_unavailable",
+                extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                       "success": False, "error": str(e)[:300]})
+            raise HTTPException(status_code=503,
+                detail="story_guide_unavailable: could not refine; preserve current Guide and retry")
+        n_arch = len(result.archived_scene_ids)
+        n_add = sum(1 for c in result.changes if c.disposition.value == "added")
+        log.info("story_guide_refine_resolved",
+            extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                   "success": True, "scene_count": len(result.guide.scenes),
+                   "added": n_add, "archived": n_arch})
+        return result
+
+    @app.post("/v1/scene-image", status_code=200)
+    def scene_image(
+        body: SceneImageRequest,
+        principal: Principal = Depends(optional_user),
+    ):
+        """BOUNDED Unsplash reference-image lookup for ONE StoryGuide/2 scene (backend proxy).
+
+        FEATURE-GATED by STORY_SCENE_IMAGES (404 when off). This is NOT a public image-search proxy:
+        the query is a GENERIC scene/composition phrase (originating from our own server-authored v2
+        `visual_reference_query`) which we RE-SANITIZE and hard-bound here (length cap, control-char
+        strip, URL/email reject) so no personal data / user media can be smuggled to the provider.
+
+        Returns METADATA ONLY (photo id, hotlinked urls.*, attribution text + utm links, and the
+        download_location tracking URL). Image bytes are NEVER fetched or re-hosted — the app hotlinks
+        urls.* directly. The Unsplash key stays in Secrets Manager, read in-process, never logged.
+
+        FAIL-SOFT by contract: a disabled flag -> 404; any auth/provider/rate-limit/timeout/empty-match
+        -> 200 with {image: null, status: <reason>} so the client renders a text-only card. It MUST
+        NEVER 5xx or block the Guide/UI. The download_location is returned but NOT triggered here —
+        the client calls /v1/scene-image/track only when a photo is actually USED (Unsplash's rule)."""
+        if not _scene_image.enabled():
+            raise HTTPException(status_code=404, detail="scene_image not enabled")
+        correlation_id = str(uuid4())
+        started = time.monotonic()
+        base = {"operation": "scene_image", "correlation_id": correlation_id, "provider": "unsplash"}
+        # 1) sanitize/bound the query — a query error is an honest text-only fallback, not a 4xx that
+        #    would surface as an error in the UI.
+        try:
+            q = _scene_image.sanitize_query(body.query)
+        except _scene_image.SceneImageQueryError as e:
+            log.info("scene_image_query_rejected", extra={**base, "success": False, "reason": str(e)[:120]})
+            return {"image": None, "status": "invalid_query"}
+        # 2) metadata cache (bounds provider calls; costs near-zero on repeat renders/re-opens).
+        cache = _scene_image_cache()
+        cached = cache.get(q)
+        if cached is not None:
+            if cached is _scene_image.MetadataCache._MISS:
+                return {"image": None, "status": "no_match", "cached": True}
+            return {"image": cached.to_wire(), "status": "ok", "cached": True}
+        # 3) live provider call (bounded timeout). All failure classes -> graceful text-only fallback.
+        try:
+            client = _scene_image_client()
+        except _scene_image.SceneImageAuthError as e:
+            log.warning("scene_image_auth_unavailable", extra={**base, "success": False, "error": str(e)[:160]})
+            return {"image": None, "status": "unavailable"}
+        try:
+            img = client.search_one(q)
+        except _scene_image.SceneImageAuthError as e:
+            log.warning("scene_image_auth_rejected", extra={**base, "success": False, "error": str(e)[:160]})
+            return {"image": None, "status": "unavailable"}
+        except _scene_image.SceneImageProviderError as e:
+            log.warning("scene_image_provider_error", extra={**base, "success": False, "error": str(e)[:160]})
+            return {"image": None, "status": "provider_error"}
+        if img is None:
+            cache.put(q, _scene_image.MetadataCache._MISS)
+            log.info("scene_image_no_match", extra={**base, "success": True})
+            return {"image": None, "status": "no_match"}
+        cache.put(q, img)
+        log.info("scene_image_resolved",
+                 extra={**base, "latency_ms": round((time.monotonic() - started) * 1000),
+                        "success": True, "photo_id": img.photo_id})
+        return {"image": img.to_wire(), "status": "ok"}
+
+    @app.post("/v1/scene-image/track", status_code=204)
+    def scene_image_track(
+        body: SceneImageTrackRequest,
+        principal: Principal = Depends(optional_user),
+    ):
+        """Fire Unsplash's download-tracking endpoint when a reference photo is actually USED/selected
+        as a scene reference (Unsplash's documented requirement — NOT fired on mere display). Best-effort
+        and always 204: tracking failure must never surface to the user. Gated by STORY_SCENE_IMAGES."""
+        if not _scene_image.enabled():
+            raise HTTPException(status_code=404, detail="scene_image not enabled")
+        loc = (body.download_location or "").strip()
+        # Only ever call back to the Unsplash tracking host — never an arbitrary caller-supplied URL (SSRF guard).
+        if loc.startswith("https://api.unsplash.com/"):
+            try:
+                _scene_image_client().trigger_download(loc)
+            except Exception:
+                pass
+        return Response(status_code=204)
 
     @app.post("/v1/music-direction", response_model=MusicDirectionContract, status_code=200)
     def music_direction(
