@@ -14,7 +14,8 @@ CONSTRAINTS enforced here:
 
 Default routing (approved Phase A table):
   Gemini primary / OpenAI fallback : asset_understanding, scene_understanding
-  OpenAI primary / Gemini fallback : creative_intent, story_guide, story_coverage, edit_plan, music
+  OpenAI primary / Gemini fallback : creative_intent, story_guide, story_coverage, edit_plan, music,
+                                     story_director, duration
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ _DEFAULT_ROUTES: dict[str, tuple[str, str | None]] = {
     "story_coverage":      ("openai", "gemini"),
     "edit_plan":           ("openai", "gemini"),
     "music":               ("openai", "gemini"),
+    "story_director":      ("openai", "gemini"),
+    "duration":            ("openai", "gemini"),
 }
 
 # Per-provider default model id env knobs. Values intentionally UNSET here — resolved from env with a

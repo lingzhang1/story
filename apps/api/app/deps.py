@@ -139,7 +139,9 @@ def get_story_director_engine() -> StoryDirectorEngine:
     if os.environ.get("STORY_DIRECTOR_MOCK") == "1":
         return MockStoryDirectorEngine()
     model = os.environ.get("STORY_DIRECTOR_MODEL", "us.anthropic.claude-opus-4-5-20251101-v1:0")
-    return RealStoryDirectorEngine(BedrockModelGateway(model_id=model))
+    # P0 provider restore: route via the provider router so STORY_MODEL_PROVIDER=direct reaches OpenAI/Gemini
+    # (the hardcoded BedrockModelGateway bypassed it and kept calling the restricted Anthropic model).
+    return RealStoryDirectorEngine(routed_gateway("story_director", model))
 
 
 def get_asset_understanding_engine() -> AssetUnderstandingEngine:
@@ -321,4 +323,6 @@ def get_duration_planner_engine() -> DurationPlannerEngine:
     fabricates — a failure propagates so the caller falls back to manual duration selection.
     """
     model = os.environ.get("STORY_DURATION_PLANNER_MODEL", DURATION_PLANNER_MODEL)
-    return RealDurationPlannerEngine(_gateway_with_fallback(model))
+    # P0 provider restore: route via the provider router so STORY_MODEL_PROVIDER=direct reaches OpenAI/Gemini
+    # (the _gateway_with_fallback helper is Bedrock-only and kept calling the restricted Anthropic model).
+    return RealDurationPlannerEngine(routed_gateway("duration", model))

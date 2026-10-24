@@ -206,6 +206,32 @@ def test_router_refuses_bedrock_anthropic_model(monkeypatch):
     with pytest.raises(ValueError):
         prov.make_gateway("story_guide")
 
+# Regression (2026-10-24): director + duration were NOT in the route table and their deps factories
+# constructed a raw Bedrock gateway, so STORY_MODEL_PROVIDER=direct never reached them -> they kept
+# calling the restricted Anthropic model (AI Ideas / Sizing silently failed). Guard both.
+def test_director_and_duration_route_to_non_anthropic(monkeypatch):
+    monkeypatch.setenv("STORY_OPENAI_MODEL", "gpt-x")
+    monkeypatch.setenv("STORY_GEMINI_MODEL", "gem-x")
+    routes = prov.active_routes()
+    for cap in ("story_director", "duration"):
+        assert routes[cap]["primary"] == "openai", cap
+        assert routes[cap]["fallback"] == "gemini", cap
+    # and make_gateway actually builds (no Anthropic) for both
+    assert prov.make_gateway("story_director") is not None
+    assert prov.make_gateway("duration") is not None
+
+def test_deps_director_and_duration_direct_mode_routed(monkeypatch):
+    monkeypatch.setenv("STORY_MODEL_PROVIDER", "direct")
+    monkeypatch.setenv("STORY_OPENAI_MODEL", "gpt-x")
+    monkeypatch.setenv("STORY_GEMINI_MODEL", "gem-x")
+    from app import deps
+    d = deps.get_story_director_engine()
+    dur = deps.get_duration_planner_engine()
+    # the engines must hold a routed (OpenAI+Gemini FallbackModelGateway) gateway, not a Bedrock one
+    for eng in (d, dur):
+        gw = getattr(eng, "_gateway", None) or getattr(eng, "_gw", None)
+        assert isinstance(gw, FallbackModelGateway), type(gw)
+
 # 13 + 14 — App Runner (deps) and Lambda (worker) construction in direct mode build a routed gateway
 def test_deps_direct_mode_builds_router(monkeypatch):
     monkeypatch.setenv("STORY_MODEL_PROVIDER", "direct")
