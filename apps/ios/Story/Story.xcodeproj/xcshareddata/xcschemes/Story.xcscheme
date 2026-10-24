@@ -84,21 +84,61 @@
          <EnvironmentVariable
             key = "STORY_COGNITO_USER_POOL_ID"
             value = "us-east-1_3cPNfbrUl"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "STORY_COGNITO_APP_CLIENT_ID"
             value = "4f3dtn9d0nk5uq1hcvbdc7m73c"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "STORY_COGNITO_DOMAIN_PREFIX"
             value = "story-beta-auth"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "STORY_API_BASE_URL"
             value = "https://asxtxgjiis.us-east-1.awsapprunner.com"
+            isEnabled = "NO">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_API_BASE_URL"
+            value = "https://ydmju5wdps.us-east-1.awsapprunner.com"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_USER_POOL_ID"
+            value = "us-east-1_AzfHOEdA5"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_APP_CLIENT_ID"
+            value = "5rnvp7oq6d7crbt01ldpe89tkh"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_DOMAIN_PREFIX"
+            value = "story-development-auth"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_REGION"
+            value = "us-east-1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_COGNITO_REDIRECT_URI"
+            value = "story://auth"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_GUIDE_V2"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "STORY_SCENE_IMAGES"
+            value = "1"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
