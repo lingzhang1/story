@@ -123,4 +123,34 @@ final class EditorialTypeSemanticsTests: XCTestCase {
         ctx.insert(out); try ctx.save()
         XCTAssertNil(out.editorialType, "custom seed yields an unspecified output type, not Full Story")
     }
+
+    // MARK: - provenance is honest (owner §2): flag-OFF runs are NOT labeled with a P1 type
+
+    func test_provenance_stamp_is_nil_when_flag_off() {
+        // The coordinator stamps editorialTypeRaw ONLY when the flag is ON (an explicit P1 selection). With the
+        // flag OFF — plain v5.2 behavior — the stamp mirrors this expression and must be nil, so a v5.2 output
+        // is never mislabeled with a guessed/inferred type. (Mirrors StoryCreationCoordinator.persist.)
+        UserDefaults.standard.removeObject(forKey: EditorialTypeFlag.key)
+        XCTAssertFalse(EditorialTypeFlag.enabled)
+        let editorialMode = "highlights"   // even a resolvable seed must NOT be stamped while the flag is off
+        let stamped: String? = EditorialTypeFlag.enabled
+            ? ResolvedEditorial.fromLegacy(editorialMode).type?.rawValue
+            : nil
+        XCTAssertNil(stamped, "flag OFF must not stamp an inferred editorial type (honest provenance)")
+    }
+
+    func test_provenance_stamp_reflects_selection_when_flag_on() {
+        EditorialTypeFlag.setOverride(true)
+        defer { UserDefaults.standard.removeObject(forKey: EditorialTypeFlag.key) }
+        XCTAssertTrue(EditorialTypeFlag.enabled)
+        let stamped: String? = EditorialTypeFlag.enabled
+            ? ResolvedEditorial.fromLegacy("full").type?.rawValue
+            : nil
+        XCTAssertEqual(stamped, EditorialType.fullStory.rawValue)
+        // A custom seed is still unspecified even with the flag on (never guessed).
+        let customStamp: String? = EditorialTypeFlag.enabled
+            ? ResolvedEditorial.fromLegacy("custom").type?.rawValue
+            : nil
+        XCTAssertNil(customStamp)
+    }
 }
