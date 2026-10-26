@@ -48,6 +48,9 @@ struct VisualBudgetResult {
     let totalImageBytes: Int
     let selectedTier: String               // human-readable tier label for diagnostics
     let appliedSteps: [String]             // which ladder steps were applied
+    /// P0 evidence accounting: for every INPUT Moment that did NOT get a sheet, WHY (low-cardinality reason).
+    /// Keyed by lowercased Moment UUID. A Moment with a sheet is absent from this map. Never includes bytes.
+    let sheetMissReasons: [String: SheetMissReason]
 }
 
 enum MultimodalVisualBudget {
@@ -77,7 +80,7 @@ enum MultimodalVisualBudget {
 
         // Try each tier at FULL coverage; if even the smallest tier overflows, reduce coverage (step 5).
         for (ti, tier) in tiers.enumerated() {
-            let sheets = await buildSheets(ranked, tier: tier, limits: limits)
+            let (sheets, misses) = await buildSheets(ranked, tier: tier, limits: limits)
             let total = sheets.reduce(0) { $0 + $1.jpeg.count }
             if ti >= 1 && !applied.contains("resize") { applied.append("resize") }
             if ti >= 2 && !applied.contains("compress") { applied.append("compress") }
@@ -86,7 +89,8 @@ enum MultimodalVisualBudget {
                 return VisualBudgetResult(
                     sheets: sheets, sheetOrder: sheets.map { $0.momentId },
                     momentsWithImages: sheets.count, momentsTextOnly: inputs.count - sheets.count,
-                    totalImageBytes: total, selectedTier: tier.label, appliedSteps: applied)
+                    totalImageBytes: total, selectedTier: tier.label, appliedSteps: applied,
+                    sheetMissReasons: misses)
             }
         }
 
@@ -94,28 +98,37 @@ enum MultimodalVisualBudget {
         // byte budget is hit; the rest plan text-only. A1 text still covers every Moment (caller's job).
         applied.append("reduce-coverage")
         let smallest = tiers.last!
-        let allSheets = await buildSheets(ranked, tier: smallest, limits: limits)
+        let (allSheets, smallestMisses) = await buildSheets(ranked, tier: smallest, limits: limits)
         var kept: [MomentContactSheet] = []
         var running = 0
+        var misses = smallestMisses
         for s in allSheets {   // allSheets is in richness order (ranked)
-            if running + s.jpeg.count > limits.maxTotalImageBytes || kept.count >= limits.maxSheets { break }
+            if running + s.jpeg.count > limits.maxTotalImageBytes || kept.count >= limits.maxSheets {
+                misses[s.momentId.uuidString.lowercased()] = .budgetCoverageDropped   // sized but cut by budget
+                continue
+            }
             kept.append(s); running += s.jpeg.count
         }
         return VisualBudgetResult(
             sheets: kept, sheetOrder: kept.map { $0.momentId },
             momentsWithImages: kept.count, momentsTextOnly: inputs.count - kept.count,
             totalImageBytes: running, selectedTier: smallest.label + "+partial-coverage",
-            appliedSteps: applied)
+            appliedSteps: applied, sheetMissReasons: misses)
     }
 
     /// Build one sheet per input at the given tier, skipping any sheet that still exceeds the per-sheet cap
     /// after this tier's compression (that Moment degrades to text-only rather than busting the per-sheet
-    /// limit). Never throws — a Moment whose frames can't be extracted is simply text-only.
+    /// limit). Never throws — a Moment whose frames can't be extracted is simply text-only. Returns the sheets
+    /// AND a per-Moment miss-reason map (lowercased id -> reason) for the Moments that did NOT get a sheet at
+    /// this tier (oversize or extraction failure), so the caller can account for every lost sheet precisely.
     private static func buildSheets(_ inputs: [VisualBudgetInput],
                                     tier: (cell: CGFloat, q: CGFloat, fscale: Double, label: String),
-                                    limits: VisualBudgetLimits) async -> [MomentContactSheet] {
+                                    limits: VisualBudgetLimits)
+        async -> (sheets: [MomentContactSheet], misses: [String: SheetMissReason]) {
         var out: [MomentContactSheet] = []
+        var misses: [String: SheetMissReason] = [:]
         for inp in inputs {
+            let key = inp.momentId.uuidString.lowercased()
             let base = ContactSheetBudget.tier1(forDuration: inp.durationSeconds).framesPerMoment
             let frames = tier.fscale <= 0
                 ? limits.minFramesPerMoment
@@ -129,12 +142,19 @@ enum MultimodalVisualBudget {
                     durationSeconds: inp.durationSeconds, budget: budget)
                 if sheet.jpeg.count <= limits.maxSheetBytes {
                     out.append(sheet)
-                }   // else: too big even at this tier -> text-only for this Moment
+                    misses.removeValue(forKey: key)
+                } else {
+                    misses[key] = .oversizeDropped   // too big even at this tier -> text-only for this Moment
+                }
+            } catch let e as ContactSheetError {
+                misses[key] = (e == .noFrames) ? .extractionEmpty : .extractionError
+            } catch let e as MomentFrameExtractorError {
+                misses[key] = (e == .noFrames) ? .extractionEmpty : .extractionError
             } catch {
-                continue   // frame extraction failed -> text-only for this Moment (never fabricate)
+                misses[key] = .extractionError   // any other failure -> text-only (never fabricate)
             }
         }
-        return out
+        return (out, misses)
     }
 
     /// Visual richness heuristic from evidence ALREADY on hand (no model call): more useful segments / events

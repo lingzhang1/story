@@ -583,6 +583,10 @@ final class StoryCreationCoordinator {
             // Build visual evidence for visual_first (unchanged budget preflight); text-only sends no sheets.
             var sheets: [MomentContactSheet] = []
             var budgetDiag = (tier: "text_only", applied: [String](), textOnly: 0, imageBytes: 0)
+            // P0 evidence accounting — per-Moment sheet-miss reasons + the R6-unrestorable set, collected so the
+            // coordinator can assemble a reconciling census. Empty on a text-only (Storytelling) run.
+            var sheetMissReasons: [String: SheetMissReason] = [:]
+            var restoreUnavailableIds: [String] = []
             if wantMultimodal {
                 // RELIABILITY (visual-first): a Moment whose local file is evicted (R5) or not-yet-restored is
                 // otherwise SILENTLY skipped by visualBudgetInputs (fileExists -> continue) and planned
@@ -599,12 +603,14 @@ final class StoryCreationCoordinator {
                     token: { await AuthStore.shared?.validAccessToken() })
                 var mediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
                 for md in restored.media { mediaById[md.momentId] = md }
+                restoreUnavailableIds = restored.unavailable.map { $0.momentId.uuidString.lowercased() }
                 if !restored.unavailable.isEmpty {
                     MediaEngineV1.beacon("visual-first restore: \(restored.unavailable.count) of \(includedMoments.count) Moment(s) could not be restored -> text-only")
                 }
                 let budget = await MultimodalVisualBudget.build(
                     Self.visualBudgetInputs(fromMedia: Array(mediaById.values), auUsefulRanges: build.auUsefulRanges))
                 sheets = budget.sheets
+                sheetMissReasons = budget.sheetMissReasons
                 budgetDiag = (budget.selectedTier, budget.appliedSteps, budget.momentsTextOnly,
                               budget.sheets.reduce(0) { $0 + $1.jpeg.count })
             }
@@ -633,6 +639,25 @@ final class StoryCreationCoordinator {
                 return true   // original create / full-reedit revision: unchanged
             }()
 
+            // P0 EVIDENCE ACCOUNTING — assemble the reconciling census (stages 1-10) from the eligibility
+            // census (build) + the visual-budget miss reasons + the R6-unrestorable set, plus build provenance.
+            // Privacy-safe (counts + reason buckets + opaque ids). Passed as multipart diagnostics so the worker
+            // persists them on the job item (surviving staged-payload cleanup). Device owns 1-10; worker 11-12.
+            let evidenceAccounting = Self.assembleEvidenceAccounting(
+                build: build, wantMultimodal: wantMultimodal,
+                sheetedIds: Set(sheets.map { $0.momentId.uuidString.lowercased() }),
+                sheetMissReasons: sheetMissReasons, restoreUnavailableIds: Set(restoreUnavailableIds))
+            let provenance = BuildProvenance.current(
+                requestedApproach: requested.rawValue,
+                multimodalEnabled: StoryMultimodalPlanning.enabled,
+                extractionPolicy: MomentFrameExtractor.extractionPolicy)
+            MediaEngineV1.beacon("evidence-accounting reconciles=\(evidenceAccounting.reconciles) "
+                + "linked=\(evidenceAccounting.linkedCount) eligible=\(evidenceAccounting.eligibleCount) "
+                + "sheeted=\(evidenceAccounting.sheetedCount) missing=\(evidenceAccounting.missingSheetCount) "
+                + "sha=\(provenance.commitSHA) extract=\(provenance.extractionPolicy)")
+            let evidenceDict = evidenceAccounting.asRequestDictionary()
+            let provenanceDict = provenance.asRequestDictionary()
+
             // Submit (or recover an in-flight job_id). Submit is IDEMPOTENT on operation_id, so a transport
             // error (e.g. the screen slept and iOS tore down the connection: NSURLError -1005) is safe to retry
             // with the SAME opId — the server either creates the job or returns the one it already made. We
@@ -652,7 +677,9 @@ final class StoryCreationCoordinator {
                     do {
                         submitted = try await jobClient.submit(build.request, operationId: opId, owner: "dev",
                                                                approach: requested, sheets: sheets,
-                                                               creativeBrief: brief, critiqueRevision: critique)
+                                                               creativeBrief: brief, critiqueRevision: critique,
+                                                           evidenceAccounting: evidenceDict,
+                                                           buildProvenance: provenanceDict)
                         break
                     } catch let EditPlanJobError.transport(underlying) {
                         // A user cancel surfaces as NSURLError -999 — not retryable, it IS a cancellation.
@@ -698,7 +725,9 @@ final class StoryCreationCoordinator {
                 do {
                     let fresh = try await jobClient.submit(build.request, operationId: opId, owner: "dev",
                                                            approach: requested, sheets: sheets,
-                                                           creativeBrief: brief, critiqueRevision: critique)
+                                                           creativeBrief: brief, critiqueRevision: critique,
+                                                           evidenceAccounting: evidenceDict,
+                                                           buildProvenance: provenanceDict)
                     activeJobId = fresh
                     story.planJobId = fresh; story.planJobStatus = "queued"; try? context.save()
                     upsertPending(story: story, operationId: opId, jobId: fresh, phase: "planning",
@@ -977,6 +1006,62 @@ final class StoryCreationCoordinator {
                 usefulSegmentCount: auUsefulRanges[key]?.count ?? 0, eventCount: 0))
         }
         return out
+    }
+
+    /// P0 — assemble the reconciling MomentEvidenceAccounting census (stages 1-10) from the pieces each stage
+    /// produced. Pure + static (unit-testable): the eligibility census from build(), the set of Moment ids that
+    /// actually got a sheet, the per-Moment sheet-miss reasons from the visual budget, and the R6-unrestorable
+    /// id set. For an eligible Moment with no sheet and no recorded reason, the reason is inferred ONLY from
+    /// directly-known facts (not-requested for text-only; evicted/unrestorable from the restore set) — never
+    /// guessed from the final plan. The returned census's `reconciles` MUST be true for a well-formed run.
+    static func assembleEvidenceAccounting(
+        build: EditPlanRequestBuilder.Build,
+        wantMultimodal: Bool,
+        sheetedIds: Set<String>,
+        sheetMissReasons: [String: SheetMissReason],
+        restoreUnavailableIds: Set<String>
+    ) -> MomentEvidenceAccounting {
+        let e = build.eligibility
+        var a = MomentEvidenceAccounting()
+        a.linkedCount = e.linkedCount
+        a.completedAUCount = e.completedAUCount
+        a.missingAUCount = e.ineligibleNoAU.count
+        a.positiveDurationCount = e.positiveDurationCount
+        a.renderableCount = e.renderableCount
+        a.eligibleCount = e.eligibleIds.count
+        a.ineligibleNoAU = e.ineligibleNoAU.count
+        a.ineligibleNoDuration = e.ineligibleNoDuration.count
+        a.ineligibleNotRenderable = e.ineligibleNotRenderable.count
+        a.ineligibleIds = (e.ineligibleNoAU + e.ineligibleNoDuration + e.ineligibleNotRenderable)
+            .map { $0.uuidString.lowercased() }
+        a.visualRequested = wantMultimodal
+
+        var missing: [String] = []
+        var byReason: [String: Int] = [:]
+        for mid in e.eligibleIds {
+            let key = mid.uuidString.lowercased()
+            if sheetedIds.contains(key) { continue }   // got a sheet -> not a miss
+            // Resolve the miss reason from directly-known facts, most specific first.
+            let reason: SheetMissReason
+            if !wantMultimodal {
+                reason = .notRequested
+            } else if let r = sheetMissReasons[key] {
+                reason = r
+            } else if restoreUnavailableIds.contains(key) {
+                reason = .unrestorable
+            } else {
+                // Eligible, visual requested, no sheet, no recorded extraction failure, not reported
+                // unrestorable -> it was evicted and the restore did not make it local in time.
+                reason = .evictedNotRestored
+            }
+            missing.append(key)
+            byReason[reason.rawValue, default: 0] += 1
+        }
+        a.sheetedCount = a.eligibleCount - missing.count
+        a.missingSheetCount = missing.count
+        a.sheetMissByReason = byReason
+        a.eligibleWithoutSheetIds = missing
+        return a
     }
 
     /// {keep,duck,mute}.

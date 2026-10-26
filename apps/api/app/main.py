@@ -1625,6 +1625,8 @@ def create_app() -> FastAPI:
         creative_brief: str | None = Form(default=None),
         critique_revision: bool = Form(default=False),
         approach: str = Form(default="storytelling", description="storytelling|visual_first (diagnostics)"),
+        evidence_accounting: str | None = Form(default=None, description="P0 privacy-safe evidence-funnel census JSON (counts + reason buckets + opaque ids); persisted on the job item for post-cleanup investigation"),
+        build_provenance: str | None = Form(default=None, description="P0 build provenance JSON (app/build/commit/policy versions); proves which code a run executed"),
         test_delay_s: int = Form(default=0, description="ACCEPTANCE-ONLY: artificial worker delay (honored only when the worker enables it); simulates a long job"),
         sheets: list[UploadFile] = File(default=[]),
         principal: Principal = Depends(optional_user),
@@ -1677,8 +1679,22 @@ def create_app() -> FastAPI:
         # Stage BEFORE create so the worker always finds its inputs. Re-staging on a duplicate is harmless
         # (same prefix, same content). Body carries brief + critique + approach so the worker is self-contained.
         import json as _j2
+        # P0 diagnostics — parse defensively; a malformed blob is dropped (never fails the create). These are
+        # privacy-safe (counts + reason buckets + opaque ids / version strings); the worker persists them onto
+        # the job item so they survive the staged-payload TTL.
+        def _safe_obj(s: str | None) -> dict | None:
+            if not s:
+                return None
+            try:
+                v = _j2.loads(s)
+                return v if isinstance(v, dict) else None
+            except Exception:
+                return None
+        _evidence = _safe_obj(evidence_accounting)
+        _provenance = _safe_obj(build_provenance)
         body_envelope = _j2.dumps({"body": body, "sheet_order": order, "creative_brief": creative_brief,
                                     "critique_revision": bool(critique_revision), "approach": approach,
+                                    "evidence_accounting": _evidence, "build_provenance": _provenance,
                                     "_test_delay_s": int(test_delay_s or 0)})
         prefix = store.stage_request(jid, body_envelope, staged)
         try:

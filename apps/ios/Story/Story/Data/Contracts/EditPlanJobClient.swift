@@ -80,11 +80,23 @@ enum EditPlanJobError: Error, LocalizedError {
 protocol EditPlanJobClienting {
     func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
                 approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
-                critiqueRevision: Bool) async throws -> String
+                critiqueRevision: Bool, evidenceAccounting: [String: Any]?,
+                buildProvenance: [String: Any]?) async throws -> String
     func pollUntilTerminal(jobId: String, maxSeconds: Int,
                            shouldCancel: @MainActor () -> Bool,
                            onState: @MainActor (EditPlanJobState) -> Void) async throws -> EditPlanJobState
     func cancel(jobId: String) async
+}
+
+extension EditPlanJobClienting {
+    /// Back-compat default so existing call sites / fakes that do not supply P0 diagnostics keep compiling.
+    func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
+                approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
+                critiqueRevision: Bool) async throws -> String {
+        try await submit(request, operationId: operationId, owner: owner, approach: approach,
+                         sheets: sheets, creativeBrief: creativeBrief, critiqueRevision: critiqueRevision,
+                         evidenceAccounting: nil, buildProvenance: nil)
+    }
 }
 
 final class EditPlanJobClient: EditPlanJobClienting {
@@ -99,7 +111,8 @@ final class EditPlanJobClient: EditPlanJobClienting {
     /// with a DIFFERENT payload — surfaced as .conflict, never silently retried.
     func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String = "dev",
                 approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
-                critiqueRevision: Bool) async throws -> String {
+                critiqueRevision: Bool, evidenceAccounting: [String: Any]? = nil,
+                buildProvenance: [String: Any]? = nil) async throws -> String {
         let boundary = "story.job.\(UUID().uuidString)"
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/edit-plan-jobs"))
         StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
@@ -129,6 +142,18 @@ final class EditPlanJobClient: EditPlanJobClienting {
         field("sheet_order", orderJSON, contentType: "application/json")
         if let creativeBrief { field("creative_brief", Data(creativeBrief.utf8)) }
         if critiqueRevision { field("critique_revision", Data("true".utf8)) }
+        // P0 evidence accounting + build provenance — privacy-safe JSON diagnostics carried as multipart fields
+        // (the frozen EditPlanRequestDTO `body` contract stays byte-identical). The worker persists them on the
+        // job item so they survive the staged-payload TTL. Best-effort: a serialization failure simply omits
+        // the field rather than failing the create.
+        if let evidenceAccounting,
+           let d = try? JSONSerialization.data(withJSONObject: evidenceAccounting) {
+            field("evidence_accounting", d, contentType: "application/json")
+        }
+        if let buildProvenance,
+           let d = try? JSONSerialization.data(withJSONObject: buildProvenance) {
+            field("build_provenance", d, contentType: "application/json")
+        }
         for s in sheets {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"sheets\"; filename=\"\(s.momentId.uuidString.lowercased()).jpg\"\r\n".data(using: .utf8)!)

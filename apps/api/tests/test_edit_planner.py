@@ -82,9 +82,55 @@ def test_engine_rejects_anchor_without_analysis():
 
 
 def test_engine_infeasible_raises():
-    plan = {"target_duration_seconds": 18.0, "feasible": False, "infeasible_reason": "not enough usable footage",
+    # OWNER POLICY (2026-10-25): length/shortness is NEVER a block. The ONLY terminal infeasible is a
+    # feasible=false with NO playable cut at all (empty / unrenderable). A feasible=false WITH a valid
+    # (even short) cut now ships — see test_engine_feasible_false_short_cut_still_ships.
+    plan = {"target_duration_seconds": 18.0, "feasible": False, "infeasible_reason": "no usable footage at all",
+            "segments": []}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    with pytest.raises(EditPlanInfeasibleError):
+        eng.generate(_inputs())
+
+
+def test_engine_feasible_false_short_cut_still_ships():
+    # A feasible=false whose cut is SHORT (8s vs 18s target) is still a PLAYABLE video -> it ships, no error.
+    plan = {"target_duration_seconds": 18.0, "feasible": False, "infeasible_reason": "could not reach target",
             "segments": [{"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
                           "output_duration_seconds": 8.0, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(_inputs())
+    assert len(out.segments) == 1
+    assert eng.last_diagnostics.get("feasible_false_overridden") is True
+
+
+def test_engine_feasible_false_overshoot_still_ships():
+    """OWNER POLICY regression: a model that declares feasible=false because it could not condense a rich
+    Story DOWN to the target (the cut runs a bit LONG) must still SHIP its cut — never reject it. The
+    screenshot bug: '...runs significantly longer than the requested duration' surfaced as material_infeasible.
+    Here the cut totals 15.5s against a 12s target (+29% — a shippable overshoot WITHIN the +50% band that a
+    feasible=true plan would also pass) but the model flagged feasible=false. It MUST ship, not raise.
+    (A cut that genuinely busts the +50% overshoot band still fails the shared validator — that guard is
+    unchanged; this only stops a self-declared infeasible from discarding an otherwise-valid cut.)"""
+    plan = {"target_duration_seconds": 12.0, "feasible": False,
+            "infeasible_reason": "the abundance of strong footage makes it hard to condense without losing atmosphere",
+            "segments": [
+                {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+                 "output_duration_seconds": 10.0, "native_audio": "keep"},
+                {"order": 1, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 6.0,
+                 "output_duration_seconds": 5.5, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(_inputs(creative_intent={"target_duration_seconds": 12.0, "desired_feeling": ["calm"]}))
+    assert out.schema_version == "edit_plan/2"
+    assert len(out.segments) == 2
+    assert eng.last_diagnostics.get("feasible_false_overridden") is True
+    assert eng.last_diagnostics.get("final") == "executable"
+
+
+def test_engine_feasible_false_empty_plan_still_rejects():
+    """The genuine infeasible case stays terminal: feasible=false with NO usable cut to ship must raise
+    (there is nothing to fall back to — not an overshoot)."""
+    plan = {"target_duration_seconds": 18.0, "feasible": False,
+            "infeasible_reason": "no usable footage at all", "segments": []}
     eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
     with pytest.raises(EditPlanInfeasibleError):
         eng.generate(_inputs())
@@ -234,9 +280,9 @@ def test_endpoint_503_on_provider_error():
 
 
 def test_endpoint_422_on_infeasible():
-    plan = {"target_duration_seconds": 18.0, "feasible": False, "infeasible_reason": "insufficient footage",
-            "segments": [{"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
-                          "output_duration_seconds": 8.0, "native_audio": "keep"}]}
+    # Only a feasible=false with NO playable cut (empty) is a 422 now; a short/long cut ships (200).
+    plan = {"target_duration_seconds": 18.0, "feasible": False, "infeasible_reason": "no usable footage",
+            "segments": []}
     client = _client(RealEditPlannerEngine(FakeModelGateway(response=plan)))
     r = client.post("/v1/edit-plan", json=_req_body())
     assert r.status_code == 422
@@ -293,9 +339,10 @@ def _plan12(d0, d1, **seg_over):
     return {"target_duration_seconds": 12.0, "feasible": True, "segments": [s0, s1]}
 
 
-# ---- reproduce the two exact production failures (validator level) ----
-def test_asymmetric_duration_policy():
-    # Asymmetric accept policy (owner 2026-10-13): generous overshoot (+50%), strict undershoot (-20%).
+# ---- duration is NEVER a blocking constraint (owner 2026-10-25) ----
+def test_duration_is_never_a_blocking_constraint():
+    # OWNER POLICY (2026-10-25): length is NEVER a reason to reject. A playable cut of ANY length validates —
+    # big overshoot AND deep undershoot both pass validate_plan. (The former +50% / -20% bands are removed.)
     inp = _target12_inputs(moments=_target12_inputs().moments + [
         {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 7.5]]}])
     def plan3(d0, d1, d2):
@@ -306,20 +353,23 @@ def test_asymmetric_duration_policy():
              "output_duration_seconds": d1, "native_audio": "keep"},
             {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": d2,
              "output_duration_seconds": d2, "native_audio": "keep"}]}
-    # 15s vs 12 target = +25% overshoot -> now ACCEPTED (was rejected under old ±20%). Give the user a video.
+    # +25% overshoot -> accepted.
     assert _vp(plan3(5.0, 5.0, 5.0), inp) == []
-    # 18s vs 12 = +50% exactly -> still accepted (at the bound).
+    # +50% -> accepted.
     assert _vp(plan3(6.0, 6.0, 6.0), inp) == []
-    # 20s vs 12 = +67% overshoot -> rejected (beyond the generous upper bound).
-    assert any("upper bound" in e for e in _vp(plan3(7.0, 7.0, 6.0), inp))
-    # 8s vs 12 = -33% undershoot -> rejected (too short feels broken/empty).
+    # +67% (big overshoot) -> ALSO accepted now (no upper band). Never block a long but playable video.
+    assert _vp(plan3(7.0, 7.0, 6.0), inp) == []
+    # -33% deep undershoot -> ALSO accepted now (no lower band). A short but playable video still ships.
     inp2 = _target12_inputs()
     short = {"target_duration_seconds": 12.0, "feasible": True, "segments": [
         {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 4.0,
          "output_duration_seconds": 4.0, "native_audio": "keep"},
         {"order": 1, "asset_id": M2, "source_start_seconds": 0.0, "source_end_seconds": 4.0,
          "output_duration_seconds": 4.0, "native_audio": "keep"}]}
-    assert any("lower bound" in e or "SHORT" in e for e in _vp(short, inp2))
+    assert _vp(short, inp2) == []
+    # A technically UNRENDERABLE plan (speed out of range) STILL rejects — that is not a length constraint.
+    bad = _plan12(6.0, 6.0, s0={"speed": 9.0})
+    assert _vp(bad, _target12_inputs()) != []
 
 
 def test_repro_failure2_speed_output_mismatch():
@@ -1493,14 +1543,14 @@ def test_initial_creation_undershoot_unchanged():
 
 
 def test_timing_revise_validation_failure_never_replans(monkeypatch):
-    # Point 7: if a pacing/timing retime cannot be made valid, the engine raises a clear infeasible and NEVER
-    # falls through to an unrestricted model replan (which would be a silent re-pick). Force the retime to
-    # produce an invalid plan and assert the model is never called.
+    # OWNER POLICY (2026-10-25): if a pacing/timing retime cannot be made valid, the engine does NOT error and
+    # does NOT silently model-replan — it ships the user's EXISTING base plan (a known-playable cut), so the
+    # pacing change simply wasn't applied. Force the retime to produce an invalid plan and assert the model is
+    # never called AND a valid contract (the base) is returned.
     import edit_planner.deterministic_revision as dr
     base_plan = _retimable_base_plan(target=30.0, span=6.0)
     rc = {"mode": "revise", "base_version_id": "v9", "base_plan": base_plan,
           "soft_direction": "shorten each clip to ~5s", "duration_target_source": "ai_recommended"}
-    # Make the retime return a plan the validator rejects (source range outside the moment's useful window).
     def _bad(bp, target, min_total_seconds=None):
         import copy
         p = copy.deepcopy(bp)
@@ -1514,12 +1564,15 @@ def test_timing_revise_validation_failure_never_replans(monkeypatch):
         def generate_structured(self, req):
             raise AssertionError("a failed timing retime must NOT replan via the model")
     eng = RealEditPlannerEngine(_Boom())
-    with pytest.raises(EditPlanInfeasibleError) as ei:
-        eng.generate(_inputs(revision_context=rc,
-                             creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
-    assert "kept unchanged" in str(ei.value).lower()
-    assert eng.last_diagnostics.get("revision_path") == "deterministic_retime_infeasible"
+    out = eng.generate(_inputs(revision_context=rc,
+                               creative_intent={"target_duration_seconds": 30.0, "desired_feeling": ["calm"]}))
+    assert len(out.segments) == len(base_plan["segments"])           # shipped the base, unchanged
+    assert eng.last_diagnostics["revision_path"] == "retime_infeasible_shipped_base"
+    assert eng.last_diagnostics.get("retime_change_applied") is False
     assert eng.last_diagnostics.get("model_calls", 0) == 0
+    # NEVER MISLEAD (owner §5-B): the unchanged base is disclosed, not shown as a successful revision.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "unchanged" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1586,10 +1639,10 @@ def test_mixed_revise_records_partial_note_and_still_plans():
     assert eng.last_diagnostics["revision_path"] == "deterministic_retime"   # supported part ran
 
 
-
-    # A soft-only revise the model handles (not a parseable clip target) that comes back having replaced MOST
-    # of the edit (a wholesale re-pick, below the continuity floor) with no instruction authorizing it must be
-    # rejected with a clear limitation — never shipped as a silent whole-video replacement.
+def test_wholesale_revise_now_ships_non_blocking():
+    # OWNER POLICY (2026-10-25): a wholesale re-pick is still a PLAYABLE video, so it SHIPS (recorded as
+    # continuity_nonblocking='wholesale') instead of erroring. The user gets a video; the prior version is
+    # preserved in history. Was previously a terminal preservation_violation.
     M3 = str(uuid4()); M4 = str(uuid4()); M5 = str(uuid4())
     base_plan = {"target_duration_seconds": 36.0, "feasible": True, "segments": [
         {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
@@ -1602,23 +1655,25 @@ def test_mixed_revise_records_partial_note_and_still_plans():
          "output_duration_seconds": 9.0, "native_audio": "keep"}]}
     rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
           "soft_direction": "make it feel more energetic"}   # no clip-length target, no selection authorization
-    # Model keeps only M1 (1 of 4 = 25% continuity, below the 50% floor) and re-picks M3 — a wholesale re-pick.
+    # Model keeps only M1 (1 of 4 = 25% continuity, below the old 50% floor) and re-picks M3 — a wholesale re-pick.
     repicked = {"target_duration_seconds": 18.0, "feasible": True, "segments": [
         {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
          "output_duration_seconds": 9.0, "native_audio": "keep"},
         {"order": 1, "asset_id": M3, "source_start_seconds": 0.0, "source_end_seconds": 9.0,
          "output_duration_seconds": 9.0, "native_audio": "keep"}]}
     eng = RealEditPlannerEngine(FakeModelGateway(response=repicked))
-    with pytest.raises(EditPlanInfeasibleError) as ei:
-        eng.generate(_inputs(revision_context=rc, moments=[
-            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
-            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
-            {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
-            {"id": M4, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
-            {"id": M5, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
-    assert "replacing most of your video" in str(ei.value).lower()
-    assert eng.last_diagnostics["final"] == "preservation_violation"
+    out = eng.generate(_inputs(revision_context=rc, moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+        {"id": M3, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+        {"id": M4, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]},
+        {"id": M5, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert len(out.segments) == 2                                   # the re-pick SHIPPED
     assert eng.last_diagnostics["continuity"]["verdict"] == "wholesale"
+    assert eng.last_diagnostics.get("continuity_nonblocking") == "wholesale"
+    # NEVER MISLEAD (owner §5-C): disclose the substantial change; the previous version is preserved.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "previous version" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 def test_preservation_gate_allows_model_preserving_revise():
@@ -1686,20 +1741,23 @@ def test_continuity_gate_accepts_clip_change_within_floor():
 
 
 def test_continuity_gate_rejects_noop_revise():
-    # A directed revise whose result is byte-identical to the base (same clips AND same order) is a no-op —
-    # an honest "couldn't apply that", never saved as a successful edit (owner principle: no fake success).
+    # OWNER POLICY (2026-10-25): continuity is a DIAGNOSTIC, never a block. A directed revise whose result is
+    # byte-identical to the base is still a PLAYABLE video, so it SHIPS (recorded as continuity_nonblocking),
+    # rather than erroring. The user is never blocked after the pipeline produced a playable cut.
     base_plan = _good_plan()
     rc = {"mode": "revise", "base_version_id": "v3", "base_plan": base_plan,
           "soft_direction": "make it feel more energetic"}
     identical = json.loads(json.dumps(base_plan))   # model returns the base unchanged
     eng = RealEditPlannerEngine(FakeModelGateway(response=identical))
-    with pytest.raises(EditPlanInfeasibleError) as ei:
-        eng.generate(_inputs(revision_context=rc, moments=[
-            {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
-            {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
-    assert "same as your current version" in str(ei.value).lower()
-    assert eng.last_diagnostics["final"] == "preservation_noop"
+    out = eng.generate(_inputs(revision_context=rc, moments=[
+        {"id": M1, "duration_seconds": 11.0, "useful_segments": [[0.0, 10.0]]},
+        {"id": M2, "duration_seconds": 9.0, "useful_segments": [[0.0, 9.0]]}]))
+    assert len(out.segments) == len(base_plan["segments"])          # shipped, not rejected
     assert eng.last_diagnostics["continuity"]["verdict"] == "noop"
+    assert eng.last_diagnostics.get("continuity_nonblocking") == "noop"
+    # NEVER MISLEAD (owner §2-B/§5-D): a noop must be disclosed, not shown as a clean successful revision.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "same" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 def test_continuity_gate_allows_shorter_duration_to_drop_clips():
@@ -1975,12 +2033,16 @@ def test_v2_contradiction_stays_hard(monkeypatch):
 
 
 def test_v2_approx_duration_soft_but_runaway_hard(monkeypatch):
-    # Approximate target: a modest overshoot that WAS rejected (+67%) now ships; a runaway (+100%+) still fails.
+    # OWNER POLICY (2026-10-25): duration is NEVER a block, so even a very large overshoot ships. The former
+    # runaway guard is removed — a playable cut of any length validates. Moments are long enough that the big
+    # cut is TECHNICALLY valid (source windows within bounds), isolating the length axis.
     _obj_env(monkeypatch, STORY_EDITPLAN_APPROX_DURATION_SOFT="1")
     inp = _target12_inputs(
         revision_context={"mode": "explore", "duration_target_source": "ai_recommended"},
-        moments=_target12_inputs().moments + [
-            {"id": "M3", "duration_seconds": 9.0, "useful_segments": [[0.0, 8.5]]}])
+        moments=[
+            {"id": M1, "duration_seconds": 12.0, "useful_segments": [[0.0, 12.0]]},
+            {"id": M2, "duration_seconds": 12.0, "useful_segments": [[0.0, 12.0]]},
+            {"id": "M3", "duration_seconds": 12.0, "useful_segments": [[0.0, 12.0]]}])
     def plan3(d0, d1, d2):
         return {"target_duration_seconds": 12.0, "feasible": True, "segments": [
             {"order": 0, "asset_id": M1, "source_start_seconds": 0.0, "source_end_seconds": d0,
@@ -1989,14 +2051,15 @@ def test_v2_approx_duration_soft_but_runaway_hard(monkeypatch):
              "output_duration_seconds": d1, "native_audio": "keep"},
             {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": d2,
              "output_duration_seconds": d2, "native_audio": "keep"}]}
-    # +67% (20s vs 12) previously rejected -> now ships (approximate target).
+    # +67% overshoot (20s vs 12) -> ships.
     assert validate_plan(plan3(7.0, 7.0, 6.0), inp) == []
-    # +108% (25s vs 12) -> runaway guard rejects.
-    assert any("runaway guard" in e for e in validate_plan(plan3(9.0, 8.0, 8.0), inp))
+    # +200% (36s vs 12 — a huge overshoot) -> ALSO ships now (no runaway guard). Never block a playable video.
+    assert validate_plan(plan3(12.0, 12.0, 12.0), inp) == []
 
 
-def test_v2_exact_duration_stays_hard(monkeypatch):
-    # An EXPLICIT user-exact duration keeps the hard overshoot band even with the approx-soft flag on.
+def test_v2_exact_duration_also_never_blocks_on_length(monkeypatch):
+    # Even an EXPLICIT user-exact duration no longer blocks on length — a playable overshoot ships. (The user
+    # asked for a length as an AIM; the pipeline gives them the best playable cut, never an error.)
     _obj_env(monkeypatch, STORY_EDITPLAN_APPROX_DURATION_SOFT="1")
     inp = _target12_inputs(revision_context={"mode": "revise", "duration_target_source": "user_exact"},
                            moments=_target12_inputs().moments + [
@@ -2008,7 +2071,7 @@ def test_v2_exact_duration_stays_hard(monkeypatch):
          "output_duration_seconds": 7.0, "native_audio": "keep"},
         {"order": 2, "asset_id": "M3", "source_start_seconds": 0.0, "source_end_seconds": 6.0,
          "output_duration_seconds": 6.0, "native_audio": "keep"}]}   # 20s vs 12 = +67%
-    assert any("upper bound" in e for e in validate_plan(plan, inp))
+    assert validate_plan(plan, inp) == []
 
 
 def test_v2_47p5s_mis_ordered_directive_ships_via_reorder(monkeypatch):

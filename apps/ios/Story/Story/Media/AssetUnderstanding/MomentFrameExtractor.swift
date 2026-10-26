@@ -34,16 +34,30 @@ struct MomentFrameExtractor {
     static let maxLongestSide: CGFloat = 768      // au_frames/1: 768px longest edge
     static let jpegQuality: CGFloat = 0.6         // au_frames/1: JPEG ~0.6
     static let framePolicy = "au_frames/1"
+    /// Frame-extraction reliability policy version. Bumped by Editorial Pipeline v2 P0 (explicit async track
+    /// load + video-track verification + bounded per-frame generation). Reported in BuildProvenance so a run's
+    /// extraction behavior is provable, not inferred from master.
+    static let extractionPolicy = "au_extract/2"
 
     /// Extract 24 ordered timestamped frames from a local video file.
     /// Async because AVAssetImageGenerator image generation is awaited.
     static func extract(from url: URL) async throws -> [AUExtractedFrame] {
         let asset = AVURLAsset(url: url)
+        // P0 reliability: load duration AND tracks asynchronously up front. The prior code loaded only
+        // `.duration`; an asset whose video track was not yet loaded (or absent — audio-only / unsupported
+        // container) could yield an image generator that returns empty for every timestamp, producing a silent
+        // `.noFrames`. Verifying a VIDEO track exists turns "silent empty sheet" into an explicit, classifiable
+        // failure and avoids spending 24 generation attempts on an asset that can never produce a frame.
         let duration: CMTime
+        let videoTracks: [AVAssetTrack]
         do {
             duration = try await asset.load(.duration)
+            videoTracks = try await asset.loadTracks(withMediaType: .video)
         } catch {
             throw MomentFrameExtractorError.unreadable
+        }
+        guard !videoTracks.isEmpty else {
+            throw MomentFrameExtractorError.unreadable   // no decodable video track -> never fabricate
         }
         let totalSeconds = CMTimeGetSeconds(duration)
         guard totalSeconds.isFinite, totalSeconds > 0 else {
@@ -68,6 +82,7 @@ struct MomentFrameExtractor {
 
         var out: [AUExtractedFrame] = []
         for t in times {
+            if Task.isCancelled { break }   // honor cancellation mid-extraction
             do {
                 let (cg, actual) = try await imageAndTime(gen, at: t)
                 guard let jpeg = encode(cg) else { continue }

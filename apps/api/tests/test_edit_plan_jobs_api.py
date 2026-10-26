@@ -110,3 +110,51 @@ def test_status_and_cancel():
     cc = c.post(f"/v1/edit-plan-jobs/{jid}/cancel")
     assert cc.status_code == 200 and cc.json()["status"] == "cancel_requested"
     assert c.get("/v1/edit-plan-jobs/does-not-exist").status_code == 404
+
+
+# --- Editorial Pipeline v2, P0: evidence accounting + build provenance are staged privacy-safely -----------
+
+def _staged_envelope(store):
+    """The one staged envelope dict (FakeStore stages exactly one prefix per submit)."""
+    assert len(store.staged) == 1, "exactly one staged request"
+    (body_json, _sheets) = next(iter(store.staged.values()))
+    return json.loads(body_json)
+
+
+def test_submit_stages_evidence_accounting_and_build_provenance():
+    s = FakeStore(); c = _client(s)
+    evidence = {"linked": 35, "eligible": 25, "sheeted": 19, "missing_sheet": 6,
+                "sheet_miss_by_reason": {"extractionEmpty": 6},
+                "eligible_without_sheet_ids": ["a", "b", "c", "d", "e", "f"],
+                "ineligible_ids": [], "reconciles": True}
+    prov = {"app_version": "1.4.0", "build_number": "210", "commit_sha": "19f9640",
+            "extraction_policy": "au_extract/2", "requested_approach": "visual_first"}
+    r = c.post("/v1/edit-plan-jobs", data={
+        "operation_id": "opE", "owner": "dev", "body": _body(), "sheet_order": "[]",
+        "approach": "visual_first",
+        "evidence_accounting": json.dumps(evidence),
+        "build_provenance": json.dumps(prov)})
+    assert r.status_code == 202, r.text
+    env = _staged_envelope(s)
+    assert env["evidence_accounting"] == evidence, "evidence funnel must round-trip into the staged envelope"
+    assert env["build_provenance"] == prov, "build provenance must round-trip into the staged envelope"
+
+
+def test_submit_without_evidence_fields_still_works_and_stages_null():
+    s = FakeStore(); c = _client(s)
+    r = c.post("/v1/edit-plan-jobs", data={"operation_id": "opN", "owner": "dev",
+               "body": _body(), "sheet_order": "[]", "approach": "storytelling"})
+    assert r.status_code == 202, r.text
+    env = _staged_envelope(s)
+    assert env["evidence_accounting"] is None and env["build_provenance"] is None
+
+
+def test_submit_malformed_evidence_is_dropped_not_fatal():
+    s = FakeStore(); c = _client(s)
+    r = c.post("/v1/edit-plan-jobs", data={"operation_id": "opM", "owner": "dev",
+               "body": _body(), "sheet_order": "[]", "approach": "storytelling",
+               "evidence_accounting": "{not valid json", "build_provenance": "[1,2,3]"})
+    assert r.status_code == 202, "a malformed diagnostics blob must never fail the create"
+    env = _staged_envelope(s)
+    # invalid JSON and a non-object (list) are both dropped to None.
+    assert env["evidence_accounting"] is None and env["build_provenance"] is None

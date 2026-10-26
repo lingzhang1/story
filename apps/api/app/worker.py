@@ -81,6 +81,41 @@ def _served_model_id(diag: dict) -> str:
     return _FALLBACK_MODEL if diag.get("any_fallback") else _PRIMARY_MODEL
 
 
+def _evidence_diag(env: dict, plan_dict: dict, order: list) -> dict:
+    """Editorial Pipeline v2, P0 — PURE assembly of the durable evidence diagnostics that get persisted onto
+    the job item (so they survive the staged-payload TTL). `env` is the staged submit envelope (carries the
+    device's reconciling census + build provenance), `plan_dict` the produced EditPlan dict, `order` the
+    sheet_order (lowercased sheeted Moment ids). Returns the keys to merge into diag_out. Privacy-safe: counts,
+    reason buckets, version strings, and opaque Moment ids only — never raw media/prompts/secrets.
+
+    Stages 1-10 come from the device verbatim (not re-derived). Stages 11-12 are the two the planner alone
+    knows: (11) distinct Moments SELECTED into the cut, (12) selected Moments that had NO contact sheet
+    (planned blind). `evidence_funnel_consistent` is a backend cross-check: you cannot cut what wasn't sent
+    (selected <= eligible) AND the device census reconciled."""
+    out: dict = {}
+    ev = env.get("evidence_accounting") if isinstance(env.get("evidence_accounting"), dict) else None
+    prov = env.get("build_provenance") if isinstance(env.get("build_provenance"), dict) else None
+    if ev is not None:
+        out["evidence_accounting"] = ev
+    if prov is not None:
+        out["build_provenance"] = prov
+    selected: list[str] = []
+    seen: set[str] = set()
+    for s in (plan_dict.get("segments") or []):
+        aid = str(s.get("asset_id") or "").lower()
+        if aid and aid not in seen:
+            seen.add(aid); selected.append(aid)
+    sheeted = {str(x).lower() for x in (order or [])}
+    cut_without_sheet = [a for a in selected if a not in sheeted]
+    out["evidence_stage11_selected_distinct"] = len(selected)
+    out["evidence_stage12_cut_without_sheet"] = len(cut_without_sheet)
+    out["evidence_cut_without_sheet_ids"] = cut_without_sheet
+    if ev is not None:
+        elig = int(ev.get("eligible") or 0)
+        out["evidence_funnel_consistent"] = (len(selected) <= elig) and bool(ev.get("reconciles"))
+    return out
+
+
 def _job_cost_usd(diag: dict) -> float:
     """Actual incurred model spend for this job from its diagnostics tokens (correction 3/8: ALL billable
     attempts — retries, repairs, critiques, fallback — are summed into input/output_tokens by the engine).
@@ -500,6 +535,14 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
                                              "structural_repair", "repair_budget")}
         diag_out["planning_mode"] = "multimodal" if images else "text_only"
         diag_out["sheet_count"] = len(images)
+        # P0 EVIDENCE ACCOUNTING (Editorial Pipeline v2). Persist the device's reconciling funnel census (stages
+        # 1-10) + build provenance ONTO the job item (diag_out), so they survive the staged-payload TTL (the
+        # staged request is deleted at job-terminal, but the item's diagnostics are durable), and add the two
+        # stages only the planner knows (11 selected-distinct, 12 cut-without-sheet). Pure helper, unit-tested.
+        try:
+            diag_out.update(_evidence_diag(env, _plan_to_dict(plan), order))
+        except Exception:
+            pass   # diagnostics must never break a job
         # P0 Beta Observability: surface TOKENS + the physical model into the diag (they live in the engine's
         # last_diagnostics but were never forwarded) so EstimatedModelCost has an input and the log line is
         # cost-legible. input_tokens/output_tokens are the SUMMED billable tokens across all attempts.
