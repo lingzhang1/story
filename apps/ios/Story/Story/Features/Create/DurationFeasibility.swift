@@ -90,21 +90,19 @@ enum DurationFeasibility {
 
     /// Pure classifier. `materials` are the INCLUDED Moments only (resolvable file + completed AU), matching
     /// EditPlanRequestBuilder's `included` set. `targetSeconds` is the resolved Story target.
+    ///
+    /// OWNER POLICY (2026-10-25): length is NEVER a blocking constraint. We do NOT pre-empt a run because the
+    /// material can't reach a target's lower bound — the planner produces the best cut it can (short or long)
+    /// and the user is shown a VIDEO, not an error. The ONLY thing this preflight still guards is the genuine
+    /// "there is essentially no usable footage" case (a Story with no material can't produce any video). So:
+    ///   - any usable material at/above the minimum Story length -> FEASIBLE (let the planner run, any length),
+    ///   - usable material below the minimum -> INSUFFICIENT (truly nothing to make a video from).
+    /// The former `shorterPossible` length-gate is removed; a shorter-than-requested result just ships.
     static func evaluate(materials: [MomentMaterial], targetSeconds: Double) -> Verdict {
         let achievable = materials.reduce(0) { $0 + $1.usableSeconds }
-        let lowerBound = targetSeconds * (1 - tolerance)
-
-        if achievable >= lowerBound {
+        // Not a length constraint — only a floor below which there is no video to make at all.
+        if achievable >= minimumTargetSeconds {
             return .feasible(achievableSeconds: round1(achievable))
-        }
-        // Infeasible for the requested target. Can we offer a shorter one?
-        // Suggest a target the achievable material comfortably fills: achievable * safety, snapped to a
-        // whole second, but never below the minimum.
-        let suggested = (achievable * suggestionSafety).rounded(.down)
-        if suggested >= minimumTargetSeconds {
-            return .shorterPossible(achievableSeconds: round1(achievable),
-                                    suggestedSeconds: suggested,
-                                    requestedSeconds: targetSeconds)
         }
         return .insufficient(achievableSeconds: round1(achievable), requestedSeconds: targetSeconds)
     }

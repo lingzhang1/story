@@ -116,24 +116,20 @@ final class StoryDurationFeasibilityTests: XCTestCase {
     }
 
     func test_pure_insufficient_butShorterPossible() {
-        // The observed device case: ~38s usable, 60s target (lower bound 48s) -> shorter possible.
+        // OWNER POLICY (2026-10-25): length is NEVER a block. ~38s usable against a 60s target used to be
+        // 'shorterPossible' (a length gate); now it is simply FEASIBLE — the planner runs and produces the
+        // best cut it can (shorter than 60s), and the user is shown a VIDEO, never an error.
         let v = DurationFeasibility.evaluate(
             materials: [M(durationSeconds: 20, usefulSegments: [(0, 14)]),
                         M(durationSeconds: 16, usefulSegments: [(1, 13)]),
                         M(durationSeconds: 18, usefulSegments: [(2, 14)])],
             targetSeconds: 60)
-        guard case let .shorterPossible(achievable, suggested, requested) = v else {
-            return XCTFail("expected shorterPossible, got \(v)")
-        }
-        XCTAssertEqual(achievable, 38, accuracy: 0.01)
-        XCTAssertEqual(requested, 60, accuracy: 0.01)
-        // Conservative suggestion: 38 * 0.90 = 34.2 -> floor 34. Comfortably below achievable.
-        XCTAssertEqual(suggested, 34, accuracy: 0.01)
-        XCTAssertLessThan(suggested, achievable)
+        XCTAssertEqual(v, .feasible(achievableSeconds: 38))
     }
 
     func test_pure_tooLittleForEvenMinimum_isInsufficient() {
-        // 3s usable; even the minimum (5s) can't be filled -> insufficient, NO suggestion.
+        // 3s usable; below the minimum Story length (5s) -> truly nothing to make a video from -> insufficient.
+        // This is the ONLY remaining block (no usable material), which the owner explicitly keeps.
         let v = DurationFeasibility.evaluate(materials: [M(durationSeconds: 4, usefulSegments: [(0, 3)])], targetSeconds: 60)
         XCTAssertEqual(v, .insufficient(achievableSeconds: 3, requestedSeconds: 60))
     }
@@ -156,10 +152,11 @@ final class StoryDurationFeasibilityTests: XCTestCase {
     }
 
     func test_pure_doesNotSlowClipsToReachTarget() {
-        // 10s usable vs 60s target. The estimate stays 10 (1.0x only) — we never pad via slow-mo to "reach" 60.
+        // 10s usable vs 60s target. The estimate stays 10 (1.0x only) — we never pad via slow-mo to "reach"
+        // 60. And since 10s is above the minimum, it is FEASIBLE (not a length block): the planner ships the
+        // ~10s video rather than erroring.
         let v = DurationFeasibility.evaluate(materials: [M(durationSeconds: 10, usefulSegments: [(0, 10)])], targetSeconds: 60)
-        guard case let .shorterPossible(achievable, _, _) = v else { return XCTFail("expected shorterPossible") }
-        XCTAssertEqual(achievable, 10, accuracy: 0.01)
+        XCTAssertEqual(v, .feasible(achievableSeconds: 10))
     }
 
     // MARK: - FailureRecovery mapping
@@ -193,7 +190,9 @@ final class StoryDurationFeasibilityTests: XCTestCase {
     }
 
     func test_integration_infeasibleTarget_doesNotCallPlanner_offersShorter() async {
-        // ~38s usable, 60s target -> preflight fails BEFORE the planner. Planner call count must be 0.
+        // OWNER POLICY (2026-10-25): length is NEVER a block. ~38s usable against a 60s target used to fail the
+        // preflight and offer a shorter target; now it PLANS and RENDERS a (shorter) video — the user is shown
+        // a result, never an error.
         let story = newStory(target: 60)
         let m1 = momentWithFile(story, rel: "media/a.mov", dur: 20); completeAU(m1, useful: [(0, 14)])
         let m2 = momentWithFile(story, rel: "media/b.mov", dur: 16); completeAU(m2, useful: [(1, 13)])
@@ -206,19 +205,17 @@ final class StoryDurationFeasibilityTests: XCTestCase {
         coord.create(for: story)
         await settle(coord)
 
-        XCTAssertEqual(planner.callCount, 0, "planner must NOT be called for an infeasible target")
-        XCTAssertFalse(renderer.called)
-        guard case .failed = coord.state else { return XCTFail("expected .failed, got \(coord.state)") }
-        guard case let .insufficientMaterial(_, requested, suggested)? = coord.lastFailure else {
-            return XCTFail("expected insufficientMaterial, got \(String(describing: coord.lastFailure))")
-        }
-        XCTAssertEqual(requested, 60, accuracy: 0.01)
-        XCTAssertNotNil(suggested)
+        XCTAssertEqual(planner.callCount, 1, "material above the minimum must PLAN, not be blocked on length")
+        XCTAssertTrue(renderer.called)
+        guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
+        XCTAssertNil(coord.lastFailure, "a playable video must never surface a failure")
         // The user's saved target is untouched.
         XCTAssertEqual(story.intentTargetDurationSeconds, 60)
     }
 
     func test_integration_acceptShorter_callsPlannerWithShorterTarget_renders() async {
+        // OWNER POLICY (2026-10-25): ~38s/60s now plans+renders directly (no shorter-target gate). The planner
+        // runs on the first create and the video completes.
         let story = newStory(target: 60)
         let m1 = momentWithFile(story, rel: "media/a.mov", dur: 20); completeAU(m1, useful: [(0, 14)])
         let m2 = momentWithFile(story, rel: "media/b.mov", dur: 16); completeAU(m2, useful: [(1, 13)])
@@ -230,20 +227,10 @@ final class StoryDurationFeasibilityTests: XCTestCase {
         let coord = StoryCreationCoordinator(planner: planner, renderer: renderer, context: ctx)
         coord.create(for: story)
         await settle(coord)
-        XCTAssertEqual(planner.callCount, 0)
-        guard case let .insufficientMaterial(_, _, suggested)? = coord.lastFailure, let shorter = suggested else {
-            return XCTFail("expected a shorter suggestion")
-        }
-
-        // Accept the shorter target.
-        coord.createShorter(targetSeconds: shorter)
-        await settle(coord)
-
-        XCTAssertEqual(planner.callCount, 1, "accepting shorter must call the planner exactly once")
-        XCTAssertEqual(planner.lastTargetSeen ?? -1, shorter, accuracy: 0.01, "planner must receive the shorter target")
-        XCTAssertTrue(renderer.called, "a feasible shorter plan must render")
+        XCTAssertEqual(planner.callCount, 1, "plans directly — no length block")
+        XCTAssertTrue(renderer.called, "a playable video must render")
         guard case .completed = coord.state else { return XCTFail("expected .completed, got \(coord.state)") }
-        // The Story's ORIGINAL target is still 60 — accepting a shorter render does not silently rewrite intent.
+        // The Story's ORIGINAL target is still 60 — never silently rewritten.
         XCTAssertEqual(story.intentTargetDurationSeconds, 60, "original target must not be silently changed")
     }
 

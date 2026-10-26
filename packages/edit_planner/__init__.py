@@ -600,39 +600,24 @@ def _undershoot_tolerance_for(inputs: "EditPlanInputs") -> float | None:
 
 
 def _feasible_false_is_shippable(plan: dict, inputs: "EditPlanInputs") -> bool:
-    """Owner policy — never reject a SHIPPABLE video because the model self-declared `feasible=false`.
+    """Owner policy (2026-10-25) — never block a user with an error AFTER the pipeline produced a playable cut,
+    no matter how short or long. A model `feasible=false` is honored as TERMINAL only when there is genuinely
+    NOTHING to show: no usable segments, or a technically unrenderable plan. Length is NEVER a reason to block.
 
-    A model sometimes returns feasible=false + its best cut when it could not condense a rich Story DOWN to the
-    target (the cut runs LONG). Overshoot is acceptable (a longer video still ships), so that cut must NOT be a
-    terminal rejection. This returns True when the model's plan is genuinely shippable:
+    Returns True when the model's plan is shippable:
       • it has segments, AND
-      • the segments pass the SAME deterministic executability validator (with feasible cleared, so the
-        validator judges the cut on its own merits, not the self-declaration), AND
-      • the cut is NOT a degenerate UNDERSHOOT — total output is at least the lower-bound fraction of target
-        (a too-short cut genuinely "feels broken" and remains the honest infeasible case).
-    A plan with no usable segments, or one that only validates as far-too-short, returns False (stays terminal).
-    Overshoot imposes NO upper cap here — a long cut is explicitly allowed to ship.
-    """
+      • those segments pass the SAME deterministic executability validator with feasible cleared (so the cut is
+        judged on its own technical merits — renderable source ranges, speed, native audio — NOT the
+        self-declaration and NOT any length band, which no longer exists).
+    Duration is irrelevant here: a long cut and a short cut both ship. Only an empty / unrenderable plan
+    returns False (stays terminal)."""
     segs = plan.get("segments") or []
     if not segs:
         return False
     probe = dict(plan)
-    probe["feasible"] = True          # judge the CUT, not the self-declaration
+    probe["feasible"] = True          # judge the CUT on its technical merits, not the self-declaration
     probe.pop("infeasible_reason", None)
-    if validate_plan(probe, inputs):  # any hard/technical error -> not shippable as-is
-        return False
-    # Guard only the degenerate-undershoot case; overshoot has no upper bound here (policy: long still ships).
-    try:
-        target = float(inputs.creative_intent.get("target_duration_seconds") or 0.0)
-    except (TypeError, ValueError):
-        target = 0.0
-    if target <= 0:
-        return True                   # no usable target to compare against -> a valid cut ships
-    total_out = timeline_total_seconds(segs)
-    tol = _undershoot_tolerance_for(inputs)
-    if tol is None:
-        return True                   # undershoot floor relaxed for this op -> a valid cut ships
-    return total_out >= target * (1.0 - tol)
+    return not validate_plan(probe, inputs)   # shippable iff no hard/technical error (length is not one)
 
 
 # Editorial-continuity floor (Phase 4, owner-approved 2026-10-21). A targeted revise whose instruction does NOT
@@ -875,43 +860,18 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
     total_out = timeline_total_seconds(segs)  # shared arithmetic (accounts for crossfade overlap)
     target = inputs.creative_intent["target_duration_seconds"]
     declared_infeasible = plan.get("feasible") is False
-    # ASYMMETRIC duration policy (owner decision 2026-10-13): ship the user SOMETHING watchable rather than
-    # failing when the plan is a bit off the requested length. Overshoot is cheap — a longer video is still a
-    # good video — so we tolerate the model running LONG generously (up to +OVERSHOOT). Undershoot is NOT: a
-    # video far SHORTER than requested feels broken/empty, so we keep the tight lower bound. A near-zero /
-    # degenerate plan (the "model gave up" case) is still rejected by the lower bound. The repair pass still
-    # nudges toward the exact target; this only governs when we ACCEPT vs reject.
-    #
-    # OPERATION-SCOPED duration precedence (owner decision 2026-10-18): the undershoot bound exists to reject a
-    # degenerate/empty plan against a length the USER asked for. But when the length was only AI-RECOMMENDED and
-    # the user's revise instruction is a timing-only pacing change ("shorten each clip to ~5s"), the user's
-    # revise intent OUTRANKS the AI's length guess — honoring the pacing may legitimately make the whole video
-    # shorter. In that one case we relax the undershoot floor so a correctly-shortened plan is NOT rejected (and
-    # therefore never silently re-planned). We do NOT touch overshoot, feasibility, speed, or source-range
-    # checks, and we do NOT relax anything for an EXPLICIT user duration or for initial creation. The policy is
-    # derived from the request's revision_context provenance; absent it, behavior is exactly as before.
-    undershoot_tol = _undershoot_tolerance_for(inputs)
-    if total_out and not declared_infeasible:
-        over = (total_out - target) / target     # >0 => longer than asked, <0 => shorter
-        # v2: an APPROXIMATE (not user-exact) target is an editorial OBJECTIVE, not a hard reject — honoring
-        # pacing/selection may legitimately land a bit long or short. We keep only a RUNAWAY guard (degenerate /
-        # absurdly-long) hard; the normal overshoot/undershoot bands move to the creative-intent scorer. An
-        # EXPLICIT user-exact duration keeps the hard bands. Flag-gated; default OFF = exactly today's behavior.
-        _approx_soft = _approx_duration_soft_on() and _duration_target_source(inputs) != "user_exact"
-        if _approx_soft:
-            if over > DURATION_RUNAWAY_GUARD:
-                errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
-                            f">{int(DURATION_RUNAWAY_GUARD*100)}% (runaway guard)")
-            # a degenerate near-empty plan is still caught by 'no segments' / feasibility; no hard lower band here
-        else:
-            if over > DURATION_OVERSHOOT_TOLERANCE:
-                errs.append(f"total output {total_out:.1f}s exceeds target {target}s by "
-                            f">{int(DURATION_OVERSHOOT_TOLERANCE*100)}% (upper bound)")
-            elif undershoot_tol is not None and over < -undershoot_tol:
-                errs.append(f"total output {total_out:.1f}s is >{int(undershoot_tol*100)}% "
-                            f"SHORT of target {target}s (lower bound)")
-    if declared_infeasible and not (plan.get("infeasible_reason") or "").strip():
-        errs.append("feasible=false but no infeasible_reason given")
+    # DURATION IS NEVER A BLOCKING CONSTRAINT (owner decision 2026-10-25). After the pipeline has produced a
+    # playable cut, the user is NEVER blocked because the video is too long OR too short — a working video of
+    # ANY length ships. The ONLY terminal failures are genuinely-not-working videos (no usable segments / a
+    # technically unrenderable plan) and no-duration-source material, all of which are caught by the per-segment
+    # technical checks above and the 'no segments' guard. The overshoot / undershoot / runaway bands that used
+    # to append errors here have been REMOVED. Target length is now purely advisory (a planning aim + the
+    # creative-intent scorer's objective), never a reject. We keep only a non-blocking diagnostic of how far the
+    # cut landed from the aim, for observability.
+    if total_out and target:
+        diag_delta = (total_out - target) / target
+        # recorded on the plan for diagnostics only; appends NO error regardless of sign/magnitude.
+        plan.setdefault("_duration_delta_fraction", round(diag_delta, 3))
     # DIRECTIVES. Split into HARD (references to unknown/unowned Moments, safety/privacy excludes, internal
     # contradictions) and OBJECTIVE (opening/ending/inclusion/ordering/adjacency/creative-exclude). HARD always
     # fails validation. OBJECTIVE fails validation ONLY when the objective-directives flag is OFF (legacy); when
@@ -1796,11 +1756,21 @@ class RealEditPlannerEngine:
                 # user's existing version is kept, rather than silently replanned. (In practice the trim-at-
                 # normal-speed transform only ever shortens within an already-valid window, so this is a
                 # belt-and-braces guard, visible via retime_reject_errors.)
-                diag["revision_path"] = "deterministic_retime_infeasible"
-                self.last_diagnostics = diag
-                raise EditPlanInfeasibleError(
-                    "This pacing change could not be applied to your video without re-cutting it. "
-                    "Your current version was kept unchanged.")
+                # OWNER POLICY (2026-10-25): never block the user when a PLAYABLE video exists. If the
+                # deterministic retime cannot be made valid, we do NOT error and we do NOT silently re-plan the
+                # whole video — we ship the user's EXISTING base plan unchanged. The base plan is the exact cut
+                # the renderer already consumed for the current version, so it is known-playable by construction;
+                # we ship it as-is (the pacing change simply wasn't applied) rather than dead-ending. Recorded
+                # for observability. Only a missing/empty base falls through to normal planning.
+                base_plan = rc.get("base_plan")
+                if isinstance(base_plan, dict) and base_plan.get("segments"):
+                    diag["final"] = "executable"
+                    diag["revision_path"] = "retime_infeasible_shipped_base"
+                    diag["retime_change_applied"] = False
+                    self.last_diagnostics = diag
+                    return _to_contract(dict(base_plan), inputs)
+                # No usable base to fall back to -> continue to normal planning (never a dead-end error).
+                diag["revision_path"] = "deterministic_retime_fallthrough"
 
         if (rc.get("mode") == "revise" and isinstance(rc.get("base_plan"), dict)
                 and rc.get("directives") and not (rc.get("soft_direction") or "").strip()):
@@ -1977,34 +1947,19 @@ class RealEditPlannerEngine:
                 self.last_diagnostics = diag
                 raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
 
-        # 6a: EDITORIAL-CONTINUITY GATE (owner decision 2026-10-21, supersedes the 2026-10-18 terminal
-        # preservation gate). For a targeted revise (not broad-replan), editorial continuity is an OBJECTIVE,
-        # not a hard rejection: a technically-valid revise that reasonably fulfils the latest request is
-        # ACCEPTED even when the clip set changed. We compute the deterministic (no-model) base-vs-revised clip
-        # delta and record it as a diagnostic/quality signal, and reject ONLY two cases: (1) a NO-OP (the
-        # directed revise produced no effective change — an honest "couldn't apply that", never saved as
-        # success), and (2) a WHOLESALE replacement (continuity below CONTINUITY_FLOOR when the instruction did
-        # not itself authorize dropping clips — the model re-cut the whole edit instead of revising it). Adding/
-        # removing clips, reordering, changing total duration or transitions no longer causes a terminal
-        # failure. Technical validation (validate_plan) already passed and is unchanged.
+        # 6a: EDITORIAL-CONTINUITY SIGNAL (owner decision 2026-10-25 — supersedes the 2026-10-21 gate).
+        # Continuity is now a DIAGNOSTIC ONLY, never a terminal rejection. Policy: if the pipeline produced a
+        # PLAYABLE cut (validate_plan already passed above), the user is shown that VIDEO — never an error —
+        # across create / revise / explore. A revise that changed more than expected (`wholesale`) still ships
+        # as the user's new version (they can keep the prior one from history); a revise that produced the same
+        # cut (`noop`) still ships (it is a valid, playable video). We record the verdict for observability so a
+        # surprising change is diagnosable, but we do NOT block.
         if _is_targeted_revise:
             cont = _continuity_assessment(rc.get("base_plan"), plan, rc)
             if cont is not None:
-                diag["continuity"] = cont   # Phase-6: ratio + added/removed/reordered + verdict, always logged
-                if cont["verdict"] == "noop":
-                    diag["final"] = "preservation_noop"
-                    self.last_diagnostics = diag
-                    raise EditPlanInfeasibleError(
-                        "That change could not be applied to your video — the result would be the same as your "
-                        "current version, so nothing was saved.")
-                if cont["verdict"] == "wholesale":
-                    diag["final"] = "preservation_violation"
-                    diag["preservation_error"] = cont["reason"]
-                    self.last_diagnostics = diag
-                    raise EditPlanInfeasibleError(
-                        "This revision could not be applied without replacing most of your video "
-                        f"({cont['reason']}). Your current version was kept unchanged — try naming the Moments "
-                        "to keep or change, or use Create Another Version for a fresh edit.")
+                diag["continuity"] = cont   # ratio + added/removed/reordered + verdict, always logged
+                if cont["verdict"] in ("noop", "wholesale"):
+                    diag["continuity_nonblocking"] = cont["verdict"]   # was terminal; now shipped anyway
 
         # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
         # after we already hold a VALID executable plan and only when a creative brief exists to critique
