@@ -144,16 +144,20 @@ struct BuildProvenance: Codable, Equatable {
     }
 
     /// Resolve from the main bundle + the compile-time commit sha. `commitSHA` is read from Info.plist key
-    /// `GitCommitSHA` when the build injects it; otherwise "unknown" (never inferred).
+    /// `GitCommitSHA` when the build injects it; otherwise "unknown" (never inferred). The value is treated as
+    /// unknown when it is empty, the literal "unknown" (the build-setting default), or an UNRESOLVED build
+    /// variable token like "$(GIT_COMMIT_SHA)" — so a build without the SHA-populating Run Script reports
+    /// "unknown" rather than a meaningless token, and never crashes.
     static func current(requestedApproach: String, multimodalEnabled: Bool,
                         extractionPolicy: String) -> BuildProvenance {
         let info = Bundle.main.infoDictionary ?? [:]
         let app = (info["CFBundleShortVersionString"] as? String) ?? "unknown"
         let build = (info["CFBundleVersion"] as? String) ?? "unknown"
-        let sha = (info["GitCommitSHA"] as? String)?.trimmingCharacters(in: .whitespaces)
+        let raw = (info["GitCommitSHA"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+        let resolved = (raw.isEmpty || raw.lowercased() == "unknown" || raw.hasPrefix("$(")) ? "unknown" : raw
         return BuildProvenance(
             appVersion: app, buildNumber: build,
-            commitSHA: (sha?.isEmpty == false ? sha! : "unknown"),
+            commitSHA: resolved,
             framePolicy: MomentFrameExtractor.framePolicy,
             extractionPolicy: extractionPolicy,
             requestedApproach: requestedApproach,

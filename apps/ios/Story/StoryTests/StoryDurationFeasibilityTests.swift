@@ -128,10 +128,26 @@ final class StoryDurationFeasibilityTests: XCTestCase {
     }
 
     func test_pure_tooLittleForEvenMinimum_isInsufficient() {
-        // 3s usable; below the minimum Story length (5s) -> truly nothing to make a video from -> insufficient.
-        // This is the ONLY remaining block (no usable material), which the owner explicitly keeps.
+        // OWNER POLICY (2026-10-25 final): the arbitrary 5s floor is REMOVED. 3s of usable footage is now a
+        // FEASIBLE short video (the planner/renderer decide the length), NOT a block.
         let v = DurationFeasibility.evaluate(materials: [M(durationSeconds: 4, usefulSegments: [(0, 3)])], targetSeconds: 60)
-        XCTAssertEqual(v, .insufficient(achievableSeconds: 3, requestedSeconds: 60))
+        XCTAssertEqual(v, .feasible(achievableSeconds: 3))
+    }
+
+    func test_pure_shortButRealVideo_isFeasible() {
+        // A genuinely short clip (well under 5s) is a PLAYABLE short video -> feasible, never blocked on length.
+        let v2 = DurationFeasibility.evaluate(materials: [M(durationSeconds: 2, usefulSegments: [(0, 2)])], targetSeconds: 30)
+        XCTAssertEqual(v2, .feasible(achievableSeconds: 2))
+        let v08 = DurationFeasibility.evaluate(materials: [M(durationSeconds: 1, usefulSegments: [(0, 0.8)])], targetSeconds: 30)
+        XCTAssertEqual(v08, .feasible(achievableSeconds: 0.8))
+    }
+
+    func test_pure_zeroUsableFootage_isInsufficient() {
+        // The ONLY remaining non-feasible verdict: genuinely NO usable footage (a technical no-material case).
+        let none = DurationFeasibility.evaluate(materials: [M(durationSeconds: 5, usefulSegments: [(2, 2)])], targetSeconds: 30)
+        XCTAssertEqual(none, .insufficient(achievableSeconds: 0, requestedSeconds: 30))
+        let empty = DurationFeasibility.evaluate(materials: [], targetSeconds: 30)
+        XCTAssertEqual(empty, .insufficient(achievableSeconds: 0, requestedSeconds: 30))
     }
 
     func test_pure_overlappingSegments_notDoubleCounted() {
@@ -235,9 +251,11 @@ final class StoryDurationFeasibilityTests: XCTestCase {
     }
 
     func test_integration_keepShooting_doesNotMutateStory_noPlannerCall() async {
-        // 3s usable, 60s target -> insufficient, no suggestion -> "keep shooting". createShorter is a no-op.
+        // OWNER POLICY (2026-10-25 final): 3s of footage is now FEASIBLE (short video ships). The ONLY remaining
+        // block is GENUINELY NO usable footage. Use a Moment whose useful span is empty -> 0 usable seconds ->
+        // insufficient (technical no-material), planner not called, createShorter is a no-op, Story untouched.
         let story = newStory(target: 60)
-        let m1 = momentWithFile(story, rel: "media/tiny.mov", dur: 4); completeAU(m1, useful: [(0, 3)])
+        let m1 = momentWithFile(story, rel: "media/empty.mov", dur: 4); completeAU(m1, useful: [(2, 2)])  // 0 usable
         try? ctx.save()
 
         let planner = CountingPlanner(plan: validPlan([m1]))

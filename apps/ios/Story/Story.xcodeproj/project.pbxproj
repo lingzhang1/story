@@ -402,6 +402,7 @@
 				DEVELOPMENT_TEAM = 5V43ARGFF2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				GIT_COMMIT_SHA = unknown;
 				INFOPLIST_FILE = Story/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = YoTale;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Story uses the camera to capture your moments.";
@@ -436,6 +437,7 @@
 				DEVELOPMENT_TEAM = 5V43ARGFF2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				GIT_COMMIT_SHA = unknown;
 				INFOPLIST_FILE = Story/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = YoTale;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Story uses the camera to capture your moments.";
