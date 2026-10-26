@@ -409,7 +409,8 @@ enum EditPlanRequestBuilder {
                       musicPlan: JSONValue? = nil,
                       musicAssetId: String? = nil,
                       musicAnalysis: JSONValue? = nil,
-                      revisionContext: JSONValue? = nil) throws -> Build {
+                      revisionContext: JSONValue? = nil,
+                      editorialType: String? = nil) throws -> Build {
         // Resolvable local media, keyed by Moment id (the ORIGINAL bytes on THIS device right now). Used for
         // the render-time URL resolver + diagnostics — NOT as the planner-eligibility gate (see below).
         let media = MomentResolver.resolve(moments: story.moments)
@@ -461,13 +462,22 @@ enum EditPlanRequestBuilder {
             // Transform AU observed.useful_segments [{start_time,end_time,...}] -> [[a,b], ...] number pairs
             // (the shape the backend validator reads: a source range must overlap a useful_segment).
             let useful = usefulSegmentPairs(from: understanding, duration: dur)
-            moments.append(.object([
+            var momentObj: [String: JSONValue] = [
                 "id": .string(m.id.uuidString),
                 "duration_seconds": .number(dur),
                 "useful_segments": .array(useful),
                 // Pass the understanding summary through so the planner has narrative grounding (optional).
                 "summary": understandingSummary(understanding),
-            ].merging(Self.evidenceField(understanding)) { _, new in new }))
+            ].merging(Self.evidenceField(understanding)) { _, new in new }
+            // EditPlan v5.3 (flag-gated, additive): forward the Rich AU v2 editorial candidates, timestamped
+            // events, and server-minted sampled_frame_ms so the planner can plan Highlights vs Full Story. All
+            // ADVISORY (backend treats intervals/peaks as hints, never clip bounds). Only when the P1 flag is ON
+            // — flag OFF keeps the v5.2 moment payload byte-identical. The untrusted model `evidence` string is
+            // dropped here too (defense-in-depth; the backend also strips it).
+            if EditorialTypeFlag.enabled {
+                for (k, v) in Self.editorialV53Fields(from: understanding) { momentObj[k] = v }
+            }
+            moments.append(.object(momentObj))
             // includedMedia is the LOCAL render set: only Moments whose bytes are on disk NOW. A cloud-only
             // eligible Moment is in moments[] (planner) but NOT here — R6 restores it before render.
             if let localMedia = mediaById[m.id] { included.append(localMedia) }
@@ -510,6 +520,7 @@ enum EditPlanRequestBuilder {
             musicAnalysis: musicAnalysis,
             soundPreference: story.effectiveSoundPreference.rawValue,   // immersive|balanced|music_led → native_audio bias
             editorialMode: story.editorialMode,                        // highlights|full|custom → selection breadth (nil = infer)
+            editorialType: EditorialTypeFlag.enabled ? editorialType : nil, // v5.3 resolved type; nil when flag OFF => v5.2 byte-identical
             revisionContext: revisionContext)                          // Creative Revision Foundation: Explore/Revise version-aware context (nil = unchanged)
 
         var finalBuild = Build(request: req, includedMedia: included, excludedMomentIds: excluded)
@@ -584,6 +595,34 @@ enum EditPlanRequestBuilder {
         }
         // ordered, de-duplicated
         return Array(Set(times)).sorted()
+    }
+
+    /// EditPlan v5.3 (flag-gated): extract the ADVISORY editorial evidence to forward per Moment — the
+    /// `editorial` block (visual + narrative candidates, with the untrusted model `evidence` string removed),
+    /// the observed `events`, and the server-minted `sampled_frame_ms`. Pure pass-through of what AU v2 already
+    /// persisted; no new analysis. Returns only the keys that are actually present (older/partial records
+    /// contribute nothing, keeping the moment payload valid).
+    static func editorialV53Fields(from understanding: JSONValue, duration: Double = 0) -> [String: JSONValue] {
+        guard case let .object(root) = understanding else { return [:] }
+        var out: [String: JSONValue] = [:]
+        // editorial block with visual_candidates[].evidence stripped (defense-in-depth; backend also strips).
+        if case let .object(ed)? = root["editorial"] {
+            var ed2 = ed
+            if case let .array(vcs)? = ed["visual_candidates"] {
+                ed2["visual_candidates"] = .array(vcs.map { vc in
+                    if case let .object(o) = vc { return .object(o.filter { $0.key != "evidence" }) }
+                    return vc
+                })
+            }
+            out["editorial"] = .object(ed2)
+        }
+        if case let .object(obs)? = root["observed"], case let .array(events)? = obs["events"] {
+            out["events"] = .array(events)
+        }
+        if case let .array(stamps)? = root["sampled_frame_ms"] {
+            out["sampled_frame_ms"] = .array(stamps)
+        }
+        return out
     }
 
     /// Arm B (AU-evidence forwarding): build a DETERMINISTIC, BOUNDED factual description for the planner from

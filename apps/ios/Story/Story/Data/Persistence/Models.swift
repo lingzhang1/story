@@ -937,6 +937,10 @@ final class PendingOperationModel {
     var jobId: String?               // server job handle for polling; nil until submit returns
     var operationType: String        // "original" | "another_version" | "revision"
     var baseVersionId: String?       // Explore/revision: the user-selected parent/base version row id
+    // P1-C: the editorial TYPE the attempt resolved at its boundary, persisted so a COLD resume stamps the
+    // produced GeneratedOutput with the correct type instead of re-deriving from mutable Story state. Additive,
+    // optional (nil default => no migration; nil = legacy/unspecified or flag-OFF).
+    var editorialTypeRaw: String?
     var requestFingerprint: String?  // included-Moments fingerprint at submit time (drift detection; advisory)
 
     // Lifecycle. `phase` tracks the exactly-once pipeline: submitted -> planning -> plan_ready -> rendering ->
@@ -969,6 +973,7 @@ final class PendingOperationModel {
         jobId: String? = nil,
         operationType: String,
         baseVersionId: String? = nil,
+        editorialTypeRaw: String? = nil,
         requestFingerprint: String? = nil,
         phase: String = "submitted",
         jobStatus: String? = nil,
@@ -988,6 +993,7 @@ final class PendingOperationModel {
         self.jobId = jobId
         self.operationType = operationType
         self.baseVersionId = baseVersionId
+        self.editorialTypeRaw = editorialTypeRaw
         self.requestFingerprint = requestFingerprint
         self.phase = phase
         self.jobStatus = jobStatus

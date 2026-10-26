@@ -220,6 +220,10 @@ final class StoryCreationCoordinator {
     private var pendingRevisionContext: JSONValue?
     private var pendingParentVersionId: UUID?
     private var pendingOperationType: String = "original"
+    // P1-C: the effective EDITORIAL TYPE resolved ONCE at the generation-attempt boundary and owned by the
+    // attempt for its whole async lifecycle. Never re-derived from mutable Story state after submission.
+    // nil when the P1 flag is OFF (=> v5.2 behavior). "highlights" | "full_story".
+    private var pendingEditorialType: String?
     /// True when a Create-Another-Version run was launched from the Customize sheet with directives the user
     /// typed FOR THIS operation — those directives are then folded (mode=revise) instead of a blind explore.
     /// Reset by every entry point so a one-tap Explore never inherits them.
@@ -368,6 +372,12 @@ final class StoryCreationCoordinator {
         pendingParentVersionId = nil
         pendingOperationType = "original"
         pendingDirectedByCustomize = false
+        // P1-C: resolve the attempt's editorial TYPE once, here, at the Original-create boundary. Explicit
+        // Story selection -> that type; no selection -> Highlights DEFAULT (never model-inferred, never derived
+        // from a custom duration). nil when the flag is OFF (v5.2 behavior).
+        pendingEditorialType = EditorialTypeFlag.enabled
+            ? ResolvedEditorial.fromLegacy(story.editorialMode).typeForNewAttempt.rawValue
+            : nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
 
@@ -466,7 +476,8 @@ final class StoryCreationCoordinator {
     /// fingerprint bypass). Reuses the SAME planner/validation/render path; music + user settings preserved.
     func createAnotherVersion(for story: StoryModel, from parent: GeneratedOutputModel,
                               outputFormat: String = "vertical", targetSeconds: Double? = nil,
-                              music: MusicSelection? = nil, directedByCustomize: Bool = false) {
+                              music: MusicSelection? = nil, directedByCustomize: Bool = false,
+                              requestedEditorialType: EditorialType? = nil) {
         guard !isCreating else { return }
         // Phase 5: a DELIBERATE new version is a NEW operation. Abandon any stale recoverable pending op for
         // this Story first (the user chose to start over rather than resume), so there is never more than one
@@ -477,6 +488,12 @@ final class StoryCreationCoordinator {
         pendingRevisionContext = RevisionContextBuilder.explore(parent: parent, recents: recents)
         pendingParentVersionId = parent.versionId ?? parent.id
         pendingOperationType = "another_version"
+        // P1-C: Explore allows type SWITCHING. Use the explicitly requested type when given; otherwise RETAIN
+        // the parent output's type (all four H/F transitions supported). Directed Explore stays Explore. A
+        // legacy parent with no stamped type + no request -> Highlights default. Flag-gated.
+        pendingEditorialType = EditorialTypeFlag.enabled
+            ? (requestedEditorialType ?? parent.editorialType ?? EditorialType.defaultType).rawValue
+            : nil
         // When the user reached this via the Customize sheet and typed Creative Direction for THIS operation,
         // fold those directives + soft instruction onto the explore context so the planner strongly pursues
         // them (owner decision 2026-10-22: the operation STAYS mode=explore — a meaningfully-different NEW
@@ -504,6 +521,9 @@ final class StoryCreationCoordinator {
         pendingParentVersionId = base.versionId ?? base.id
         pendingOperationType = "revision"
         pendingDirectedByCustomize = false
+        // P1-C: Revise INHERITS the base output's editorial type (never re-infers). A legacy base with no
+        // stamped type stays nil (preserve historical semantics — not silently Full Story). Flag-gated.
+        pendingEditorialType = EditorialTypeFlag.enabled ? base.editorialType?.rawValue : nil
         lastDiversity = nil
         beginRun(for: story, outputFormat: outputFormat, targetSeconds: targetSeconds, music: music)
     }
@@ -533,7 +553,8 @@ final class StoryCreationCoordinator {
                 musicAnalysis: planForBuilder == nil ? nil : pendingMusic?.analysisJSON,
                 revisionContext: Self.composeRevisionContext(base: pendingRevisionContext, story: story,
                                                              operationType: pendingOperationType,
-                                                             directedByCustomize: pendingDirectedByCustomize))
+                                                             directedByCustomize: pendingDirectedByCustomize),
+                editorialType: pendingEditorialType)
         } catch let e as EditPlanRequestBuilder.BuildError {
             return finishFailed(.missingPrerequisite(e.errorDescription ?? "Missing prerequisites for creation."))
         } catch {
@@ -1172,9 +1193,11 @@ final class StoryCreationCoordinator {
             // (nil = legacy/unspecified) rather than mislabel a v5.2 output with a guessed type. When the flag
             // is ON, the type is resolved from the Story's selection (a custom/unreconstructable seed still
             // yields nil — never guessed as Full Story). Pure provenance either way; never changes planning.
-            editorialTypeRaw: EditorialTypeFlag.enabled
-                ? ResolvedEditorial.fromLegacy(story.editorialMode).type?.rawValue
-                : nil)
+            // P1-A/P1-C provenance: editorialTypeRaw records the AUTHORITATIVE type the ATTEMPT resolved at its
+            // boundary (Original=explicit|Highlights-default, Revise=inherit base, Explore=switch|inherit) and
+            // OWNED for the whole async lifecycle — never re-derived here from mutable Story state. nil when the
+            // flag is OFF (plain v5.2) or a legacy base had no stamped type (never guessed as Full Story).
+            editorialTypeRaw: pendingEditorialType)
         output.story = story
         context.insert(output)
         story.generatedOutputs.append(output)
@@ -1322,11 +1345,13 @@ extension StoryCreationCoordinator {
             row = existing
         } else {
             row = PendingOperationModel(storyId: story.id, operationId: operationId,
-                                        operationType: pendingOperationType)
+                                        operationType: pendingOperationType,
+                                        editorialTypeRaw: pendingEditorialType)
             context.insert(row)
         }
         row.jobId = jobId ?? row.jobId
         row.operationType = pendingOperationType
+        row.editorialTypeRaw = pendingEditorialType
         row.baseVersionId = pendingParentVersionId?.uuidString ?? row.baseVersionId
         row.requestFingerprint = fingerprint ?? row.requestFingerprint
         row.phase = phase
@@ -1408,6 +1433,7 @@ extension StoryCreationCoordinator {
         pendingMusic = music
         lastMusic = music
         pendingOperationType = row.operationType
+        pendingEditorialType = row.editorialTypeRaw   // P1-C: resume uses the PERSISTED attempt type, not a re-derivation
         pendingParentVersionId = row.baseVersionId.flatMap(UUID.init(uuidString:))
         pendingRevisionContext = Self.rebuildRevisionContext(for: story, row: row)
         story.planOperationId = row.operationId

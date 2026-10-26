@@ -64,6 +64,11 @@ struct EditPlanRequestDTO: Encodable {
     var musicAnalysis: JSONValue? = nil    // frozen music_analysis/1 for the selected track
     var soundPreference: String? = nil     // immersive|balanced|music_led; nil omitted (no-music parity preserved)
     var editorialMode: String? = nil       // highlights|full|custom; nil omitted (back-compat, planner infers)
+    // EditPlan v5.3 (additive, request-only): resolved consumer editorial TYPE for this attempt —
+    // "highlights" | "full_story". Resolved at the attempt boundary (never re-derived from Story state).
+    // nil omitted => byte-identical to a v5.2 request. Per-Moment editorial candidates / events /
+    // sampled_frame_ms ride INSIDE each moments[] JSONValue (built by EditPlanRequestBuilder).
+    var editorialType: String? = nil
     // Creative Revision Foundation (additive, request-only). When present, carries the version-aware context
     // {mode, base_version_id, prior_edit_summaries, base_plan?, directives?, soft_direction?}. Lives INSIDE the
     // request body, so it is part of the frozen request snapshot AND the canonical async fingerprint (body-hashed)
@@ -83,6 +88,7 @@ struct EditPlanRequestDTO: Encodable {
         case musicAnalysis = "music_analysis"
         case soundPreference = "sound_preference"
         case editorialMode = "editorial_mode"
+        case editorialType = "editorial_type"
         case revisionContext = "revision_context"
     }
 
@@ -101,6 +107,7 @@ struct EditPlanRequestDTO: Encodable {
         if let musicAnalysis { try c.encode(musicAnalysis, forKey: .musicAnalysis) }
         if let soundPreference { try c.encode(soundPreference, forKey: .soundPreference) }
         if let editorialMode { try c.encode(editorialMode, forKey: .editorialMode) }
+        if let editorialType { try c.encode(editorialType, forKey: .editorialType) }
         if let revisionContext { try c.encode(revisionContext, forKey: .revisionContext) }
     }
 }
