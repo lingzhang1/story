@@ -490,7 +490,7 @@ def _run_edit_plan(store: _jobs.JobStore, job_id: str, job: dict) -> str:
             music_asset_id=b.get("music_asset_id"),
             music_plan_id=str(b["music_plan_id"]) if b.get("music_plan_id") else None,
             music_analysis=b.get("music_analysis"), sound_preference=b.get("sound_preference"),
-            editorial_mode=b.get("editorial_mode"), revision_context=b.get("revision_context"),
+            editorial_mode=b.get("editorial_mode"), editorial_type=b.get("editorial_type"), revision_context=b.get("revision_context"),
             images=images, creative_brief=env.get("creative_brief"), image_moment_order=order,
             critique_revision=bool(env.get("critique_revision")))
 

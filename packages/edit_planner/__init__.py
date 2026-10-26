@@ -482,6 +482,12 @@ class EditPlanInputs:
     music_analysis: dict | None = None  # frozen music_analysis/1 shape; None => no-music planning
     sound_preference: str | None = None  # immersive|balanced|music_led; None => infer. Advisory input, no schema change.
     editorial_mode: str | None = None  # highlights|full|custom; None => infer from duration (back-compat). Advisory; no schema change.
+    # EditPlan v5.3 (additive, request-only): the resolved consumer editorial TYPE for this attempt —
+    # "highlights" | "full_story". DISTINCT from the legacy editorial_mode breadth hint: editorial_type is the
+    # P1-A canonical two-type model, resolved at the attempt boundary (never re-inferred from Story state).
+    # None => v5.2 behavior (fall back to editorial_mode / duration inference). Injected into the USER message
+    # only (frozen system body untouched).
+    editorial_type: str | None = None
     # Creative Revision Foundation (additive, request-only). When present, carries the version-aware context:
     #   {mode: "explore"|"revise", base_version_id, prior_edit_summaries: [...], base_plan?, directives?,
     #    soft_direction?}. Injected into the USER message only (frozen v5.2 system body untouched); None => the
@@ -1255,11 +1261,29 @@ class EditPlannerEngine(Protocol):
 
 def _build_user(inputs: EditPlanInputs) -> str:
     import json
+    # EditPlan v5.3 evidence hygiene: NEVER forward the untrusted model-generated
+    # editorial.visual_candidates[].evidence string as if it were verified provenance. Strip it from the
+    # moments payload (deterministic consumer-side filter). sampled_frame_ms + candidates + events are kept.
+    def _sanitize_moment(m: dict) -> dict:
+        ed = m.get("editorial")
+        if not isinstance(ed, dict):
+            return m
+        vcs = ed.get("visual_candidates")
+        if not isinstance(vcs, list):
+            return m
+        m2 = dict(m); ed2 = dict(ed)
+        ed2["visual_candidates"] = [
+            {k: v for k, v in (vc.items() if isinstance(vc, dict) else []) if k != "evidence"}
+            for vc in vcs
+        ]
+        m2["editorial"] = ed2
+        return m2
+    sanitized_moments = [_sanitize_moment(m) if isinstance(m, dict) else m for m in inputs.moments]
     payload = {
         "creative_intent": inputs.creative_intent,
         "story_guide": inputs.story_guide,
         "story_coverage": inputs.story_coverage,
-        "moments": inputs.moments,
+        "moments": sanitized_moments,
         "music_plan": inputs.music_plan,
         "target_duration_seconds": inputs.creative_intent["target_duration_seconds"],
     }
@@ -1269,6 +1293,8 @@ def _build_user(inputs: EditPlanInputs) -> str:
         payload["sound_preference"] = inputs.sound_preference
     if inputs.editorial_mode:
         payload["editorial_mode"] = inputs.editorial_mode
+    if inputs.editorial_type:
+        payload["editorial_type"] = inputs.editorial_type
     # MVP creative direction — injected into the USER message only (frozen v5.2 body untouched).
     brief_block = ""
     if inputs.creative_brief:
@@ -1294,6 +1320,7 @@ def _build_user(inputs: EditPlanInputs) -> str:
             + image_block
             + _edit_sound_pref_directive(inputs.sound_preference)
             + _edit_mode_directive(inputs.editorial_mode)
+            + _editorial_type_directive(inputs.editorial_type)
             + "\nINPUT:\n"
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
 
@@ -1437,6 +1464,64 @@ def diversity_diagnostics(parent_summary: dict, new_plan: dict) -> dict:
         "shot_count_delta": len(nseq) - len(pseq),
         "near_identical": near_identical,
     }
+
+
+def _editorial_type_directive(etype: str | None) -> str:
+    """EditPlan v5.3 editorial-TYPE strategy (advisory REQUEST context, USER message only — the frozen system
+    body is untouched). Distinct from _edit_mode_directive (legacy breadth hint). Empty when unset so v5.2
+    behavior is unchanged. Highlights and Full Story are genuinely different editorial intents, not just
+    different durations."""
+    if etype == "highlights":
+        return (
+            "\nEDITORIAL TYPE = HIGHLIGHTS — a short-form, visually COMPELLING interpretation, NOT a compressed "
+            "Full Story. Prioritise the strongest visual payoffs, reveals, expressive actions, attractive "
+            "compositions, distinct movement and visual variety, with a strong opening and ending and music-aware "
+            "pacing. SELECT the best available footage — do NOT include every Moment for coverage, do NOT force "
+            "every candidate in, and prefer the actual visual payoff over irrelevant lead-in when the evidence "
+            "supports it. The visual_candidates below are SEARCH HINTS: shorten, extend, shift, combine or omit "
+            "them freely, and expand beyond a candidate window when the footage justifies it."
+        )
+    if etype == "full_story":
+        return (
+            "\nEDITORIAL TYPE = FULL STORY — a meaningful, COHERENT record of the experience, NOT a Highlights "
+            "montage with longer cuts. Prioritise complete meaningful actions, human interactions, temporal "
+            "progression, context, environmental and cultural storytelling and emotional reactions, with a "
+            "meaningful beginning, development and ending and appropriate native audio. Use the narrative "
+            "candidates and timestamped AU events as guidance; retain contextual footage that adds meaning. Do "
+            "NOT extend footage merely to reach a longer duration and do NOT require every Moment. Speech content "
+            "is NOT understood — treat visible interactions as visual narrative evidence; never invent dialogue."
+        )
+    return ""
+
+
+def _editorial_evidence_lines(moment: dict) -> str:
+    """EditPlan v5.3: render a Moment's ADVISORY editorial candidates + AU events into compact USER-message
+    text. Candidate intervals and peak_time are HINTS, never clip boundaries (the IMG_9091 regression proved a
+    real reveal can fall outside a candidate window). The untrusted model-generated `evidence` string is NEVER
+    forwarded. Returns '' when the Moment carries no editorial block (older/partial records → unchanged)."""
+    ed = moment.get("editorial")
+    if not isinstance(ed, dict):
+        return ""
+    out: list[str] = []
+    vcs = ed.get("visual_candidates") or []
+    if vcs:
+        out.append("  visual candidates (advisory — hints, not cut boundaries):")
+        for v in vcs:
+            if not isinstance(v, dict):
+                continue
+            pk = v.get("peak_time")
+            pk_s = f" ~peak {pk}s" if pk is not None else " (no grounded peak)"
+            role = f" [{v.get('role')}]" if v.get("role") else ""
+            out.append(f"    {v.get('start_time')}–{v.get('end_time')}s{pk_s}{role}: {v.get('visual_value','')}")
+    ncs = ed.get("narrative_candidates") or []
+    if ncs:
+        out.append("  narrative candidates (advisory):")
+        for n in ncs:
+            if not isinstance(n, dict):
+                continue
+            role = f" [{n.get('role')}]" if n.get("role") else ""
+            out.append(f"    {n.get('start_time')}–{n.get('end_time')}s{role}: {n.get('what_happens','')}")
+    return ("\n" + "\n".join(out)) if out else ""
 
 
 def _edit_mode_directive(mode: str | None) -> str:

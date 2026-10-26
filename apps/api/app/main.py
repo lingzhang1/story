@@ -353,6 +353,12 @@ class EditPlanRequest(BaseModel):
         default=None, description="effective user sound preference: immersive|balanced|music_led (None = infer)")
     editorial_mode: str | None = Field(
         default=None, description="Story-length editorial mode: highlights|full|custom (None = infer from duration; back-compat)")
+    editorial_type: str | None = Field(
+        default=None,
+        description="EditPlan v5.3 resolved consumer editorial TYPE: highlights|full_story (None = v5.2 behavior). "
+                    "P1-A canonical two-type model, resolved at the attempt boundary. Additive, request-only, "
+                    "USER-message advisory; frozen v5.2 system body + EditPlan/2 output UNCHANGED. Part of the "
+                    "request snapshot and the canonical async fingerprint (body-hashed).")
     revision_context: dict | None = Field(
         default=None,
         description="Creative Revision Foundation (additive, request-only). When present, carries "
@@ -1399,7 +1405,7 @@ def create_app() -> FastAPI:
             output_format=body.output_format, music_asset_id=body.music_asset_id,
             music_plan_id=str(body.music_plan_id) if body.music_plan_id else None,
             music_analysis=body.music_analysis, sound_preference=body.sound_preference,
-            editorial_mode=body.editorial_mode, revision_context=body.revision_context)
+            editorial_mode=body.editorial_mode, editorial_type=body.editorial_type, revision_context=body.revision_context)
         return _execute_edit_plan(engine, inputs, base, started)
 
     def _execute_edit_plan(engine, inputs, base, started):
@@ -1576,7 +1582,7 @@ def create_app() -> FastAPI:
             output_format=parsed.output_format, music_asset_id=parsed.music_asset_id,
             music_plan_id=str(parsed.music_plan_id) if parsed.music_plan_id else None,
             music_analysis=parsed.music_analysis, sound_preference=parsed.sound_preference,
-            editorial_mode=parsed.editorial_mode, revision_context=parsed.revision_context,
+            editorial_mode=parsed.editorial_mode, editorial_type=parsed.editorial_type, revision_context=parsed.revision_context,
             images=images, creative_brief=creative_brief, image_moment_order=order,
             critique_revision=bool(critique_revision))
         # Offload the blocking Bedrock call off the event loop (this handler is async). Same pattern as AU.
