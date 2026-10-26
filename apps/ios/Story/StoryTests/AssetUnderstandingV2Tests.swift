@@ -94,4 +94,25 @@ final class AssetUnderstandingV2Tests: XCTestCase {
         let u = JSONValue.object(fromJSONString: #"{"observed":{"events":[],"useful_segments":[]}}"#)
         XCTAssertEqual(EditPlanRequestBuilder.auActionTimestamps(from: u, duration: 10.0), [])
     }
+
+    // sampled_frame_ms provenance (§2) — server-minted frame-input timestamps, optional.
+    func testV2SampledFrameMsDecodes() throws {
+        let v2 = """
+        {"moment_id":"\(mid)","schema_version":"moment_understanding/2","frame_policy":"au_frames/1",
+         "prompt_version":"au_prompt/3","n_frames":3,"sampled_frame_ms":[0,1385,2770],
+         "observed":{"summary":"s","subjects":[],"events":[],"temporal_order_note":"","useful_segments":[]},
+         "story_context":{"story_utility":"none"}}
+        """
+        let dto = try decode(v2)
+        XCTAssertEqual(dto.sampledFrameMs, [0, 1385, 2770])
+    }
+
+    func testRecordWithoutSampledFrameMsDecodesNil() throws {
+        let v2 = """
+        {"moment_id":"\(mid)","schema_version":"moment_understanding/2","frame_policy":"au_frames/1",
+         "prompt_version":"au_prompt/2","observed":{"summary":"s","subjects":[],"events":[],
+         "temporal_order_note":"","useful_segments":[]},"story_context":{"story_utility":"none"}}
+        """
+        XCTAssertNil(try decode(v2).sampledFrameMs)   // pre-field record
+    }
 }

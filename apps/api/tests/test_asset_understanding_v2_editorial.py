@@ -178,7 +178,7 @@ def test_engine_mints_v2_provenance_with_editorial():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["schema_version"] == SCHEMA_VERSION == "moment_understanding/2"
-    assert body["prompt_version"] == PROMPT_VERSION == "au_prompt/2"
+    assert body["prompt_version"] == PROMPT_VERSION == "au_prompt/3"
     assert len(body["editorial"]["visual_candidates"]) == 1
     assert len(body["editorial"]["narrative_candidates"]) == 1
     assert body["editorial"]["visual_candidates"][0]["peak_time"] == 2.0
@@ -212,3 +212,87 @@ def test_observed_block_unchanged_from_v1_shape():
     body = resp.json()
     assert body["observed"]["useful_segments"] == _OBSERVED["useful_segments"]
     assert body["observed"]["events"] == _OBSERVED["events"]
+
+
+# ----------------------------------------------------------------------------- fallback diagnostics (§7)
+
+def test_au_result_reports_fallback_diagnostics():
+    """When the primary provider raises ProviderError, FallbackModelGateway serves on the fallback and
+    AUResult records requested(primary)/served-provider/used_fallback — privacy-safe, no keys/prompt/bytes."""
+    from model_gateway import FallbackModelGateway, ProviderError, StructuredResult, Usage
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta
+    from uuid import uuid4
+
+    class _PrimaryBoom:
+        model_id = "gemini-x"
+        def generate_structured(self, req): raise ProviderError("gemini transport error: TimeoutError")
+    class _FallbackOK:
+        model_id = "openai-y"
+        def generate_structured(self, req):
+            return StructuredResult(data={"observed": _OBSERVED, "story_context": _STORY_CTX},
+                                    usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+                                    attempts=1, repaired=False, model="openai-y", provider="openai",
+                                    stop_reason="stop")
+    gw = FallbackModelGateway(_PrimaryBoom(), _FallbackOK())
+    eng = RealAssetUnderstandingEngine(gw, model_id="gemini-x")
+    r = eng.analyze([AUFrame(b"x", 0)], AURequestMeta(moment_id=uuid4()))
+    assert r.used_fallback is True
+    assert r.requested_model == "gemini-x"    # the configured primary
+    assert r.served_provider == "openai"      # what actually served
+    assert r.model == "openai-y"
+
+def test_au_result_no_fallback_on_primary_success():
+    from model_gateway import FallbackModelGateway, StructuredResult, Usage
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta
+    from uuid import uuid4
+    class _PrimaryOK:
+        model_id = "gemini-x"
+        def generate_structured(self, req):
+            return StructuredResult(data={"observed": _OBSERVED, "story_context": _STORY_CTX},
+                                    usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+                                    attempts=1, repaired=False, model="gemini-x", provider="gemini",
+                                    stop_reason="stop")
+    class _Fb:
+        model_id = "openai-y"
+        def generate_structured(self, req): raise AssertionError("fallback must not be called")
+    gw = FallbackModelGateway(_PrimaryOK(), _Fb())
+    eng = RealAssetUnderstandingEngine(gw, model_id="gemini-x")
+    r = eng.analyze([AUFrame(b"x", 0)], AURequestMeta(moment_id=uuid4()))
+    assert r.used_fallback is False
+    assert r.served_provider == "gemini"
+
+
+# ----------------------------------------------------------------------------- sampled_frame_ms provenance (§2)
+
+def test_sampled_frame_ms_server_minted_from_accepted_frames():
+    from model_gateway import FakeModelGateway
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta, DEFAULT_AU_MODEL
+    from uuid import uuid4
+    gw = FakeModelGateway(response=_v2_model_output())
+    eng = RealAssetUnderstandingEngine(gw, model_id=DEFAULT_AU_MODEL)
+    frames = [AUFrame(b"x", t) for t in (0, 1385, 2770, 4155)]
+    u = eng.analyze(frames, AURequestMeta(moment_id=uuid4())).understanding
+    assert u.sampled_frame_ms == [0, 1385, 2770, 4155]
+    assert u.n_frames == len(u.sampled_frame_ms)     # count consistency
+    assert all(isinstance(t, int) and t >= 0 for t in u.sampled_frame_ms)
+    assert u.sampled_frame_ms == sorted(u.sampled_frame_ms)   # accepted order (monotonic)
+
+def test_sampled_frame_ms_not_in_model_tool_schema():
+    from asset_engine import _tool_schema
+    assert "sampled_frame_ms" not in _tool_schema()["properties"]   # model cannot author it
+
+def test_sampled_frame_ms_model_value_overwritten():
+    from model_gateway import FakeModelGateway
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta, DEFAULT_AU_MODEL
+    from uuid import uuid4
+    out = _v2_model_output(); out["sampled_frame_ms"] = [99999, 88888]   # model tries to supply
+    eng = RealAssetUnderstandingEngine(FakeModelGateway(response=out), model_id=DEFAULT_AU_MODEL)
+    frames = [AUFrame(b"x", t) for t in (0, 500, 1000)]
+    u = eng.analyze(frames, AURequestMeta(moment_id=uuid4())).understanding
+    assert u.sampled_frame_ms == [0, 500, 1000]       # server value wins
+
+def test_old_record_decodes_without_sampled_frame_ms():
+    from uuid import uuid4
+    r = MomentUnderstandingContract.model_validate(
+        {"moment_id": str(uuid4()), "observed": {"summary": "s"}, "story_context": {"story_utility": "none"}})
+    assert r.sampled_frame_ms is None   # pre-field record, optional

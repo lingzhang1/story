@@ -113,6 +113,7 @@ struct MomentUnderstandingDTO: Codable {
     let promptVersion: String
     let modelId: String?
     let nFrames: Int?
+    let sampledFrameMs: [Int]?   // server-minted frame-input provenance; nil for pre-field records
     let observed: MomentObservedDTO
     let editorial: MomentEditorialDTO?   // nil for v1 records (optional => v1 JSON decodes unchanged)
     let storyContext: MomentStoryContextDTO
@@ -121,6 +122,7 @@ struct MomentUnderstandingDTO: Codable {
         case momentId = "moment_id", sourceCaptureId = "source_capture_id"
         case schemaVersion = "schema_version", framePolicy = "frame_policy"
         case promptVersion = "prompt_version", modelId = "model_id", nFrames = "n_frames"
+        case sampledFrameMs = "sampled_frame_ms"
         case observed, editorial, storyContext = "story_context", createdAt = "created_at"
     }
 
@@ -128,7 +130,8 @@ struct MomentUnderstandingDTO: Codable {
     // sites (tests/fakes) compile unchanged while decode fills editorial when present.
     init(momentId: UUID, sourceCaptureId: UUID?, schemaVersion: String, framePolicy: String,
          promptVersion: String, modelId: String?, nFrames: Int?, observed: MomentObservedDTO,
-         editorial: MomentEditorialDTO? = nil, storyContext: MomentStoryContextDTO, createdAt: Date? = nil) {
+         editorial: MomentEditorialDTO? = nil, storyContext: MomentStoryContextDTO, createdAt: Date? = nil,
+         sampledFrameMs: [Int]? = nil) {
         self.momentId = momentId
         self.sourceCaptureId = sourceCaptureId
         self.schemaVersion = schemaVersion
@@ -136,6 +139,7 @@ struct MomentUnderstandingDTO: Codable {
         self.promptVersion = promptVersion
         self.modelId = modelId
         self.nFrames = nFrames
+        self.sampledFrameMs = sampledFrameMs
         self.observed = observed
         self.editorial = editorial
         self.storyContext = storyContext

@@ -37,7 +37,7 @@ from model_gateway import (
     StructuredResult,
 )
 
-PROMPT_VERSION = "au_prompt/2"
+PROMPT_VERSION = "au_prompt/3"
 SCHEMA_VERSION = "moment_understanding/2"
 FRAME_POLICY = "au_frames/1"
 TASK = "asset_understanding.analyze"
@@ -86,6 +86,11 @@ class AUResult:
     usage_input_tokens: int | None = None
     usage_output_tokens: int | None = None
     model: str | None = None
+    # Provider diagnostics (privacy-safe — no keys/prompt/bytes). Lets the endpoint log WHY a request
+    # resolved on the fallback provider instead of the configured primary (06v2 P1-B quality follow-up §7).
+    requested_model: str | None = None   # the configured PRIMARY model id for this capability
+    served_provider: str | None = None   # provider that actually produced the result (gemini|openai|...)
+    used_fallback: bool = False          # True when the primary raised ProviderError and fallback served
 
 
 class AURetryableError(RuntimeError):
@@ -93,7 +98,7 @@ class AURetryableError(RuntimeError):
     the AU job PENDING/retryable — it NEVER falls back to another model."""
 
 
-_PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "asset_understanding" / "v2"
+_PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "asset_understanding" / "v3"
 
 
 def _load_system_prompt() -> str:
@@ -107,7 +112,7 @@ def _tool_schema() -> dict:
     props = dict(schema.get("properties", {}))
     for server_field in (
         "moment_id", "source_capture_id", "schema_version", "frame_policy",
-        "prompt_version", "model_id", "n_frames", "created_at",
+        "prompt_version", "model_id", "n_frames", "sampled_frame_ms", "created_at",
     ):
         props.pop(server_field, None)
     schema["properties"] = props
@@ -172,6 +177,10 @@ class RealAssetUnderstandingEngine:
             try:
                 result: StructuredResult = self._gateway.generate_structured(req)
                 understanding = self._to_contract(result, frames, meta)
+                # Privacy-safe provider diagnostics: the configured primary vs what actually served, and
+                # whether FallbackModelGateway failed over. getattr guards a bare (non-fallback) gateway.
+                requested = getattr(self._gateway, "primary_model_id", None) or self._model_id
+                used_fb = bool(getattr(self._gateway, "last_fallback", False))
                 return AUResult(
                     understanding=understanding,
                     attempts=outer + 1,
@@ -179,6 +188,9 @@ class RealAssetUnderstandingEngine:
                     usage_input_tokens=(result.usage.input_tokens if result.usage else None),
                     usage_output_tokens=(result.usage.output_tokens if result.usage else None),
                     model=result.model or self._model_id,
+                    requested_model=requested,
+                    served_provider=getattr(result, "provider", None),
+                    used_fallback=used_fb,
                 )
             except (StructuredOutputError, ProviderError) as e:
                 last_err = e
@@ -199,6 +211,11 @@ class RealAssetUnderstandingEngine:
         data["prompt_version"] = PROMPT_VERSION
         data["model_id"] = result.model or self._model_id
         data["n_frames"] = len(frames)
+        # Server-minted frame-input provenance (06v2 quality follow-up §2): the source-relative timestamps
+        # of the frames WE accepted, in accepted order. Overwrites any model-supplied value unconditionally
+        # (the model must never author this). Derived ONLY from the real accepted frames — never reconstructed
+        # from duration/n_frames. The AU endpoint already enforces monotonic t_ms on accept, so order holds.
+        data["sampled_frame_ms"] = [int(f.t_ms) for f in frames]
         # If no capture context, strip any model-supplied requested contributions.
         has_ctx = bool(
             meta.capture_context
