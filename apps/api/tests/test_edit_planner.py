@@ -90,6 +90,39 @@ def test_engine_infeasible_raises():
         eng.generate(_inputs())
 
 
+def test_engine_feasible_false_overshoot_still_ships():
+    """OWNER POLICY regression: a model that declares feasible=false because it could not condense a rich
+    Story DOWN to the target (the cut runs a bit LONG) must still SHIP its cut — never reject it. The
+    screenshot bug: '...runs significantly longer than the requested duration' surfaced as material_infeasible.
+    Here the cut totals 15.5s against a 12s target (+29% — a shippable overshoot WITHIN the +50% band that a
+    feasible=true plan would also pass) but the model flagged feasible=false. It MUST ship, not raise.
+    (A cut that genuinely busts the +50% overshoot band still fails the shared validator — that guard is
+    unchanged; this only stops a self-declared infeasible from discarding an otherwise-valid cut.)"""
+    plan = {"target_duration_seconds": 12.0, "feasible": False,
+            "infeasible_reason": "the abundance of strong footage makes it hard to condense without losing atmosphere",
+            "segments": [
+                {"order": 0, "asset_id": M1, "source_start_seconds": 1.0, "source_end_seconds": 9.0,
+                 "output_duration_seconds": 10.0, "native_audio": "keep"},
+                {"order": 1, "asset_id": M2, "source_start_seconds": 0.5, "source_end_seconds": 6.0,
+                 "output_duration_seconds": 5.5, "native_audio": "keep"}]}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    out = eng.generate(_inputs(creative_intent={"target_duration_seconds": 12.0, "desired_feeling": ["calm"]}))
+    assert out.schema_version == "edit_plan/2"
+    assert len(out.segments) == 2
+    assert eng.last_diagnostics.get("feasible_false_overridden") is True
+    assert eng.last_diagnostics.get("final") == "executable"
+
+
+def test_engine_feasible_false_empty_plan_still_rejects():
+    """The genuine infeasible case stays terminal: feasible=false with NO usable cut to ship must raise
+    (there is nothing to fall back to — not an overshoot)."""
+    plan = {"target_duration_seconds": 18.0, "feasible": False,
+            "infeasible_reason": "no usable footage at all", "segments": []}
+    eng = RealEditPlannerEngine(FakeModelGateway(response=plan))
+    with pytest.raises(EditPlanInfeasibleError):
+        eng.generate(_inputs())
+
+
 def test_engine_no_music_planning_supported():
     eng = RealEditPlannerEngine(FakeModelGateway(response=_good_plan()))
     plan = eng.generate(_inputs(music=False))  # no music_analysis

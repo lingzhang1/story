@@ -599,6 +599,42 @@ def _undershoot_tolerance_for(inputs: "EditPlanInputs") -> float | None:
     return DURATION_UNDERSHOOT_TOLERANCE
 
 
+def _feasible_false_is_shippable(plan: dict, inputs: "EditPlanInputs") -> bool:
+    """Owner policy — never reject a SHIPPABLE video because the model self-declared `feasible=false`.
+
+    A model sometimes returns feasible=false + its best cut when it could not condense a rich Story DOWN to the
+    target (the cut runs LONG). Overshoot is acceptable (a longer video still ships), so that cut must NOT be a
+    terminal rejection. This returns True when the model's plan is genuinely shippable:
+      • it has segments, AND
+      • the segments pass the SAME deterministic executability validator (with feasible cleared, so the
+        validator judges the cut on its own merits, not the self-declaration), AND
+      • the cut is NOT a degenerate UNDERSHOOT — total output is at least the lower-bound fraction of target
+        (a too-short cut genuinely "feels broken" and remains the honest infeasible case).
+    A plan with no usable segments, or one that only validates as far-too-short, returns False (stays terminal).
+    Overshoot imposes NO upper cap here — a long cut is explicitly allowed to ship.
+    """
+    segs = plan.get("segments") or []
+    if not segs:
+        return False
+    probe = dict(plan)
+    probe["feasible"] = True          # judge the CUT, not the self-declaration
+    probe.pop("infeasible_reason", None)
+    if validate_plan(probe, inputs):  # any hard/technical error -> not shippable as-is
+        return False
+    # Guard only the degenerate-undershoot case; overshoot has no upper bound here (policy: long still ships).
+    try:
+        target = float(inputs.creative_intent.get("target_duration_seconds") or 0.0)
+    except (TypeError, ValueError):
+        target = 0.0
+    if target <= 0:
+        return True                   # no usable target to compare against -> a valid cut ships
+    total_out = timeline_total_seconds(segs)
+    tol = _undershoot_tolerance_for(inputs)
+    if tol is None:
+        return True                   # undershoot floor relaxed for this op -> a valid cut ships
+    return total_out >= target * (1.0 - tol)
+
+
 # Editorial-continuity floor (Phase 4, owner-approved 2026-10-21). A targeted revise whose instruction does NOT
 # itself authorize a selection change (no exclude / no shorter-duration drop / no "focus on the best shots")
 # must keep at least this fraction of the base plan's clips, else it is treated as a WHOLESALE replacement
@@ -1924,9 +1960,22 @@ class RealEditPlannerEngine:
             # schema-valid but NON-executable even after repair. Never pass it on.
             raise StructuredOutputError(f"EditPlan failed deterministic validation after repair: {errs}")
         if plan.get("feasible") is False:
-            diag["final"] = "infeasible"
-            self.last_diagnostics = diag
-            raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
+            # OWNER POLICY (never reject a shippable video on soft/editorial grounds): a model `feasible=false`
+            # is honored as TERMINAL only when there is genuinely NO shippable cut. The observed failure was a
+            # model declaring feasible=false because it could not condense a rich Story DOWN to the target —
+            # i.e. the cut it produced runs LONG. Overshoot is explicitly acceptable (a longer video still
+            # ships), so a feasible=false whose segments are technically valid and NOT a degenerate undershoot
+            # must be SHIPPED, not rejected. Only a feasible=false that is empty/degenerate/undershoot (the
+            # true "not enough usable footage" case) stays terminal.
+            if _feasible_false_is_shippable(plan, inputs):
+                plan = dict(plan)
+                plan["feasible"] = True                       # the cut is shippable — overshoot, not infeasible
+                diag["feasible_false_overridden"] = True       # audit: model said infeasible; we shipped its cut
+                diag["feasible_false_reason"] = (plan.get("infeasible_reason") or "")[:300]
+            else:
+                diag["final"] = "infeasible"
+                self.last_diagnostics = diag
+                raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
 
         # 6a: EDITORIAL-CONTINUITY GATE (owner decision 2026-10-21, supersedes the 2026-10-18 terminal
         # preservation gate). For a targeted revise (not broad-replan), editorial continuity is an OBJECTIVE,
