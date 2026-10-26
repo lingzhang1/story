@@ -1165,7 +1165,12 @@ final class StoryCreationCoordinator {
             soundtrackRole: pendingMusic?.soundtrackRole,
             nativeAudioPriority: pendingMusic?.nativeAudioPriority,
             soundPreferenceRaw: story.effectiveSoundPreference.rawValue,
-            musicAssetRef: musicRef)
+            musicAssetRef: musicRef,
+            // P1-A: record the AUTHORITATIVE editorial type THIS attempt produced, for lineage/provenance.
+            // Resolved from the Story's legacy seed; nil (legacy/unspecified) when not reconstructable (e.g. a
+            // `custom`-duration Story) — NEVER guessed as Full Story. Pure provenance: does not change planning
+            // (the request's editorial_mode still flows from story.editorialMode unless the P1-B flag is on).
+            editorialTypeRaw: ResolvedEditorial.fromLegacy(story.editorialMode).type?.rawValue)
         output.story = story
         context.insert(output)
         story.generatedOutputs.append(output)
