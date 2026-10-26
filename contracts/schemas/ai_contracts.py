@@ -678,6 +678,14 @@ class MomentUnderstandingContract(_Strict):
     prompt_version: str = Field(default="au_prompt/2")
     model_id: str | None = Field(default=None, description="provenance: which model produced this")
     n_frames: int | None = Field(default=None, ge=1, description="evidence frame count (24 for au_frames/1)")
+    sampled_frame_ms: list[int] | None = Field(
+        default=None,
+        description="SERVER-MINTED frame-input provenance: the source-relative timestamps (ms) of the frames "
+        "the server ACCEPTED for this AU request, in accepted order. Model MUST NOT supply or modify this. "
+        "Means only which frames existed as input — NOT that the source was independently verified, that the "
+        "model attended every frame, or that any candidate/peak timestamp is correct. None for records "
+        "produced before this field existed.",
+    )
 
     observed: MomentObserved
     editorial: MomentEditorial | None = Field(

@@ -112,7 +112,7 @@ def _tool_schema() -> dict:
     props = dict(schema.get("properties", {}))
     for server_field in (
         "moment_id", "source_capture_id", "schema_version", "frame_policy",
-        "prompt_version", "model_id", "n_frames", "created_at",
+        "prompt_version", "model_id", "n_frames", "sampled_frame_ms", "created_at",
     ):
         props.pop(server_field, None)
     schema["properties"] = props
@@ -211,6 +211,11 @@ class RealAssetUnderstandingEngine:
         data["prompt_version"] = PROMPT_VERSION
         data["model_id"] = result.model or self._model_id
         data["n_frames"] = len(frames)
+        # Server-minted frame-input provenance (06v2 quality follow-up §2): the source-relative timestamps
+        # of the frames WE accepted, in accepted order. Overwrites any model-supplied value unconditionally
+        # (the model must never author this). Derived ONLY from the real accepted frames — never reconstructed
+        # from duration/n_frames. The AU endpoint already enforces monotonic t_ms on accept, so order holds.
+        data["sampled_frame_ms"] = [int(f.t_ms) for f in frames]
         # If no capture context, strip any model-supplied requested contributions.
         has_ctx = bool(
             meta.capture_context

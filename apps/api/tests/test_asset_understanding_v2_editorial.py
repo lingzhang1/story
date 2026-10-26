@@ -260,3 +260,39 @@ def test_au_result_no_fallback_on_primary_success():
     r = eng.analyze([AUFrame(b"x", 0)], AURequestMeta(moment_id=uuid4()))
     assert r.used_fallback is False
     assert r.served_provider == "gemini"
+
+
+# ----------------------------------------------------------------------------- sampled_frame_ms provenance (§2)
+
+def test_sampled_frame_ms_server_minted_from_accepted_frames():
+    from model_gateway import FakeModelGateway
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta, DEFAULT_AU_MODEL
+    from uuid import uuid4
+    gw = FakeModelGateway(response=_v2_model_output())
+    eng = RealAssetUnderstandingEngine(gw, model_id=DEFAULT_AU_MODEL)
+    frames = [AUFrame(b"x", t) for t in (0, 1385, 2770, 4155)]
+    u = eng.analyze(frames, AURequestMeta(moment_id=uuid4())).understanding
+    assert u.sampled_frame_ms == [0, 1385, 2770, 4155]
+    assert u.n_frames == len(u.sampled_frame_ms)     # count consistency
+    assert all(isinstance(t, int) and t >= 0 for t in u.sampled_frame_ms)
+    assert u.sampled_frame_ms == sorted(u.sampled_frame_ms)   # accepted order (monotonic)
+
+def test_sampled_frame_ms_not_in_model_tool_schema():
+    from asset_engine import _tool_schema
+    assert "sampled_frame_ms" not in _tool_schema()["properties"]   # model cannot author it
+
+def test_sampled_frame_ms_model_value_overwritten():
+    from model_gateway import FakeModelGateway
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta, DEFAULT_AU_MODEL
+    from uuid import uuid4
+    out = _v2_model_output(); out["sampled_frame_ms"] = [99999, 88888]   # model tries to supply
+    eng = RealAssetUnderstandingEngine(FakeModelGateway(response=out), model_id=DEFAULT_AU_MODEL)
+    frames = [AUFrame(b"x", t) for t in (0, 500, 1000)]
+    u = eng.analyze(frames, AURequestMeta(moment_id=uuid4())).understanding
+    assert u.sampled_frame_ms == [0, 500, 1000]       # server value wins
+
+def test_old_record_decodes_without_sampled_frame_ms():
+    from uuid import uuid4
+    r = MomentUnderstandingContract.model_validate(
+        {"moment_id": str(uuid4()), "observed": {"summary": "s"}, "story_context": {"story_utility": "none"}})
+    assert r.sampled_frame_ms is None   # pre-field record, optional
