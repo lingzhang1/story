@@ -605,7 +605,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         ctx.insert(op); try ctx.save()
 
         let jobClient = FakeJobClient(.failUnavailable)   // would FAIL if the resume (wrongly) re-polled/submitted
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .fail(.unavailable)),
                                              renderer: FakeRenderer(.ok(okResult())), context: ctx,
                                              jobClient: jobClient)
         XCTAssertTrue(coord.resumePendingOperation(for: s))
@@ -629,7 +629,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
                                            jobStatus: "completed", planJSON: planJSON, outputFormat: "vertical")
             ctx.insert(op); try ctx.save()
             let jobClient = FakeJobClient(.failUnavailable)   // fails if resume wrongly re-polls/submits
-            let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+            let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .fail(.unavailable)),
                                                  renderer: FakeRenderer(.ok(okResult())), context: ctx,
                                                  jobClient: jobClient)
             XCTAssertTrue(coord.resumePendingOperation(for: s), "\(opType) should resume")
@@ -702,7 +702,7 @@ final class StoryCreationCoordinatorTests: XCTestCase {
     func test_recovery_failureKeepsRowWithCategory() async throws {
         let s = newStory()
         let m1 = momentWithFile(s, rel: "media/rec-f-1.mov", dur: 8); completeAU(m1, useful: [(0, 5)])
-        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .failUnavailable),
+        let coord = StoryCreationCoordinator(planner: FakePlanner(behavior: .fail(.unavailable)),
                                              renderer: FakeRenderer(.ok(okResult())), context: ctx,
                                              jobClient: FakeJobClient(.failInfeasible("too much material")))
         coord.create(for: s)
