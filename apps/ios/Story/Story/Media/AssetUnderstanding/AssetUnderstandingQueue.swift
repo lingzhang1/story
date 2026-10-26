@@ -39,8 +39,8 @@ final class AssetUnderstandingQueue {
     /// honestly (a restored session = true).
     nonisolated(unsafe) static var sharedIsAuthed: () -> Bool = { false }
     private let framePolicy = MomentFrameExtractor.framePolicy
-    private let promptVersion = "au_prompt/1"
-    private let schemaVersion = "moment_understanding/1"
+    private let promptVersion = "au_prompt/2"
+    private let schemaVersion = "moment_understanding/2"
 
     // Bounded exponential backoff: 5s, 20s, 80s, ... capped at 10 min.
     private let baseBackoff: TimeInterval = 5
@@ -226,9 +226,14 @@ final class AssetUnderstandingQueue {
     /// Moment whose original was merely RESTORED (R6). A restored original is the SAME verified bytes, so its
     /// understanding is still valid; re-running AU (and the coverage it invalidates) is pure waste.
     private func hasCompletedUnderstanding(momentId: UUID) -> Bool {
-        ((try? context.fetch(
+        // v2-aware (06v2 §9): a Moment with a CURRENT-version understanding is not
+        // re-analyzed (R7-restore no-reanalysis guarantee holds for v2 records). A stale
+        // v1 record does NOT block — it stays usable but the Moment is eligible for lazy
+        // v2 enrichment when next used. Bulk re-analysis is never triggered here.
+        let current = schemaVersion
+        return ((try? context.fetch(
             FetchDescriptor<MomentUnderstandingModel>(
-                predicate: #Predicate { $0.momentId == momentId }
+                predicate: #Predicate { $0.momentId == momentId && $0.schemaVersion == current }
             )
         ))?.first) != nil
     }

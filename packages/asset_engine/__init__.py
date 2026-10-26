@@ -1,22 +1,23 @@
-"""Asset Understanding Engine — MVP Moment analyzer (Milestone D, FROZEN).
+"""Asset Understanding Engine — Rich Editorial Moment analyzer (moment_understanding/2).
 
-Design: 06-asset-understanding.md (FROZEN 2026-10-05). Produces the canonical
-MomentUnderstanding from a 24-frame ORDERED timestamped timeline via the generic
-ModelGateway. ONE model (Sonnet 4.6, config-driven), NO routing/escalation, NO
-native video. Reuses the exact four-layer contract and the gateway tool-use path
-the C-series engines use.
+Design: 06-asset-understanding.md + Editorial Pipeline v2 P1-B. Produces the canonical
+Rich Editorial MomentUnderstanding from a 24-frame ORDERED timestamped timeline via the
+generic ModelGateway, in ONE model call. Besides the v1 observed/story_context blocks it
+now produces the `editorial` block — visual + narrative candidate segments — from the SAME
+single understanding (never separate Highlights / Full Story calls). NO routing/escalation,
+NO native video. Reuses the four-layer contract and the gateway tool-use path.
 
 Owns:
-  - the versioned AU prompt (prompts/asset_understanding/<ver>/)
-  - the structured-output schema (the canonical MomentUnderstanding contract)
+  - the versioned AU prompt (prompts/asset_understanding/v2/)
+  - the structured-output schema (the canonical Rich Editorial MomentUnderstanding contract)
   - multimodal request construction (24 timestamped image blocks + context text)
-  - the FROZEN retry policy (§5): one OUTER retry on malformed/truncated/provider
-    failure, same model/evidence/prompt; second failure -> typed retryable failure;
-    NEVER fall back to Opus/Nova, never route.
+  - the retry policy (§5): one OUTER retry on malformed/truncated/provider failure, same
+    model/evidence/prompt; second failure -> typed retryable failure; NEVER fall back / route.
   - conversion of model output into MomentUnderstandingContract (server mints
     provenance/version fields; model never supplies them)
 
-Does NOT own provider SDKs / image mechanics / timeouts — those are the gateway's.
+Does NOT own provider SDKs / image mechanics / timeouts — those are the gateway's. Does NOT
+change providers or add a second inference pass (06v2 §11/§12 — bounded single call).
 """
 
 from __future__ import annotations
@@ -36,15 +37,17 @@ from model_gateway import (
     StructuredResult,
 )
 
-PROMPT_VERSION = "au_prompt/1"
-SCHEMA_VERSION = "moment_understanding/1"
+PROMPT_VERSION = "au_prompt/2"
+SCHEMA_VERSION = "moment_understanding/2"
 FRAME_POLICY = "au_frames/1"
 TASK = "asset_understanding.analyze"
 
-# FROZEN model/inference config (06 §4). Config-driven id; default is the frozen
-# production model. max_tokens 2400 removes the long-clip truncation failure.
+# Model/inference config. Config-driven id (the gateway's routing picks the live
+# provider — Gemini-primary in current deployments; this module does NOT change
+# providers, 06v2 §12). max_tokens raised for the richer v2 editorial output
+# (visual + narrative candidates) so candidate lists are not truncated.
 DEFAULT_AU_MODEL = "us.anthropic.claude-sonnet-4-6"
-AU_MAX_TOKENS = 2400
+AU_MAX_TOKENS = 3600
 AU_TEMPERATURE = 0.0
 EXPECTED_FRAMES = 24
 
@@ -90,7 +93,7 @@ class AURetryableError(RuntimeError):
     the AU job PENDING/retryable — it NEVER falls back to another model."""
 
 
-_PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "asset_understanding" / "v1"
+_PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts" / "asset_understanding" / "v2"
 
 
 def _load_system_prompt() -> str:
@@ -142,7 +145,9 @@ class RealAssetUnderstandingEngine:
         user_content = (
             f"These {len(frames)} frames are ordered samples across ONE captured Moment. "
             f"Ordered frames: {stamps}\n{ctx_line}"
-            "Produce the structured MomentUnderstanding. Call the tool once."
+            "Produce the structured Rich Editorial MomentUnderstanding — the observed reality, "
+            "the editorial candidates (visual + narrative, with approximate timings and uncertainty), "
+            "and the story_context. Call the tool once."
         )
         return StructuredRequest(
             task=TASK,
@@ -211,13 +216,18 @@ class RealAssetUnderstandingEngine:
 
 
 class MockAssetUnderstandingEngine:
-    """Deterministic mock (no model). Dev/tests only — never a production result."""
+    """Deterministic mock (no model). Dev/tests only — never a production result.
+    Emits a v2-shaped understanding with one visual + one narrative candidate so
+    offline consumers exercise the editorial path without live inference."""
 
     def analyze(self, frames: list[AUFrame], meta: AURequestMeta) -> AUResult:
         from contracts.schemas.ai_contracts import (
+            MomentEditorial,
             MomentObserved,
             MomentStoryContext,
+            NarrativeCandidate,
             StoryUtility,
+            VisualCandidate,
         )
 
         return AUResult(
@@ -227,6 +237,20 @@ class MockAssetUnderstandingEngine:
                 model_id="mock",
                 n_frames=len(frames),
                 observed=MomentObserved(summary=f"Mock understanding ({len(frames)} frames)."),
+                editorial=MomentEditorial(
+                    visual_candidates=[
+                        VisualCandidate(
+                            start_time=0.0, end_time=2.5, peak_time=1.2,
+                            visual_value="mock visual peak", confidence=0.5,
+                        )
+                    ],
+                    narrative_candidates=[
+                        NarrativeCandidate(
+                            start_time=0.0, end_time=5.0,
+                            what_happens="mock event", why_matters="mock context",
+                        )
+                    ],
+                ),
                 story_context=MomentStoryContext(story_utility=StoryUtility.NONE),
             ),
             attempts=1,

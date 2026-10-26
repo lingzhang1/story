@@ -376,13 +376,14 @@ extension StorySyncTests {
             sourceMomentIds: [], sourceFingerprint: "fp-\(title)",
             editPlanProvenance: "edit_plan/2 bedrock 30s",
             outputFormat: "vertical", renderWidth: 1080, renderHeight: 1920,
+            soundtrackTitle: "Song",
+            parentVersionId: parent,
             operationType: op, editPlanJSON: plan,
-            soundtrackTitle: "Song", soundtrackRole: "bed", nativeAudioPriority: "low",
-            soundPreferenceRaw: "music", musicAssetRef: "provider:t1",
-            parentVersionId: parent)
+            soundtrackRole: "bed", nativeAudioPriority: "low",
+            soundPreferenceRaw: "music", musicAssetRef: "provider:t1")
         o.story = s; o.ownerAccountId = s.ownerAccountId
         o.cloudMediaId = cmid
-        o.cloudVerifiedAt = verified ? .now : nil
+        o.cloudVerifiedAt = verified ? Date.now : nil
         ctx.insert(o); try? ctx.save()
         return o
     }

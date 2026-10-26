@@ -562,24 +562,135 @@ class MomentStoryContext(_Strict):
     )
 
 
+class EditorialRole(str, Enum):
+    """OPTIONAL editorial role a candidate COULD play — a suggestion, never a
+    final-cut decision (that belongs to the Edit Planner). Nullable: a candidate
+    may have no clear role."""
+
+    OPENING = "opening"
+    CLOSING = "closing"
+    PAYOFF = "payoff"
+    B_ROLL = "b_roll"
+    ESTABLISHING = "establishing"
+    INTERACTION = "interaction"
+    PROGRESSION = "progression"
+    TRANSITION = "transition"
+
+
+class VisualCandidate(_Strict):
+    """A short, visually compelling SOURCE sub-range worth considering for Highlights
+    (06v2 §A). ASSET-GROUNDED, request-independent — a visual opportunity in the
+    footage itself, NOT a final cut. ~2-5s is a common Highlights case but NOT a
+    contract limit: a longer visually compelling action may stay longer. There is NO
+    single numeric beauty score — `visual_value` is an interpretable reason and
+    `confidence` retains uncertainty."""
+
+    start_time: float = Field(ge=0.0, description="candidate start, seconds from clip start")
+    end_time: float = Field(gt=0.0, description="candidate end, seconds from clip start (> start_time)")
+    peak_time: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="approximate visual peak (reveal/action apex), seconds; null if not identifiable "
+        "from the sparse frames — never invent frame-precise confidence",
+    )
+    visual_value: str = Field(
+        description="why this interval is visually compelling — interpretable reason, NOT a score "
+        "(e.g. 'dress expands mid-twirl', 'mountain view appears after the trail bend')"
+    )
+    role: EditorialRole | None = Field(default=None, description="optional candidate role; null if unclear")
+    confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="source-evidence confidence; retains uncertainty"
+    )
+    evidence: str | None = Field(
+        default=None, description="which frames/timestamps support this (provenance), e.g. 'frames@1200-2400ms'"
+    )
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> "VisualCandidate":
+        if self.end_time <= self.start_time:
+            raise ValueError(f"visual candidate end_time ({self.end_time}) must be > start_time ({self.start_time})")
+        if self.peak_time is not None and not (self.start_time <= self.peak_time <= self.end_time):
+            raise ValueError(
+                f"visual candidate peak_time ({self.peak_time}) must lie within [start_time, end_time]"
+            )
+        return self
+
+
+class NarrativeCandidate(_Strict):
+    """A source interval carrying a meaningful event or context worth considering for
+    Full Story (06v2 §B). May be substantially LONGER than a visual candidate. Spoken
+    meaning is NEVER invented from frames: a visible conversation is described as a
+    visible interaction with spoken_meaning left 'unknown' (full speech understanding
+    is a later milestone)."""
+
+    start_time: float = Field(ge=0.0, description="candidate start, seconds from clip start")
+    end_time: float = Field(gt=0.0, description="candidate end, seconds from clip start (> start_time)")
+    what_happens: str = Field(description="the event/interaction/context — factual, no invented dialogue")
+    why_matters: str = Field(description="why this may matter to a narrative")
+    role: EditorialRole | None = Field(default=None, description="optional candidate role; null if unclear")
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0, description="source-evidence confidence")
+    spoken_meaning: str = Field(
+        default="unknown",
+        description="ALWAYS 'unknown' at this milestone — speech is not acoustically analyzed; a visible "
+        "conversation is a visible interaction, its words are not inferred from frames",
+    )
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> "NarrativeCandidate":
+        if self.end_time <= self.start_time:
+            raise ValueError(
+                f"narrative candidate end_time ({self.end_time}) must be > start_time ({self.start_time})"
+            )
+        return self
+
+
+class MomentEditorial(_Strict):
+    """EDITORIAL INTERPRETATION (06v2 §B) — reusable, request-INDEPENDENT editorial
+    opportunities derived from ONE understanding of the Moment (not separate Highlights
+    / Full Story model calls). A Moment may have zero, one, or many candidates of either
+    kind, and need not contribute to both video types. Source observations stay in
+    `observed`; nothing Story-specific belongs here (that is `story_context`)."""
+
+    visual_candidates: list[VisualCandidate] = Field(default_factory=list)
+    narrative_candidates: list[NarrativeCandidate] = Field(default_factory=list)
+    analysis_version: str = Field(
+        default="au_editorial/1", description="editorial-interpretation version (independent of schema_version)"
+    )
+
+
 class MomentUnderstandingContract(_Strict):
-    """Canonical MVP Asset Understanding output (06-asset-understanding.md §1, FROZEN).
+    """Canonical Rich Editorial Asset Understanding output (moment_understanding/2).
     One current record per Moment (upsert by moment_id). Provenance/version fields are
-    server-assigned, not model-produced."""
+    server-assigned, not model-produced.
+
+    v2 is a strict SUPERSET of v1: the `observed` + `story_context` blocks are byte-for-byte
+    the v1 shape and keep their exact meaning and consumers (Duration Intelligence, Story
+    Coverage, EditPlan useful_segments). v2 ADDS the optional `editorial` block. A v1 record
+    (no `editorial`, schema_version 'moment_understanding/1') still validates — `editorial`
+    is None — so old dev records decode read-only without re-analysis (06v2 §9)."""
 
     moment_id: UUID
     source_capture_id: UUID | None = Field(
         default=None, description="CaptureSession id when DIRECT; null for spontaneous/imported"
     )
-    schema_version: str = Field(default="moment_understanding/1")
+    schema_version: str = Field(default="moment_understanding/2")
     frame_policy: str = Field(default="au_frames/1")
-    prompt_version: str = Field(default="au_prompt/1")
+    prompt_version: str = Field(default="au_prompt/2")
     model_id: str | None = Field(default=None, description="provenance: which model produced this")
     n_frames: int | None = Field(default=None, ge=1, description="evidence frame count (24 for au_frames/1)")
 
     observed: MomentObserved
+    editorial: MomentEditorial | None = Field(
+        default=None,
+        description="editorial interpretation (visual + narrative candidates); None for v1 records",
+    )
     story_context: MomentStoryContext
     created_at: datetime = Field(default_factory=_utcnow)
+
+    @property
+    def is_v2(self) -> bool:
+        """True when this record carries the v2 editorial interpretation."""
+        return self.editorial is not None and self.schema_version == "moment_understanding/2"
 
 
 # ---------------------------------------------------------------------------

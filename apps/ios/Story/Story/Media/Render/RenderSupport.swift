@@ -258,11 +258,14 @@ enum EditPlanRequestBuilder {
             return out
         }
 
-        /// Creative Editing V2-b: per-asset AU action timestamps. The plan request does not carry AU events
-        /// (only useful_segments + summary), so this is empty today — the refinement stage then relies on
-        /// motion/audio evidence + useful-range bounds, which is intentionally conservative. Threading real
-        /// AU event times here is a bounded follow-up if device review shows it would help.
-        var auActionTimestamps: [String: [Double]] { [:] }
+        /// Creative Editing V2-b: per-asset AU action timestamps, keyed by lowercased Moment id
+        /// (== EditSegment asset_id). Populated LOCALLY from the persisted MomentUnderstanding
+        /// (observed.events start/end + v2 editorial visual-candidate peaks), ordered and bounded to
+        /// the Moment duration. This feeds ONLY the local CreativeRefinementV2b refinement stage — it
+        /// is NOT sent in the EditPlan request and changes NO v5.2 wire contract or creative default
+        /// (the refinement was already conservative with [:]; real times only sharpen it). Empty for a
+        /// Moment with no parsable AU timestamps. (06v2 §8/§10 — smallest additive temporal path.)
+        var auActionTimestamps: [String: [Double]] = [:]
     }
 
     enum BuildError: Error, LocalizedError {
@@ -421,6 +424,7 @@ enum EditPlanRequestBuilder {
         var moments: [JSONValue] = []
         var included: [MomentMedia] = []
         var excluded: [UUID] = []
+        var auActionTimestampsByAsset: [String: [Double]] = [:]
         // P0 evidence accounting — per-reason eligibility census, built as we walk the gate (never inferred).
         var census = Build.EligibilityCensus()
         census.linkedCount = story.moments.count
@@ -451,6 +455,9 @@ enum EditPlanRequestBuilder {
             census.renderableCount += 1
             census.eligibleIds.append(m.id)
             let understanding = JSONValue.object(fromJSONString: mu.understandingJSON)
+            // Local refinement input (06v2 §8/§10): ordered, in-bounds AU action/peak times for this Moment.
+            let auTimes = Self.auActionTimestamps(from: understanding, duration: dur)
+            if !auTimes.isEmpty { auActionTimestampsByAsset[m.id.uuidString.lowercased()] = auTimes }
             // Transform AU observed.useful_segments [{start_time,end_time,...}] -> [[a,b], ...] number pairs
             // (the shape the backend validator reads: a source range must overlap a useful_segment).
             let useful = usefulSegmentPairs(from: understanding, duration: dur)
@@ -507,6 +514,7 @@ enum EditPlanRequestBuilder {
 
         var finalBuild = Build(request: req, includedMedia: included, excludedMomentIds: excluded)
         finalBuild.eligibility = census
+        finalBuild.auActionTimestamps = auActionTimestampsByAsset
         return finalBuild
     }
 
@@ -547,6 +555,35 @@ enum EditPlanRequestBuilder {
             if !pairs.isEmpty { return pairs }
         }
         return [.array([.number(0.0), .number(max(1.0, duration))])]
+    }
+
+    /// Per-Moment AU action timestamps for the LOCAL CreativeRefinementV2b stage (06v2 §8/§10). Folds
+    /// observed.events start/end times with v2 editorial visual-candidate peak_time values, clamps each to
+    /// (0, duration], drops out-of-order/degenerate values, de-duplicates and SORTS ascending. Purely a local
+    /// refinement input — not sent to the planner, no wire/contract change. Returns [] when no valid times.
+    static func auActionTimestamps(from understanding: JSONValue, duration: Double) -> [Double] {
+        guard duration > 0, case let .object(root) = understanding else { return [] }
+        var times: [Double] = []
+        func addIfInBounds(_ t: Double) { if t > 0, t <= duration { times.append(t) } }
+
+        if case let .object(observed)? = root["observed"],
+           case let .array(events)? = observed["events"] {
+            for e in events {
+                guard case let .object(ev) = e else { continue }
+                if case let .number(s)? = ev["start_time"] { addIfInBounds(s) }
+                if case let .number(end)? = ev["end_time"] { addIfInBounds(end) }
+            }
+        }
+        // v2 editorial visual-candidate peaks (nil/absent for v1 records — safely skipped).
+        if case let .object(editorial)? = root["editorial"],
+           case let .array(vcs)? = editorial["visual_candidates"] {
+            for vc in vcs {
+                guard case let .object(cand) = vc else { continue }
+                if case let .number(peak)? = cand["peak_time"] { addIfInBounds(peak) }
+            }
+        }
+        // ordered, de-duplicated
+        return Array(Set(times)).sorted()
     }
 
     /// Arm B (AU-evidence forwarding): build a DETERMINISTIC, BOUNDED factual description for the planner from

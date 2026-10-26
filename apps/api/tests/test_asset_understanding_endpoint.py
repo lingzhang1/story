@@ -70,7 +70,8 @@ def test_asset_understanding_success():
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["schema_version"] == "moment_understanding/1"
+    assert body["schema_version"] == "moment_understanding/2"
+    assert body["prompt_version"] == "au_prompt/2"
     assert body["n_frames"] == 24
     assert body["story_context"]["story_utility"] == "strong_elsewhere"
     assert len(body["observed"]["events"]) == 1

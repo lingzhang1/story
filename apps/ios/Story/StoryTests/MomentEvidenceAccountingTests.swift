@@ -5,6 +5,7 @@ import Foundation
 // Editorial Pipeline v2, P0 — MomentEvidenceAccounting reconciliation + the coordinator's census assembler.
 // PURE logic (no SwiftData, no AVFoundation, no model, no network): every count is established from value
 // inputs, so these run anywhere and prove the funnel reconciles and the per-reason classification is correct.
+@MainActor
 final class MomentEvidenceAccountingTests: XCTestCase {
 
     private func uuids(_ n: Int) -> [UUID] { (0..<n).map { _ in UUID() } }
