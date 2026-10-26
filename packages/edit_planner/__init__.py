@@ -74,6 +74,19 @@ if not (_PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md").is_file():
 PROMPT_VERSION = f"edit_plan/{_EDIT_PLAN_VERSION}"
 _PROMPT_PATH = _PROMPT_BASE / _EDIT_PLAN_VERSION / "system.md"
 
+
+def _v53_active() -> bool:
+    """True when the SELECTED edit-plan version is >= 5.3, i.e. the planner should consume the v5.3 editorial
+    evidence. When a v5.2 (or earlier) version is configured — including a STORY_EDIT_PLAN_VERSION=5.2 rollback
+    while an already-installed v5.3 client keeps sending the optional fields — the v5.3-only evidence is
+    STRIPPED and the editorial-type directive is suppressed, so the prompt the model sees is behaviorally
+    identical to pre-P1-C v5.2. Parsed from the resolved version string; defaults to False on anything
+    unparseable (safe: treat as pre-5.3)."""
+    try:
+        return float(_EDIT_PLAN_VERSION) >= 5.3
+    except (TypeError, ValueError):
+        return False
+
 TRANSITION = ["cut", "crossfade", "fade_in", "fade_out", "dip_to_black"]
 NATIVE = ["keep", "duck", "mute"]
 ANCHOR = ["beat", "downbeat", "highlight", "none"]
@@ -1265,6 +1278,13 @@ def _build_user(inputs: EditPlanInputs) -> str:
     # editorial.visual_candidates[].evidence string as if it were verified provenance. Strip it from the
     # moments payload (deterministic consumer-side filter). sampled_frame_ms + candidates + events are kept.
     def _sanitize_moment(m: dict) -> dict:
+        if not isinstance(m, dict):
+            return m
+        # v5.2 ROLLBACK projection: when the configured version is < 5.3, DROP every v5.3-only moment key so an
+        # already-installed v5.3 client's optional fields cannot change v5.2 planning behavior (§4). v5.2 then
+        # sees exactly the moment shape it always did.
+        if not _v53_active():
+            return {k: v for k, v in m.items() if k not in ("editorial", "events", "sampled_frame_ms")}
         ed = m.get("editorial")
         if not isinstance(ed, dict):
             return m
@@ -1293,7 +1313,7 @@ def _build_user(inputs: EditPlanInputs) -> str:
         payload["sound_preference"] = inputs.sound_preference
     if inputs.editorial_mode:
         payload["editorial_mode"] = inputs.editorial_mode
-    if inputs.editorial_type:
+    if inputs.editorial_type and _v53_active():
         payload["editorial_type"] = inputs.editorial_type
     # MVP creative direction — injected into the USER message only (frozen v5.2 body untouched).
     brief_block = ""
@@ -1320,7 +1340,7 @@ def _build_user(inputs: EditPlanInputs) -> str:
             + image_block
             + _edit_sound_pref_directive(inputs.sound_preference)
             + _edit_mode_directive(inputs.editorial_mode)
-            + _editorial_type_directive(inputs.editorial_type)
+            + _editorial_type_directive(inputs.editorial_type if _v53_active() else None)
             + "\nINPUT:\n"
             + json.dumps(payload, indent=2) + "\n\nReturn ONLY the EditPlan via the tool.")
 
