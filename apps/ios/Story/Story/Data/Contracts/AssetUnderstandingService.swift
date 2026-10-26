@@ -1,17 +1,20 @@
 import Foundation
 
-// AssetUnderstandingService — the Milestone-D network boundary for Asset
-// Understanding (06-asset-understanding.md §8, FROZEN).
+// AssetUnderstandingService — the network boundary for Asset Understanding
+// (06-asset-understanding.md §8; Rich Editorial AU v2 — Editorial Pipeline v2 P1-B).
 //
 // Calls POST /v1/asset-understanding on the EXISTING App Runner service with a
 // multipart body: a `meta` JSON part (moment_id, source_capture_id?, capture_context?),
 // a `frames_meta` JSON part (ordered [{t_ms}]), and 24 `frames` JPEG parts.
-// Decodes the canonical moment_understanding/1 wire shape.
+// Decodes the canonical moment_understanding/2 wire shape — a strict SUPERSET of v1:
+// the observed/story_context blocks are byte-identical to v1, plus an OPTIONAL
+// `editorial` block (visual + narrative candidates). An existing v1 record (no
+// `editorial`) decodes unchanged because the field is optional.
 //
 // Failure is surfaced (503 => retryable) — the queue leaves the job PENDING and
 // NEVER fabricates an understanding and NEVER falls back to another model.
 
-// MARK: - Wire DTO (moment_understanding/1, snake_case)
+// MARK: - Wire DTO (moment_understanding/2, snake_case)
 
 struct MomentEventDTO: Codable {
     let startTime: Double
@@ -55,6 +58,53 @@ struct MomentStoryContextDTO: Codable {
     }
 }
 
+// MARK: - Editorial block (moment_understanding/2, additive — nil for v1 records)
+
+/// A visually compelling source sub-range (Highlights). Interpretable value +
+/// uncertainty, NEVER a single beauty score. ~2-5s is common, not a limit.
+struct VisualCandidateDTO: Codable {
+    let startTime: Double
+    let endTime: Double
+    let peakTime: Double?          // nil when not identifiable — never invented
+    let visualValue: String
+    let role: String?
+    let confidence: Double?
+    let evidence: String?
+    enum CodingKeys: String, CodingKey {
+        case startTime = "start_time", endTime = "end_time", peakTime = "peak_time"
+        case visualValue = "visual_value", role, confidence, evidence
+    }
+}
+
+/// A meaningful source interval (Full Story). May be substantially longer. Spoken
+/// meaning is never inferred from frames (stays "unknown").
+struct NarrativeCandidateDTO: Codable {
+    let startTime: Double
+    let endTime: Double
+    let whatHappens: String
+    let whyMatters: String
+    let role: String?
+    let confidence: Double?
+    let spokenMeaning: String?     // "unknown" at this milestone
+    enum CodingKeys: String, CodingKey {
+        case startTime = "start_time", endTime = "end_time"
+        case whatHappens = "what_happens", whyMatters = "why_matters"
+        case role, confidence, spokenMeaning = "spoken_meaning"
+    }
+}
+
+/// Reusable editorial interpretation derived from ONE understanding.
+struct MomentEditorialDTO: Codable {
+    let visualCandidates: [VisualCandidateDTO]
+    let narrativeCandidates: [NarrativeCandidateDTO]
+    let analysisVersion: String?
+    enum CodingKeys: String, CodingKey {
+        case visualCandidates = "visual_candidates"
+        case narrativeCandidates = "narrative_candidates"
+        case analysisVersion = "analysis_version"
+    }
+}
+
 struct MomentUnderstandingDTO: Codable {
     let momentId: UUID
     let sourceCaptureId: UUID?
@@ -64,14 +114,36 @@ struct MomentUnderstandingDTO: Codable {
     let modelId: String?
     let nFrames: Int?
     let observed: MomentObservedDTO
+    let editorial: MomentEditorialDTO?   // nil for v1 records (optional => v1 JSON decodes unchanged)
     let storyContext: MomentStoryContextDTO
     let createdAt: Date?
     enum CodingKeys: String, CodingKey {
         case momentId = "moment_id", sourceCaptureId = "source_capture_id"
         case schemaVersion = "schema_version", framePolicy = "frame_policy"
         case promptVersion = "prompt_version", modelId = "model_id", nFrames = "n_frames"
-        case observed, storyContext = "story_context", createdAt = "created_at"
+        case observed, editorial, storyContext = "story_context", createdAt = "created_at"
     }
+
+    // Explicit memberwise init with editorial defaulted to nil, so existing v1 construction
+    // sites (tests/fakes) compile unchanged while decode fills editorial when present.
+    init(momentId: UUID, sourceCaptureId: UUID?, schemaVersion: String, framePolicy: String,
+         promptVersion: String, modelId: String?, nFrames: Int?, observed: MomentObservedDTO,
+         editorial: MomentEditorialDTO? = nil, storyContext: MomentStoryContextDTO, createdAt: Date? = nil) {
+        self.momentId = momentId
+        self.sourceCaptureId = sourceCaptureId
+        self.schemaVersion = schemaVersion
+        self.framePolicy = framePolicy
+        self.promptVersion = promptVersion
+        self.modelId = modelId
+        self.nFrames = nFrames
+        self.observed = observed
+        self.editorial = editorial
+        self.storyContext = storyContext
+        self.createdAt = createdAt
+    }
+
+    /// True when this record carries the v2 editorial interpretation.
+    var isV2: Bool { editorial != nil && schemaVersion == "moment_understanding/2" }
 }
 
 enum AssetUnderstandingServiceError: Error, LocalizedError {
