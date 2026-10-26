@@ -193,6 +193,23 @@ enum EditPlanRequestBuilder {
         let includedMedia: [MomentMedia]       // the resolvable Moments actually sent (drives URL resolution)
         let excludedMomentIds: [UUID]          // Moments dropped: no completed AU, or no local file
 
+        /// P0 evidence accounting — the per-reason eligibility census (stages 1-6 of the funnel), established
+        /// directly during build(), never inferred. The coordinator folds the visual stages (7-10) on top.
+        /// `eligibleIds` is every Moment serialized into the planner payload (== moments[].id); there is NO
+        /// cap / top-N, so eligibleIds.count MUST equal request.moments.count.
+        var eligibility: EligibilityCensus = EligibilityCensus()
+
+        struct EligibilityCensus: Equatable {
+            var linkedCount: Int = 0
+            var completedAUCount: Int = 0
+            var positiveDurationCount: Int = 0
+            var renderableCount: Int = 0
+            var eligibleIds: [UUID] = []
+            var ineligibleNoAU: [UUID] = []
+            var ineligibleNoDuration: [UUID] = []
+            var ineligibleNotRenderable: [UUID] = []
+        }
+
         /// The resolved Story target that was baked into the request's CreativeIntent. Reading it back from the
         /// request (not recomputing) guarantees the preflight sees EXACTLY the target the planner will.
         var resolvedTargetSeconds: Double? {
@@ -404,6 +421,9 @@ enum EditPlanRequestBuilder {
         var moments: [JSONValue] = []
         var included: [MomentMedia] = []
         var excluded: [UUID] = []
+        // P0 evidence accounting — per-reason eligibility census, built as we walk the gate (never inferred).
+        var census = Build.EligibilityCensus()
+        census.linkedCount = story.moments.count
 
         // CLOUD-AWARE PLANNER ELIGIBILITY (Phase 2, owner P0). A Moment participates in PLANNING iff it has a
         // completed/synced AU AND a known duration — INDEPENDENT of whether its original bytes are on this
@@ -417,15 +437,19 @@ enum EditPlanRequestBuilder {
         //   • no file, no AU      -> excluded (nothing to plan from).
         for m in story.moments.sorted(by: { $0.createdAt < $1.createdAt }) {
             guard let mu = muByMoment[m.id] else {
-                excluded.append(m.id); continue                 // no completed AU -> drop, never invent
+                excluded.append(m.id); census.ineligibleNoAU.append(m.id); continue   // no completed AU
             }
+            census.completedAUCount += 1
             let dur = MomentResolver.plannerDuration(for: m)    // local probe OR cloud metadata; 0 = unknown
             guard dur > 0 else {
-                excluded.append(m.id); continue                 // no usable duration anywhere -> drop honestly
+                excluded.append(m.id); census.ineligibleNoDuration.append(m.id); continue   // no usable duration
             }
+            census.positiveDurationCount += 1
             guard MomentResolver.isRenderableSource(m) else {
-                excluded.append(m.id); continue                 // bytes neither local nor cloud-restorable -> cannot render -> drop
+                excluded.append(m.id); census.ineligibleNotRenderable.append(m.id); continue   // cannot render
             }
+            census.renderableCount += 1
+            census.eligibleIds.append(m.id)
             let understanding = JSONValue.object(fromJSONString: mu.understandingJSON)
             // Transform AU observed.useful_segments [{start_time,end_time,...}] -> [[a,b], ...] number pairs
             // (the shape the backend validator reads: a source range must overlap a useful_segment).
@@ -481,7 +505,9 @@ enum EditPlanRequestBuilder {
             editorialMode: story.editorialMode,                        // highlights|full|custom → selection breadth (nil = infer)
             revisionContext: revisionContext)                          // Creative Revision Foundation: Explore/Revise version-aware context (nil = unchanged)
 
-        return Build(request: req, includedMedia: included, excludedMomentIds: excluded)
+        var finalBuild = Build(request: req, includedMedia: included, excludedMomentIds: excluded)
+        finalBuild.eligibility = census
+        return finalBuild
     }
 
     /// Load the Story's persisted StoryGuide wire JSON (story_guide/1), or an empty object when absent.

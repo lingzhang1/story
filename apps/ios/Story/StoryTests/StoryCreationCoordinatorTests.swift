@@ -51,13 +51,18 @@ final class StoryCreationCoordinatorTests: XCTestCase {
         private(set) var submitCount = 0
         private(set) var pollCount = 0
         private(set) var lastRequest: EditPlanRequestDTO?
+        private(set) var lastEvidenceAccounting: [String: Any]?
+        private(set) var lastBuildProvenance: [String: Any]?
         init(_ b: Behavior) { behavior = b }
 
         func submit(_ request: EditPlanRequestDTO, operationId: String, owner: String,
                     approach: EditingApproach, sheets: [MomentContactSheet], creativeBrief: String?,
-                    critiqueRevision: Bool) async throws -> String {
+                    critiqueRevision: Bool, evidenceAccounting: [String: Any]?,
+                    buildProvenance: [String: Any]?) async throws -> String {
             submitCount += 1
             lastRequest = request
+            lastEvidenceAccounting = evidenceAccounting
+            lastBuildProvenance = buildProvenance
             return "fake-job-\(operationId)-\(submitCount)"
         }
 

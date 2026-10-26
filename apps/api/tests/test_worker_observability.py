@@ -87,3 +87,44 @@ def test_bedrock_usage_attribution_log_emits_with_trusted_user():
     # privacy: no raw instruction / gps / credential field rode along.
     for banned in ("soft_direction", "instruction", "gps", "prompt", "token"):
         assert banned not in u
+
+
+# --- Editorial Pipeline v2, P0: durable evidence diagnostics (pure helper) ---------------------------------
+
+def test_evidence_diag_persists_census_provenance_and_adds_stages_11_12():
+    env = {
+        "evidence_accounting": {"linked": 35, "eligible": 25, "sheeted": 19, "missing_sheet": 6,
+                                "reconciles": True},
+        "build_provenance": {"commit_sha": "19f9640", "extraction_policy": "au_extract/2"},
+    }
+    plan = {"segments": [{"asset_id": "A", "order": 0}, {"asset_id": "B", "order": 1},
+                         {"asset_id": "A", "order": 2}, {"asset_id": "C", "order": 3}]}
+    order = ["a", "b"]   # sheeted ids are lowercased; C had no sheet
+    out = W._evidence_diag(env, plan, order)
+    # Stages 1-10 persisted verbatim from the device (survive staged-payload TTL on the item).
+    assert out["evidence_accounting"]["linked"] == 35
+    assert out["build_provenance"]["commit_sha"] == "19f9640"
+    # Stage 11: distinct selected = {a,b,c} (A de-duped). Stage 12: c was cut but had no sheet.
+    assert out["evidence_stage11_selected_distinct"] == 3
+    assert out["evidence_stage12_cut_without_sheet"] == 1
+    assert out["evidence_cut_without_sheet_ids"] == ["c"]
+    # Backend cross-check: selected(3) <= eligible(25) AND device reconciled.
+    assert out["evidence_funnel_consistent"] is True
+
+
+def test_evidence_diag_flags_inconsistent_when_selected_exceeds_eligible():
+    # Impossible funnel: plan cut 2 distinct Moments but device said only 1 eligible -> cannot have happened.
+    env = {"evidence_accounting": {"eligible": 1, "reconciles": True}}
+    plan = {"segments": [{"asset_id": "x", "order": 0}, {"asset_id": "y", "order": 1}]}
+    out = W._evidence_diag(env, plan, [])
+    assert out["evidence_funnel_consistent"] is False
+
+
+def test_evidence_diag_safe_without_device_fields():
+    # A run from an older build (no evidence fields) still gets stages 11-12 and never crashes.
+    plan = {"segments": [{"asset_id": "m1", "order": 0}]}
+    out = W._evidence_diag({}, plan, ["m1"])
+    assert "evidence_accounting" not in out and "build_provenance" not in out
+    assert out["evidence_stage11_selected_distinct"] == 1
+    assert out["evidence_stage12_cut_without_sheet"] == 0
+    assert "evidence_funnel_consistent" not in out   # no device census -> no cross-check
