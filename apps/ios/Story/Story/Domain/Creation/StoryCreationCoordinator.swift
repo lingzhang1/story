@@ -1165,7 +1165,16 @@ final class StoryCreationCoordinator {
             soundtrackRole: pendingMusic?.soundtrackRole,
             nativeAudioPriority: pendingMusic?.nativeAudioPriority,
             soundPreferenceRaw: story.effectiveSoundPreference.rawValue,
-            musicAssetRef: musicRef)
+            musicAssetRef: musicRef,
+            // P1-A provenance (owner §2): editorialTypeRaw records the AUTHORITATIVE type of an EXPLICIT P1
+            // generation attempt — NOT an inferred Story preference. While STORY_EDITORIAL_TYPE_V2 is OFF there
+            // is no genuine P1 editorial selection and the run is plain v5.2 behavior, so we stamp NOTHING
+            // (nil = legacy/unspecified) rather than mislabel a v5.2 output with a guessed type. When the flag
+            // is ON, the type is resolved from the Story's selection (a custom/unreconstructable seed still
+            // yields nil — never guessed as Full Story). Pure provenance either way; never changes planning.
+            editorialTypeRaw: EditorialTypeFlag.enabled
+                ? ResolvedEditorial.fromLegacy(story.editorialMode).type?.rawValue
+                : nil)
         output.story = story
         context.insert(output)
         story.generatedOutputs.append(output)

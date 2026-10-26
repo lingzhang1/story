@@ -482,6 +482,13 @@ final class GeneratedOutputModel {
     var nativeAudioPriority: String? = nil
     var soundPreferenceRaw: String? = nil
     var musicAssetRef: String? = nil
+    // Editorial Pipeline v2 P1-A: the AUTHORITATIVE editorial type THIS output actually was
+    // (EditorialType.rawValue: "highlights" | "full_story"). Additive, defaulted nil (SwiftData
+    // lightweight-migration-safe): nil = legacy/unspecified (a historical output predating P1-A, or a `custom`
+    // one whose type is not reconstructable — NEVER guessed as Full Story). This is what lets Highlights +
+    // Full Story + Highlights outputs COEXIST on one Story; the Story's own editorialMode is only the default
+    // seed. Set from the creation request on success; never overwritten by a later unrelated attempt.
+    var editorialTypeRaw: String? = nil
 
     init(
         id: UUID = UUID(),
@@ -505,6 +512,7 @@ final class GeneratedOutputModel {
         nativeAudioPriority: String? = nil,
         soundPreferenceRaw: String? = nil,
         musicAssetRef: String? = nil,
+        editorialTypeRaw: String? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
@@ -528,6 +536,7 @@ final class GeneratedOutputModel {
         self.nativeAudioPriority = nativeAudioPriority
         self.soundPreferenceRaw = soundPreferenceRaw
         self.musicAssetRef = musicAssetRef
+        self.editorialTypeRaw = editorialTypeRaw
         self.createdAt = createdAt
     }
 }
