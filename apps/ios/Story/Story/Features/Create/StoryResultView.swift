@@ -211,7 +211,12 @@ struct StoryResultView: View {
             ZStack {
                 if let player {
                     VideoPlayer(player: player)
-                        .onDisappear { player.pause() }
+                        .onDisappear {
+                            player.pause()
+                            // Release the playback audio session so it does not clobber the capture session
+                            // (camera uses .record/.playAndRecord). Best-effort; never throws into the UI.
+                            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+                        }
                 } else {
                     StoryTheme.surface
                 }
@@ -226,6 +231,14 @@ struct StoryResultView: View {
             .contentShape(Rectangle())
             .onTapGesture { togglePlay() }
             .task(id: relativePath) {
+                // REGRESSION FIX: the in-app result preview was silent even though the exported file has audio.
+                // The app records video (AVAudioSession left in .record/.playAndRecord), and a bare AVPlayer
+                // inherits that category, which does not route playback to the speaker. Put the session into
+                // .playback (movie playback) and activate it BEFORE creating the player so the preview is
+                // audible. Best-effort: a failure never blocks playback or the UI. Released in onDisappear.
+                let session = AVAudioSession.sharedInstance()
+                try? session.setCategory(.playback, mode: .moviePlayback)
+                try? session.setActive(true)
                 player = AVPlayer(url: RenderOutputStore.shared.absoluteURL(for: relativePath))
             }
             .task { await observePendingRecovery() }
