@@ -178,7 +178,7 @@ def test_engine_mints_v2_provenance_with_editorial():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["schema_version"] == SCHEMA_VERSION == "moment_understanding/2"
-    assert body["prompt_version"] == PROMPT_VERSION == "au_prompt/2"
+    assert body["prompt_version"] == PROMPT_VERSION == "au_prompt/3"
     assert len(body["editorial"]["visual_candidates"]) == 1
     assert len(body["editorial"]["narrative_candidates"]) == 1
     assert body["editorial"]["visual_candidates"][0]["peak_time"] == 2.0
@@ -212,3 +212,51 @@ def test_observed_block_unchanged_from_v1_shape():
     body = resp.json()
     assert body["observed"]["useful_segments"] == _OBSERVED["useful_segments"]
     assert body["observed"]["events"] == _OBSERVED["events"]
+
+
+# ----------------------------------------------------------------------------- fallback diagnostics (§7)
+
+def test_au_result_reports_fallback_diagnostics():
+    """When the primary provider raises ProviderError, FallbackModelGateway serves on the fallback and
+    AUResult records requested(primary)/served-provider/used_fallback — privacy-safe, no keys/prompt/bytes."""
+    from model_gateway import FallbackModelGateway, ProviderError, StructuredResult, Usage
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta
+    from uuid import uuid4
+
+    class _PrimaryBoom:
+        model_id = "gemini-x"
+        def generate_structured(self, req): raise ProviderError("gemini transport error: TimeoutError")
+    class _FallbackOK:
+        model_id = "openai-y"
+        def generate_structured(self, req):
+            return StructuredResult(data={"observed": _OBSERVED, "story_context": _STORY_CTX},
+                                    usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+                                    attempts=1, repaired=False, model="openai-y", provider="openai",
+                                    stop_reason="stop")
+    gw = FallbackModelGateway(_PrimaryBoom(), _FallbackOK())
+    eng = RealAssetUnderstandingEngine(gw, model_id="gemini-x")
+    r = eng.analyze([AUFrame(b"x", 0)], AURequestMeta(moment_id=uuid4()))
+    assert r.used_fallback is True
+    assert r.requested_model == "gemini-x"    # the configured primary
+    assert r.served_provider == "openai"      # what actually served
+    assert r.model == "openai-y"
+
+def test_au_result_no_fallback_on_primary_success():
+    from model_gateway import FallbackModelGateway, StructuredResult, Usage
+    from asset_engine import RealAssetUnderstandingEngine, AUFrame, AURequestMeta
+    from uuid import uuid4
+    class _PrimaryOK:
+        model_id = "gemini-x"
+        def generate_structured(self, req):
+            return StructuredResult(data={"observed": _OBSERVED, "story_context": _STORY_CTX},
+                                    usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+                                    attempts=1, repaired=False, model="gemini-x", provider="gemini",
+                                    stop_reason="stop")
+    class _Fb:
+        model_id = "openai-y"
+        def generate_structured(self, req): raise AssertionError("fallback must not be called")
+    gw = FallbackModelGateway(_PrimaryOK(), _Fb())
+    eng = RealAssetUnderstandingEngine(gw, model_id="gemini-x")
+    r = eng.analyze([AUFrame(b"x", 0)], AURequestMeta(moment_id=uuid4()))
+    assert r.used_fallback is False
+    assert r.served_provider == "gemini"

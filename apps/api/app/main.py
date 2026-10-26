@@ -1132,6 +1132,8 @@ def create_app() -> FastAPI:
                    "success": True, "retried": au.retried, "attempts": au.attempts,
                    "model": au.model, "input_tokens": au.usage_input_tokens,
                    "output_tokens": au.usage_output_tokens,
+                   "requested_model": au.requested_model, "served_provider": au.served_provider,
+                   "used_fallback": au.used_fallback,
                    "event_count": len(au.understanding.observed.events),
                    "story_utility": au.understanding.story_context.story_utility.value},
         )
