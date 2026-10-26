@@ -13,9 +13,12 @@ struct DurationChoiceView: View {
     @State private var showCustom = false
     @State private var customSeconds: Double
 
-    init(rec: DurationRecommendation, onAccept: @escaping (Double) -> Void, onCancel: @escaping () -> Void) {
+    init(rec: DurationRecommendation, editorialType: EditorialType? = nil,
+         onAccept: @escaping (Double) -> Void, onCancel: @escaping () -> Void) {
         self.rec = rec; self.onAccept = onAccept; self.onCancel = onCancel
-        let seed = rec.recommendedPointSeconds
+        // P1-C §3: seed from the editorial-type-appropriate range (Highlights -> highlights range, Full Story ->
+        // recommended range) when a type is provided; nil => recommended (v5.2 default). Graceful band fallback.
+        let seed = rec.pointSeconds(forEditorialType: editorialType)
             ?? ((rec.evidence.feasibleBandSeconds.first ?? 10) + (rec.evidence.feasibleBandSeconds.last ?? 30)) / 2
         _customSeconds = State(initialValue: seed.rounded())
     }

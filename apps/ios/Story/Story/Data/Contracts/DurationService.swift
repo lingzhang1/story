@@ -79,6 +79,19 @@ struct DurationRecommendation: Decodable, Equatable, Identifiable {
         guard let r = recommendation, r.highlightsRangeSeconds.count == 2 else { return nil }
         return (r.highlightsRangeSeconds[0] + r.highlightsRangeSeconds[1]) / 2.0
     }
+
+    /// EditPlan v5.3 mode-aware Sizing (P1-C §3): seed the duration from the range appropriate to the resolved
+    /// editorial TYPE — Highlights from `highlights_range_seconds`, Full Story from `recommended_range_seconds`.
+    /// GRACEFUL FALLBACK: if the type-specific point is unavailable (missing/malformed range) fall back to the
+    /// other point, then to nil (caller keeps its existing safe sizing behavior). No new sizing model call; this
+    /// only SELECTS between ranges Duration Intelligence already returned. nil type => recommended (v5.2 default).
+    func pointSeconds(forEditorialType type: EditorialType?) -> Double? {
+        switch type {
+        case .highlights: return highlightsPointSeconds ?? recommendedPointSeconds
+        case .fullStory:  return recommendedPointSeconds ?? highlightsPointSeconds
+        case nil:         return recommendedPointSeconds
+        }
+    }
 }
 
 struct DurationRecommendationRequestDTO: Encodable {
