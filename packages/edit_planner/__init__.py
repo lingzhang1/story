@@ -1767,6 +1767,12 @@ class RealEditPlannerEngine:
                     diag["final"] = "executable"
                     diag["revision_path"] = "retime_infeasible_shipped_base"
                     diag["retime_change_applied"] = False
+                    # NEVER MISLEAD (owner §5-B): we shipped the EXISTING cut unchanged, so disclose that the
+                    # requested pacing change could not be applied — never present it as a successful revision.
+                    diag["completion"] = "partial"
+                    diag["partial_disclosure"] = (
+                        "Your current video is unchanged — the pacing change you asked for couldn't be applied "
+                        "to this footage.")
                     self.last_diagnostics = diag
                     return _to_contract(dict(base_plan), inputs)
                 # No usable base to fall back to -> continue to normal planning (never a dead-end error).
@@ -1948,18 +1954,27 @@ class RealEditPlannerEngine:
                 raise EditPlanInfeasibleError(plan.get("infeasible_reason") or "material cannot support a plan")
 
         # 6a: EDITORIAL-CONTINUITY SIGNAL (owner decision 2026-10-25 — supersedes the 2026-10-21 gate).
-        # Continuity is now a DIAGNOSTIC ONLY, never a terminal rejection. Policy: if the pipeline produced a
-        # PLAYABLE cut (validate_plan already passed above), the user is shown that VIDEO — never an error —
-        # across create / revise / explore. A revise that changed more than expected (`wholesale`) still ships
-        # as the user's new version (they can keep the prior one from history); a revise that produced the same
-        # cut (`noop`) still ships (it is a valid, playable video). We record the verdict for observability so a
-        # surprising change is diagnosable, but we do NOT block.
+        # Continuity is now a DIAGNOSTIC + a DISCLOSURE, never a terminal rejection. Policy: a PLAYABLE cut
+        # (validate_plan already passed) is ALWAYS shown — never an error — across create / revise / explore.
+        # BUT we must never MISLEAD (owner §2-B/§5-C/§5-D): a revise that produced the SAME cut (`noop`) must be
+        # shown with an honest "couldn't apply that change" note, not as a successful revision; a `wholesale`
+        # re-cut must disclose the substantial change. We ship either way and carry the disclosure forward to
+        # the partial-success block below (which iOS renders as a non-blocking note on the result).
+        _continuity_disclosure: str | None = None
         if _is_targeted_revise:
             cont = _continuity_assessment(rc.get("base_plan"), plan, rc)
             if cont is not None:
                 diag["continuity"] = cont   # ratio + added/removed/reordered + verdict, always logged
-                if cont["verdict"] in ("noop", "wholesale"):
-                    diag["continuity_nonblocking"] = cont["verdict"]   # was terminal; now shipped anyway
+                if cont["verdict"] == "noop":
+                    diag["continuity_nonblocking"] = "noop"
+                    _continuity_disclosure = (
+                        "Your video is ready, but the change you asked for didn't alter the edit — this version "
+                        "is effectively the same as your current one.")
+                elif cont["verdict"] == "wholesale":
+                    diag["continuity_nonblocking"] = "wholesale"
+                    _continuity_disclosure = (
+                        "Your video is ready. This revision changed more of your video than a small edit — "
+                        "your previous version is still saved if you prefer it.")
 
         # 6b: Phase-6 / Arm D — ONE bounded critique -> revision pass (flag-gated, OFF by default). Runs ONLY
         # after we already hold a VALID executable plan and only when a creative brief exists to critique
@@ -2004,9 +2019,17 @@ class RealEditPlannerEngine:
                 diag["material_unmet"] = cre["material_unmet"]
                 diag["final"] = "executable"
                 diag["completion"] = "partial"
-                diag["partial_disclosure"] = (
-                    "Your video is ready. A few of your creative requests couldn't all be applied: "
-                    + "; ".join(sorted({m["code"] for m in cre["material_unmet"]})) + ".")
+                _parts = ["Your video is ready. A few of your creative requests couldn't all be applied: "
+                          + "; ".join(sorted({m["code"] for m in cre["material_unmet"]})) + "."]
+                if _continuity_disclosure:
+                    _parts.append(_continuity_disclosure)
+                diag["partial_disclosure"] = " ".join(_parts)
+            elif _continuity_disclosure:
+                # No unmet creative objective, but a noop/wholesale continuity signal MUST be disclosed so an
+                # unchanged (or wholesale-changed) revise is never shown as a plain successful revision.
+                diag["final"] = "executable"
+                diag["completion"] = "partial"
+                diag["partial_disclosure"] = _continuity_disclosure
             else:
                 diag["final"] = "executable"
                 diag["completion"] = "complete"
@@ -2014,6 +2037,11 @@ class RealEditPlannerEngine:
             self.last_diagnostics = diag
             return _to_contract(plan, inputs)
 
+        # Objective-directives flag OFF (legacy path): still honor the never-mislead rule for a noop/wholesale
+        # revise — ship, but disclose honestly rather than claiming a clean success.
+        if _continuity_disclosure:
+            diag["completion"] = "partial"
+            diag["partial_disclosure"] = _continuity_disclosure
         diag["final"] = "executable"
         diag["used_fallback"] = bool(getattr(self._gw, "last_fallback", False))
         self.last_diagnostics = diag

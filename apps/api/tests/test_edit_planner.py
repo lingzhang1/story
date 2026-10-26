@@ -1570,6 +1570,9 @@ def test_timing_revise_validation_failure_never_replans(monkeypatch):
     assert eng.last_diagnostics["revision_path"] == "retime_infeasible_shipped_base"
     assert eng.last_diagnostics.get("retime_change_applied") is False
     assert eng.last_diagnostics.get("model_calls", 0) == 0
+    # NEVER MISLEAD (owner §5-B): the unchanged base is disclosed, not shown as a successful revision.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "unchanged" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1668,6 +1671,9 @@ def test_wholesale_revise_now_ships_non_blocking():
     assert len(out.segments) == 2                                   # the re-pick SHIPPED
     assert eng.last_diagnostics["continuity"]["verdict"] == "wholesale"
     assert eng.last_diagnostics.get("continuity_nonblocking") == "wholesale"
+    # NEVER MISLEAD (owner §5-C): disclose the substantial change; the previous version is preserved.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "previous version" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 def test_preservation_gate_allows_model_preserving_revise():
@@ -1749,6 +1755,9 @@ def test_continuity_gate_rejects_noop_revise():
     assert len(out.segments) == len(base_plan["segments"])          # shipped, not rejected
     assert eng.last_diagnostics["continuity"]["verdict"] == "noop"
     assert eng.last_diagnostics.get("continuity_nonblocking") == "noop"
+    # NEVER MISLEAD (owner §2-B/§5-D): a noop must be disclosed, not shown as a clean successful revision.
+    assert eng.last_diagnostics.get("completion") == "partial"
+    assert "same" in eng.last_diagnostics.get("partial_disclosure", "").lower()
 
 
 def test_continuity_gate_allows_shorter_duration_to_drop_clips():
