@@ -659,6 +659,26 @@ struct StoryResultView: View {
     private func togglePlay() {
         guard let player else { return }
         if isPlaying { player.pause() } else {
+            // ROBUST AUDIO (v2): the first fix set the session at player CREATION, but the capture session
+            // (AVCaptureSession manages the app audio session) or a version-swap can leave/reset it to a
+            // non-playback, inactive, or silenced state by the time the user taps play. Reassert .playback +
+            // active RIGHT HERE, every play, and ensure the player itself is audible. Best-effort; never blocks.
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try? session.setActive(true)
+            player.isMuted = false
+            player.volume = 1.0
+            #if DEBUG
+            // INSTRUMENT (owner lesson: print resolved values, do not keep guessing). Surfaces the REAL audio
+            // state at play time so a device run tells us the true cause if this still fails.
+            let item = player.currentItem
+            let aTracks = item?.tracks.filter { $0.assetTrack?.mediaType == .audio }.count ?? -1
+            StoryCreativeRefinement.lastMusicNote =
+                "preview play: cat=\(session.category.rawValue) mode=\(session.mode.rawValue) "
+                + "outVol=\(session.outputVolume) playerVol=\(player.volume) muted=\(player.isMuted) "
+                + "itemAudioTracks=\(aTracks) status=\(item?.status.rawValue ?? -1)"
+            print("AUDIO-DIAG \(StoryCreativeRefinement.lastMusicNote)")
+            #endif
             if player.currentTime() >= (player.currentItem?.duration ?? .zero) {
                 player.seek(to: .zero)
             }
