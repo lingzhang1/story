@@ -88,6 +88,7 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("POST", "/v1/stories"): "writes",
     ("PUT", "/v1/stories/{story_id}"): "writes",
     ("PUT", "/v1/understanding"): "writes",
+    ("PUT", "/v1/music/favorites"): "writes",   # P1-E: saved catalog references (cheap metadata write)
     ("POST", "/v1/stories/{story_id}/outputs/{output_id}/backup"): "writes",
     ("POST", "/v1/stories/{story_id}/outputs"): "writes",
     ("POST", "/v1/music-direction"): "writes",  # DETERMINISTIC, cheap — treated as a cheap write-tier op
@@ -106,6 +107,7 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("GET", "/v1/media/{cloud_media_id}/download"): "read",
     ("GET", "/v1/media/{cloud_media_id}/parts/uploaded"): "read",
     ("POST", "/v1/understanding/batch-get"): "read",   # a READ despite POST (body carries id list)
+    ("GET", "/v1/music/favorites"): "read",            # P1-E: saved catalog references (cheap read)
     ("GET", "/v1/edit-plan-jobs/{job_id}"): "read",
     ("GET", "/v1/story-coverage/v2/jobs/{job_id}"): "read",
     ("POST", "/v1/edit-plan-jobs/{job_id}/cancel"): "read",
