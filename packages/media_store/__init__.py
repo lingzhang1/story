@@ -58,7 +58,14 @@ MEDIA_KIND_GENERATED = "generated"
 # client resolves it by the normal verified download. Provenance uses source_output_id (for an EditPlan) and is
 # otherwise metadata-only.
 MEDIA_KIND_AI_ARTIFACT = "ai_artifact"
-_MEDIA_KINDS = {MEDIA_KIND_MOMENT, MEDIA_KIND_GENERATED, MEDIA_KIND_AI_ARTIFACT}
+# P1-E (pre-beta) — music. A USER-IMPORTED audio file the user chose to back up to their own account-owned
+# library (My Music). Same storage/presign/upload/verify path as every other kind — account-scoped key,
+# content-addressed by uuid5(owner + sha256), full-file SHA256 verified, non-deleting retention — so no new
+# bucket, table, or uploader is introduced; only this provenance label is added so imported audio is NOT
+# coerced to "moment" (which would pollute the Moment media list + R6 reconcile). Catalog/provider tracks are
+# NEVER uploaded here (licensing): only user-owned imports. Provenance is metadata-only (no source_moment_id).
+MEDIA_KIND_MUSIC = "music"
+_MEDIA_KINDS = {MEDIA_KIND_MOMENT, MEDIA_KIND_GENERATED, MEDIA_KIND_AI_ARTIFACT, MEDIA_KIND_MUSIC}
 
 
 def _normalize_media_kind(kind: str) -> str:

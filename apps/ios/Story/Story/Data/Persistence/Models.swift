@@ -882,6 +882,33 @@ final class MyMusicAssetModel {
     var createdAt: Date
     var lastUsedAt: Date?
 
+    // P1-E (pre-beta) — ACCOUNT-OWNED cloud backup for USER-IMPORTED audio (never provider favorites). All
+    // additive + nilable so this is a SwiftData lightweight migration on an existing on-device store (no
+    // destructive rewrite of existing rows). A provider favorite leaves all of these nil (licensing: its bytes
+    // are never uploaded).
+    //   cloudMediaId   — the account-owned media record id once the import's bytes are cloud-verified (reuse
+    //                     of the R4/R6 pipeline with media_kind="music", exactly like AIArtifactStore).
+    //   ownerAccountId — the canonical account that backed this import up (account isolation: a restore only
+    //                     adopts rows the signed-in account owns).
+    //   cloudBackupStateRaw — "local_only" (default, not backed up) | "backing_up" | "cloud_verified" |
+    //                     "restore_pending" (metadata restored, bytes not yet downloaded) | "unavailable"
+    //                     (owned remotely but bytes could not be fetched). Drives the honest My Music UI state
+    //                     (§7): never claim "backed up" when only metadata exists.
+    var cloudMediaId: String? = nil
+    var ownerAccountId: String? = nil
+    var cloudBackupStateRaw: String? = nil
+
+    /// Honest backup state for an imported track (provider favorites are always .notApplicable).
+    enum CloudBackupState: String { case localOnly = "local_only", backingUp = "backing_up",
+        cloudVerified = "cloud_verified", restorePending = "restore_pending", unavailable = "unavailable" }
+    var cloudBackupState: CloudBackupState {
+        get { CloudBackupState(rawValue: cloudBackupStateRaw ?? "") ?? .localOnly }
+        set { cloudBackupStateRaw = newValue.rawValue }
+    }
+    /// True when the imported bytes are present locally (playable now) regardless of cloud state.
+    /// (Resolved by MyMusicStore.exists at call sites; this is the durable "is backed up" signal.)
+    var isCloudBacked: Bool { (cloudMediaId ?? "").isEmpty == false && cloudBackupState == .cloudVerified }
+
     /// True when this is a saved provider favorite (reference only) rather than an imported local file.
     var isProviderFavorite: Bool { providerTrackId != nil }
 
@@ -896,7 +923,10 @@ final class MyMusicAssetModel {
         bpm: Double? = nil,
         providerTrackId: String? = nil,
         createdAt: Date = .now,
-        lastUsedAt: Date? = nil
+        lastUsedAt: Date? = nil,
+        cloudMediaId: String? = nil,
+        ownerAccountId: String? = nil,
+        cloudBackupStateRaw: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -909,6 +939,9 @@ final class MyMusicAssetModel {
         self.providerTrackId = providerTrackId
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+        self.cloudMediaId = cloudMediaId
+        self.ownerAccountId = ownerAccountId
+        self.cloudBackupStateRaw = cloudBackupStateRaw
     }
 }
 

@@ -71,6 +71,12 @@ struct CloudMediaRecord {
     let state: String                 // "cloud_verified" | "uploading" | ...
     let sizeBytes: Int
     let sourceMomentId: String        // local Moment UUID string (empty if the upload carried none)
+    // P1-E — `mediaKind` ("moment" | "generated" | "ai_artifact" | "music") lets a reconcile pass pick out the
+    // caller's backed-up My Music imports; `deviceAssetId` carries the local MyMusicAssetModel UUID for a music
+    // record (the same slot a moment upload uses for its local AssetModel id), so restore re-links bytes to the
+    // right library row.
+    var mediaKind: String = "moment"
+    var deviceAssetId: String = ""
     var isVerified: Bool { state == "cloud_verified" }
 }
 
@@ -129,7 +135,9 @@ struct MediaDownloadService: MediaDownloading {
                 cloudMediaId: cmid,
                 state: (r["state"] as? String) ?? "",
                 sizeBytes: size,
-                sourceMomentId: (r["source_moment_id"] as? String) ?? "")
+                sourceMomentId: (r["source_moment_id"] as? String) ?? "",
+                mediaKind: (r["media_kind"] as? String) ?? "moment",
+                deviceAssetId: (r["device_asset_id"] as? String) ?? "")
         }
     }
 

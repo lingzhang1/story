@@ -21,6 +21,13 @@ final class MediaUploadQueue {
     /// auto-enrolls + drains ONLY when the active account has Auto Backup ON. Default no-op (safe before setup).
     nonisolated(unsafe) static var sharedAutoEnroll: (MomentModel) -> Void = { _ in }
 
+    /// P1-E (AU durability): fired after a media upload becomes cloud-verified (the Moment now has a
+    /// content_sha256 / cloudMediaId). `UnderstandingSync.push()` skips any understanding whose media is not
+    /// yet cloud-backed, so an AU result produced BEFORE its media finished uploading was never pushed; this
+    /// hook pushes it once the media becomes eligible. Wired by StoryApp to the same coalesced idempotent push;
+    /// default no-op. Same static-seam pattern as `sharedAutoEnroll`.
+    nonisolated(unsafe) static var sharedPushUnderstanding: () -> Void = { }
+
     private let context: ModelContext
     private let service: MediaUploading
     /// Returns a VALID access token for a SPECIFIC owner, or nil if that owner is not the active signed-in
@@ -168,6 +175,10 @@ final class MediaUploadQueue {
             job.state = .verified; job.lastError = nil; job.updatedAt = .now
             applyVerifiedTransition(job: job, generationAtStart: generationAtStart)
             try? context.save()
+            // P1-E (AU durability): this Moment's media is now cloud-backed (has a content_sha256), so an AU
+            // understanding that was previously skipped by push() (media not yet backed) is now eligible —
+            // push it. Idempotent + coalesced; no-op until StoryApp wires the seam.
+            Self.sharedPushUnderstanding()
         } catch {
             job.attempts += 1
             job.lastError = String(describing: error).prefix(300).description
