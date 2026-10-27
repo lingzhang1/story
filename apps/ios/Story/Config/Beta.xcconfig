@@ -13,7 +13,7 @@
 SLASH = /
 
 STORY_BUILD_ENV = beta
-STORY_ENV_API_BASE_URL = https://asxtxgjiis.us-east-1.awsapprunner.com
+STORY_ENV_API_BASE_URL = https:$(SLASH)$(SLASH)asxtxgjiis.us-east-1.awsapprunner.com
 STORY_ENV_COGNITO_REGION = us-east-1
 STORY_ENV_USER_POOL_ID = us-east-1_3cPNfbrUl
 STORY_ENV_APP_CLIENT_ID = 4f3dtn9d0nk5uq1hcvbdc7m73c
