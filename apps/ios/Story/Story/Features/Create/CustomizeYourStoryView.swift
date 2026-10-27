@@ -57,6 +57,40 @@ struct CustomizeYourStoryView: View {
         }
     }
 
+    // MARK: - P1-D Video Type (PRIMARY) + independent Duration
+
+    /// The two consumer editorial types. This is the PRIMARY selection (P1-D §4) and the source the request's
+    /// editorial breadth (`mode`) derives from. A type is NOT a duration preset (§4); duration is chosen
+    /// independently below. Wire values match the P1-C contract (`highlights` / `full`).
+    enum VideoType: Hashable, CaseIterable {
+        case highlights, full
+        var wire: String { self == .highlights ? "highlights" : "full" }
+        var title: String { self == .highlights ? "Highlights" : "Full Story" }
+        var blurb: String {
+            self == .highlights ? "The best visual moments, beautifully cut."
+                                 : "More of the journey, people, and atmosphere."
+        }
+    }
+
+    /// Independent duration control (P1-D §8). Recommended is TYPE-AWARE (Highlights → highlights range,
+    /// Full Story → recommended range); Custom is an explicit length for EITHER type. Highlights/Full are
+    /// NEVER reintroduced as duration choices (§8).
+    enum DurationChoice: Hashable { case recommended, custom }
+
+    /// PURE seed for the primary Video Type. OWNER DECISION (P1-D, 2026-10-26, "option B"): the sheet ALWAYS
+    /// opens on Highlights — the product default — regardless of the Story's persisted `editorialMode`. The
+    /// user opts into Full Story per attempt; a prior Full Story generation does NOT pre-select Full Story on
+    /// re-open. (This intentionally overrides the earlier prior-choice prefill for TYPE; duration/sound prefill
+    /// is unchanged.) Historical records are never rewritten — this governs only the sheet's initial selection.
+    static func seedVideoType(editorialMode: String?) -> VideoType { .highlights }
+
+    /// PURE seed for the duration control: a historical explicit `custom` length, or a prior explicit target
+    /// that differs from the type's recommended point, opens as Custom; otherwise Recommended.
+    static func seedDurationChoice(editorialMode: String?, explicitTarget: Double?) -> DurationChoice {
+        if (editorialMode ?? "").lowercased() == "custom" { return .custom }
+        return explicitTarget != nil ? .custom : .recommended
+    }
+
     /// PURE: render the active persisted directives as human-readable lines using the STABLE numbering, so the
     /// user sees exactly what is saved (e.g. "Start with Moment 1", "Moment 6 right after Moment 1"). Part B.
     static func savedDirectiveLines(_ d: ResolvedDirectives?, numbering: StoryMomentNumbering) -> [String] {
@@ -81,6 +115,10 @@ struct CustomizeYourStoryView: View {
     }
 
     @State private var length: LengthChoice
+    @State private var videoType: VideoType          // P1-D PRIMARY selection
+    @State private var durationChoice: DurationChoice // P1-D independent duration (Recommended/Custom)
+    @State private var moreOptionsExpanded = false    // P1-D §8 — collapsed by default
+    @State private var showMoreFeels = false          // P1-D §7 — reveal the rest of the style presets
     @State private var sound: SoundPreference
     @State private var approach: EditingApproach
     @State private var customSeconds: Double
@@ -129,6 +167,10 @@ struct CustomizeYourStoryView: View {
         // the user's explicit length is shown (not silently reset to the recommendation).
         _length = State(initialValue: Self.seedLength(editorialMode: initialEditorialMode,
                                                       hasRecommendedPoint: rec.recommendedPointSeconds != nil))
+        // P1-D: PRIMARY Video Type (Highlights default; historical custom ≠ Full Story) + independent duration.
+        _videoType = State(initialValue: Self.seedVideoType(editorialMode: initialEditorialMode))
+        _durationChoice = State(initialValue: Self.seedDurationChoice(
+            editorialMode: initialEditorialMode, explicitTarget: initialExplicitTargetSeconds))
         // Default sound: the user's explicit choice if any, else the inferred recommendation, else balanced.
         _sound = State(initialValue: initialExplicitSound ?? inferredSound ?? .balanced)
         // Default approach: the Story's current approach (defaults to .storytelling). If Visual-first is not
@@ -161,93 +203,102 @@ struct CustomizeYourStoryView: View {
         }
     }
 
+    // MARK: - P1-D derived values
+
+    /// The TYPE-AWARE recommended point (P1-D §4/§8): Highlights → highlights range point, Full Story →
+    /// recommended range point. Graceful fallback to the other point when one is missing; nil when neither
+    /// exists (the UI then shows no fabricated estimate, §4).
+    private var typeRecommendedSeconds: Double? {
+        switch videoType {
+        case .highlights: return highlightsSeconds ?? fullSeconds
+        case .full:       return fullSeconds ?? highlightsSeconds
+        }
+    }
+
+    /// The seconds actually submitted (P1-D): Custom → the explicit clamped value; Recommended → the
+    /// type-aware point, falling back to the clamped custom seed only if no recommendation exists.
+    private var p1dChosenSeconds: Double {
+        switch durationChoice {
+        case .custom:      return clampedCustom
+        case .recommended: return typeRecommendedSeconds ?? clampedCustom
+        }
+    }
+
+    /// The editorial breadth string submitted to `onCreate` (becomes `story.editorialMode`, which the
+    /// coordinator's attempt-boundary resolution reads to set `pendingEditorialType`). Driven by the PRIMARY
+    /// Video Type — NOT by the duration choice. Custom duration does not make a Highlights into `full`;
+    /// `custom` is only used to preserve a historical custom-length record's provenance, never as a type.
+    private var p1dMode: String { videoType.wire }
+
     /// DETERMINISTIC plain-language summary of the current generation settings (M1). No model call. Duration
     /// is included ONLY when a concrete value is known for the chosen length (never invented). Style is named
     /// only when a preset is selected (optional). Reads from live @State so it updates as the user adjusts.
     private var directionSummary: String {
-        var parts: [String] = []
-        // Feel (only if the user picked one — optional).
-        let feels = StylePreset.allCases.filter { selectedPresets.contains($0) }.map { $0.label.lowercased() }
-        if !feels.isEmpty { parts.append("a \(feels.joined(separator: ", ")) feel") }
-        // Length — name the editorial choice; include seconds only when known.
-        switch length {
-        case .highlights:
-            parts.append(highlightsSeconds.map { "a highlights cut (~\(Int($0.rounded()))s)" } ?? "a highlights cut")
-        case .full:
-            parts.append(fullSeconds.map { "the full story (~\(Int($0.rounded()))s)" } ?? "the full story")
-        case .custom:
-            parts.append("about \(Int(clampedCustom.rounded()))s")
-        }
-        // Sound.
+        // P1-D §9 dynamic summary: "Highlights · About 23 seconds · Balanced sound". Reflects current state;
+        // the duration is shown as an APPROXIMATE recommendation (never a guaranteed output length) and is
+        // omitted entirely when no estimate exists (no fabricated number). Feel is appended only when chosen.
+        var parts: [String] = [videoType.title]
+        if let d = durationSummaryText { parts.append(d) }
         switch sound {
-        case .immersive: parts.append("natural sound forward")
-        case .balanced:  parts.append("balanced sound")
-        case .musicLed:  parts.append("music-led")
+        case .immersive: parts.append("Immersive sound")
+        case .balanced:  parts.append("Balanced sound")
+        case .musicLed:  parts.append("Music-led sound")
         }
-        let body = parts.joined(separator: " · ")
-        return "Story will create \(body). Adjust anything below, or just tap Create."
+        let feels = StylePreset.allCases.filter { selectedPresets.contains($0) }.map { $0.label }
+        if !feels.isEmpty { parts.append(feels.joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The duration phrase for the summary + type cards. Custom → exact; Recommended → "About Ns" when a
+    /// type-aware recommendation exists, else nil (show nothing — never a fabricated estimate, §4/§9).
+    private var durationSummaryText: String? {
+        switch durationChoice {
+        case .custom:      return "Custom \(Int(clampedCustom.rounded())) seconds"
+        case .recommended: return typeRecommendedSeconds.map { "About \(Int($0.rounded())) seconds" }
+        }
+    }
+
+    /// Per-type approximate recommendation shown on each Video Type card ("About 23s"), or nil when Duration
+    /// Intelligence has no valid recommendation for that type (§4 — show no fabricated estimate).
+    private func cardEstimate(for type: VideoType) -> String? {
+        let s: Double? = (type == .highlights) ? (highlightsSeconds ?? fullSeconds)
+                                               : (fullSeconds ?? highlightsSeconds)
+        return s.map { "About \(Int($0.rounded()))s" }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 24) {
+                // 1. HEADER (P1-D §3)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Customize Your Story").font(StoryTheme.display(26)).foregroundStyle(StoryTheme.cream)
-                    Text("A few choices before your Story comes together.")
+                    Text("Create Your Video").font(StoryTheme.display(26)).foregroundStyle(StoryTheme.cream)
+                    Text("Choose how you want your moments to come together.")
                         .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textSecondary)
                 }
 
-                // STORY DIRECTION SUMMARY (M1) — a DETERMINISTIC, plain-language reflection of the current
-                // generation settings (length + sound + any chosen feel). No model call; built purely from live
-                // state. Duration is shown ONLY when known (never invented). This makes the sheet itself the
-                // compact "Story direction" summary + the single Create button below, so no extra confirmation
-                // step is added.
-                Text(directionSummary)
-                    .font(StoryTheme.body(13))
-                    .foregroundStyle(StoryTheme.cream.opacity(0.75))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StoryTheme.surfaceAlt.opacity(0.5), in: RoundedRectangle(cornerRadius: StoryTheme.field))
+                // 2. VIDEO TYPE (PRIMARY, §4) — two cards, Highlights default.
+                videoTypeSection
 
-                // SECTION — Creative Direction (OPTIONAL; Stage 2) — TOP of the sheet (the primary creative
-                // input). Shown only when there are referenceable Moments. Natural-language instructions + typed
-                // "Moment N" references + a visual picker; typed references resolve against the stable numbering
-                // snapshot. Hard references that don't resolve BLOCK Create (never silently dropped). Empty =>
-                // request byte-identical to today.
+                // 3. CREATIVE DIRECTION (§6) — directly below Video Type. Only when there are referenceable
+                // Moments. Natural-language + typed "Moment N" refs + visual picker; unresolved hard refs BLOCK.
                 if numbering.count > 0 {
-                    section(title: "Creative Direction",
-                            subtitle: "Optional. Guide the edit in your own words, or reference Moments by number.") {
-                        // #1 (owner 2026-10-24): the "Saved instructions" summary was removed — it added clutter
-                        // without value. The prior free-text direction is repopulated as the input default
-                        // (initialCreativeDirection) and prior Moment references show as chips below, which is
-                        // enough context. The saved STRUCTURAL directives (opening/include/order) are still
-                        // folded on Create (so a prior "start with Moment 17" is not lost), reflected by the
-                        // chip row rather than a separate panel.
-                        StoryTextField(placeholder: "Start with Moment 5, then Moment 2. Make the cuts faster…",
-                                       text: $creativeDirection, minHeight: 110)
-                            // Editing the instruction invalidates any in-flight interpretation (owner #1): a
-                            // response that resolves after this edit must NOT submit the old text.
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Anything you want to include?")
+                            .font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+                        StoryTextField(placeholder: "Start with the mountain reveal, show the best moments, and make the cuts follow the music…",
+                                       text: $creativeDirection, minHeight: 92)
                             .onChange(of: creativeDirection) { _, _ in
                                 interpretToken = UUID()
                                 if retryableInstruction != nil { retryableInstruction = nil; clarification = nil }
                             }
-                        Button { showReferencePicker = true } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 13, weight: .semibold))
-                                Text("Add Moment reference").font(StoryTheme.body(13, .medium))
-                            }
-                            .foregroundStyle(StoryTheme.gold)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
+                        // Suggestion chips (§6): 2–3 shown, type-adapted, insert via the existing mechanism
+                        // (append-only, never replacing typed text). Moment-reference picker stays accessible
+                        // but unobtrusive, beside the chips.
+                        suggestionChipRow
                         MomentReferenceChipRow(chips: chips) { id in chips.removeAll { $0.id == id } }
                         if let clarification {
                             Text(clarification).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.danger)
                         }
-                        // Service failure (503/transport): the draft is preserved; offer an explicit Retry
-                        // rather than silently proceeding or discarding the instruction (owner #2).
                         if retryableInstruction != nil {
                             Button { attemptCreate() } label: {
                                 HStack(spacing: 6) {
@@ -260,71 +311,33 @@ struct CustomizeYourStoryView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        // Prompt guidance (owner P0): compact "Try asking Story…" examples that APPEND editable
-                        // text (never auto-submit), with a capability info affordance. The opening example uses
-                        // a REAL Moment number from the snapshot (never a hardcoded nonexistent N).
-                        PromptSuggestionChips(
-                            title: "Try asking Story…",
-                            suggestions: PromptSuggestions.customize(firstMomentNumber: numbering.items.first?.number),
-                            text: $creativeDirection,
-                            onInsert: { interpretToken = UUID()
-                                        if retryableInstruction != nil { retryableInstruction = nil; clarification = nil } })
-                        CapabilityInfoButton()
                     }
                 }
 
-                // SECTION — Feeling / Style presets (OPTIONAL; Phase B). Inspiration, not a rule: a tapped
-                // preset is folded into THIS generation's soft direction + music seed only, never the Story's
-                // durable creative identity. None selected by default. An explicit NL instruction above wins.
-                section(title: "Give it a feel", subtitle: "Optional. A quick creative direction for this video.") {
-                    let cols = [GridItem(.adaptive(minimum: 104), spacing: 8)]
-                    LazyVGrid(columns: cols, alignment: .leading, spacing: 8) {
-                        ForEach(StylePreset.allCases) { preset in
-                            let on = selectedPresets.contains(preset)
-                            Button {
-                                if on { selectedPresets.remove(preset) } else { selectedPresets.insert(preset) }
-                            } label: {
-                                Text(preset.label)
-                                    .font(StoryTheme.body(14, .medium))
-                                    .foregroundStyle(on ? StoryTheme.ink : StoryTheme.cream)
-                                    .padding(.horizontal, 16).padding(.vertical, 9)
-                                    .frame(maxWidth: .infinity)
-                                    .background(on ? StoryTheme.cream : StoryTheme.surfaceAlt.opacity(0.6),
-                                                in: Capsule())
-                                    .overlay(Capsule().stroke(on ? StoryTheme.gold : StoryTheme.cream.opacity(0.12),
-                                                              lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    Text("Presets suggest a feel; anything you type above takes priority.")
-                        .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.textMuted)
-                }
+                // 4. FEELING / STYLE PRESETS (§7) — optional, initial small set, independent of type.
+                feelSection
 
-                // SECTION — Advanced (collapsed; progressive disclosure). Holds Story Length, Sound, and —
-                // only when Visual-first can be honored — Editing Approach. The DEFAULT path needs none of
-                // these (the summary above shows the inferred length/sound; tapping Create uses them). Always
-                // present so a user who wants precise control can open it.
-                VStack(alignment: .leading, spacing: 14) {
-                    Button { withAnimation(.easeInOut(duration: 0.15)) { showAdvanced.toggle() } } label: {
-                        HStack {
-                            Text("Advanced").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
-                            Spacer()
-                            Image(systemName: showAdvanced ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(StoryTheme.textMuted)
-                        }
-                    }.buttonStyle(.plain)
-                    if showAdvanced {
-                        lengthSection
-                        soundSection
-                        if visualFirstAvailable { approachSection }
-                    }
-                }
-
+                // 5. MORE OPTIONS (§8) — collapsed by default: Duration · Sound · Music.
+                moreOptionsSection
+            }
+            .padding(24)
+            .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .presentationBackground(StoryTheme.ink)
+        // 6. PERSISTENT CREATE ACTION (§3/§9/§13) — safe-area-aware bottom region that stays visible with the
+        // keyboard open, More Options expanded, and across iPhone sizes. Carries the dynamic summary.
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 10) {
+                Text(directionSummary)
+                    .font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.78))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Summary: \(directionSummary)")
                 Button { attemptCreate() } label: {
                     HStack(spacing: 8) {
                         if isInterpreting { ProgressView().tint(StoryTheme.ink) }
-                        Text(isInterpreting ? "Understanding…" : "Create my Story")
+                        Text(isInterpreting ? "Understanding…" : "Create my video")
                             .font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.ink)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 16)
@@ -332,16 +345,16 @@ struct CustomizeYourStoryView: View {
                     .opacity(isInterpreting ? 0.7 : 1)
                 }
                 .buttonStyle(.plain)
-                .disabled(isInterpreting)   // duplicate-tap protection (#1)
-
+                .disabled(isInterpreting)
+                .accessibilityLabel("Create my video")
                 Button("Cancel") { interpretToken = UUID(); onCancel() }
                     .font(StoryTheme.body(14)).foregroundStyle(StoryTheme.textMuted)
                     .frame(maxWidth: .infinity)
             }
-            .padding(24)
+            .padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 8)
+            .background(.ultraThinMaterial)
+            .overlay(Rectangle().frame(height: 1).foregroundStyle(StoryTheme.cream.opacity(0.08)), alignment: .top)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .presentationBackground(StoryTheme.ink)
         .onDisappear { interpretToken = UUID() }   // drop any in-flight interpretation on dismissal (#1)
         .sheet(isPresented: $showReferencePicker) {
             MomentReferencePicker(
@@ -450,7 +463,7 @@ struct CustomizeYourStoryView: View {
                     music.preference = (phrase: phrase, moodTags: contribution.musicMoodTags)
                 }
 
-                onCreate(chosenSeconds, sound, length.wire, approach, finalDirectives,
+                onCreate(p1dChosenSeconds, sound, p1dMode, approach, finalDirectives,
                          effectiveSoft, snapshotChips.map(\.id), music)
             }
         }
@@ -482,21 +495,171 @@ struct CustomizeYourStoryView: View {
         }
     }
 
-    // Advanced subsections (moved under progressive disclosure, owner #2 2026-10-24).
-    @ViewBuilder private var lengthSection: some View {
-        section(title: "Story length", subtitle: "Choose how much of the experience to show.") {
-            if let hi = highlightsSeconds {
-                row(selected: length == .highlights, title: "Highlights",
-                    detail: "The most memorable moments", trailing: "~\(Int(hi.rounded()))s") { length = .highlights }
+    // MARK: - P1-D section builders
+
+    /// VIDEO TYPE (§4) — the two primary cards. Highlights left, Full Story right; gold ring + check on the
+    /// selected one. Each card carries its blurb and a type-aware approximate estimate (omitted when none).
+    @ViewBuilder private var videoTypeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Video type").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+            HStack(alignment: .top, spacing: 12) {
+                videoTypeCard(.highlights)
+                videoTypeCard(.full)
             }
-            if let full = fullSeconds {
-                row(selected: length == .full, title: "Full Story",
-                    detail: "More of the journey, details and atmosphere",
-                    trailing: "~\(Int(full.rounded()))s") { length = .full }
+        }
+    }
+
+    @ViewBuilder private func videoTypeCard(_ type: VideoType) -> some View {
+        let selected = videoType == type
+        Button { withAnimation(.easeInOut(duration: 0.12)) { videoType = type } } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(type.title).font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+                    Spacer()
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? StoryTheme.gold : StoryTheme.textMuted)
+                        .font(.system(size: 18))
+                }
+                Text(type.blurb).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let est = cardEstimate(for: type) {
+                    Text(est).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.cream.opacity(0.7)).padding(.top, 2)
+                }
             }
-            row(selected: length == .custom, title: "Custom",
-                detail: "Set a specific length", trailing: "Your choice") { length = .custom }
-            if length == .custom {
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .background(StoryTheme.surfaceAlt.opacity(selected ? 0.9 : 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .stroke(selected ? StoryTheme.gold : StoryTheme.cream.opacity(0.10), lineWidth: selected ? 2 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(type.title). \(type.blurb)\(cardEstimate(for: type).map { ". " + $0 } ?? "")")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// Suggestion chips (§6): 2–3 initially, type-adapted, insert via append (never replacing typed text) so
+    /// directive semantics are unchanged. The Moment-reference picker stays accessible but unobtrusive.
+    @ViewBuilder private var suggestionChipRow: some View {
+        FlowLayout(spacing: 8) {
+            ForEach(p1dSuggestions, id: \.self) { phrase in
+                Button { appendSuggestion(phrase) } label: {
+                    HStack(spacing: 5) {
+                        Text(phrase).font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.cream)
+                        Image(systemName: "plus").font(.system(size: 10, weight: .bold)).foregroundStyle(StoryTheme.textSecondary)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .overlay(Capsule().stroke(StoryTheme.cream.opacity(0.14), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add instruction: \(phrase)")
+            }
+            Button { showReferencePicker = true } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "photo.on.rectangle.angled").font(.system(size: 12, weight: .semibold))
+                    Text("Moment").font(StoryTheme.body(13, .medium))
+                }
+                .foregroundStyle(StoryTheme.gold)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .overlay(Capsule().stroke(StoryTheme.gold.opacity(0.5), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add Moment reference")
+        }
+    }
+
+    /// Append a suggestion to the creative-direction draft (never replace), mirroring PromptSuggestionChips so
+    /// a chip never silently discards previously typed instructions (§6).
+    private func appendSuggestion(_ fragment: String) {
+        let cur = creativeDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cur.isEmpty { creativeDirection = fragment }
+        else {
+            let sep = (cur.hasSuffix(".") || cur.hasSuffix("!") || cur.hasSuffix("?")) ? " " : ". "
+            creativeDirection = cur + sep + fragment
+        }
+        interpretToken = UUID()
+        if retryableInstruction != nil { retryableInstruction = nil; clarification = nil }
+    }
+
+    /// Type-adapted suggestions (§6): a small, non-mandatory set. Reuses the existing supported directive
+    /// phrasings; Highlights leans visual/pace, Full Story leans coverage — plus the shared "keep original audio".
+    private var p1dSuggestions: [String] {
+        switch videoType {
+        case .highlights: return ["Beautiful views first", "Follow the music", "Keep original audio"]
+        case .full:       return ["Show the whole journey", "Follow the music", "Keep original audio"]
+        }
+    }
+
+    /// FEELING / STYLE (§7) — optional, initial small set (Cinematic/Energetic/Emotional/Playful) with an
+    /// unobtrusive reveal for the rest. Multi-select, independent of Video Type, folded per-output only.
+    @ViewBuilder private var feelSection: some View {
+        let initial: [StylePreset] = StylePreset.allCases.filter { ["Cinematic","Energetic","Emotional","Playful"].contains($0.label) }
+        let rest = StylePreset.allCases.filter { !initial.contains($0) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("Give it a feel").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+                Text("Optional").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+            }
+            let cols = [GridItem(.adaptive(minimum: 104), spacing: 8)]
+            LazyVGrid(columns: cols, alignment: .leading, spacing: 8) {
+                ForEach(showMoreFeels ? StylePreset.allCases : initial) { preset in feelChip(preset) }
+            }
+            if !rest.isEmpty {
+                Button { withAnimation(.easeInOut(duration: 0.12)) { showMoreFeels.toggle() } } label: {
+                    Text(showMoreFeels ? "Fewer" : "More feels")
+                        .font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.gold)
+                }.buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder private func feelChip(_ preset: StylePreset) -> some View {
+        let on = selectedPresets.contains(preset)
+        Button {
+            if on { selectedPresets.remove(preset) } else { selectedPresets.insert(preset) }
+        } label: {
+            Text(preset.label)
+                .font(StoryTheme.body(14, .medium)).foregroundStyle(on ? StoryTheme.ink : StoryTheme.cream)
+                .padding(.horizontal, 16).padding(.vertical, 9).frame(maxWidth: .infinity)
+                .background(on ? StoryTheme.cream : StoryTheme.surfaceAlt.opacity(0.6), in: Capsule())
+                .overlay(Capsule().stroke(on ? StoryTheme.gold : StoryTheme.cream.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// MORE OPTIONS (§8) — one collapsed-by-default section holding Duration · Sound · Music.
+    @ViewBuilder private var moreOptionsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button { withAnimation(.easeInOut(duration: 0.15)) { moreOptionsExpanded.toggle() } } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("More options").font(StoryTheme.body(17, .semibold)).foregroundStyle(StoryTheme.cream)
+                        Text("Duration · Sound · Music").font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textMuted)
+                    }
+                    Spacer()
+                    Image(systemName: moreOptionsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(StoryTheme.textMuted)
+                }
+            }.buttonStyle(.plain)
+            .accessibilityLabel("More options. Duration, Sound, Music. \(moreOptionsExpanded ? "Expanded" : "Collapsed")")
+            if moreOptionsExpanded {
+                durationSection
+                soundSection
+            }
+        }
+    }
+
+    /// DURATION (§8) — independent of type: Recommended (type-aware) or Custom. Highlights/Full are NEVER
+    /// duration choices here.
+    @ViewBuilder private var durationSection: some View {
+        section(title: "Duration", subtitle: "Recommended is tuned to your video type, or set your own.") {
+            row(selected: durationChoice == .recommended, title: "Recommended",
+                detail: videoType == .highlights ? "A concise highlights length" : "Room for the fuller story",
+                trailing: typeRecommendedSeconds.map { "~\(Int($0.rounded()))s" }) { durationChoice = .recommended }
+            row(selected: durationChoice == .custom, title: "Custom",
+                detail: "Set a specific length", trailing: "Your choice") { durationChoice = .custom }
+            if durationChoice == .custom {
                 HStack(spacing: 12) {
                     TextField("seconds", value: $customSeconds, format: .number)
                         .keyboardType(.numberPad)
@@ -513,6 +676,8 @@ struct CustomizeYourStoryView: View {
         }
     }
 
+    // Advanced subsections (Sound retained under More Options; Story-length replaced by durationSection and
+    // Editing-approach removed entirely per P1-D §5 — approach is forced .storytelling at init).
     @ViewBuilder private var soundSection: some View {
         section(title: "Sound", subtitle: "How should your Story feel and sound?") {
             soundRow(.immersive, "Immersive", "Bring natural sounds, voices and atmosphere forward")
@@ -521,49 +686,11 @@ struct CustomizeYourStoryView: View {
         }
     }
 
-    @ViewBuilder private var approachSection: some View {
-        section(title: "Editing approach", subtitle: "How should Story choose and arrange your footage?") {
-            approachRow(.storytelling)
-            approachRow(.visualFirst)
-            Text("Both approaches preserve your chosen length, music, and original sounds.")
-                .font(StoryTheme.body(12)).foregroundStyle(StoryTheme.textMuted)
-        }
-    }
-
     @ViewBuilder
     private func soundRow(_ value: SoundPreference, _ title: String, _ detail: String) -> some View {
         let isRec = (initialExplicitSound == nil && inferredSound == value)
         row(selected: sound == value, title: title,
             detail: detail, trailing: isRec ? "Recommended" : nil) { sound = value }
-    }
-
-    /// A whole-row Editing-Approach option: icon + title + description + a gold supporting line (speed/effort),
-    /// matching the Figma mock. Reuses the same gold-ring + check selected state as the other sections.
-    @ViewBuilder
-    private func approachRow(_ value: EditingApproach) -> some View {
-        let selected = approach == value
-        Button { approach = value } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? StoryTheme.gold : StoryTheme.textMuted)
-                    .font(.system(size: 18))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(value.title).font(StoryTheme.body(16, .medium)).foregroundStyle(StoryTheme.cream)
-                    Text(value.detail).font(StoryTheme.body(13)).foregroundStyle(StoryTheme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(value.supporting).font(StoryTheme.body(12)).foregroundStyle(StoryTheme.gold)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: value.icon).foregroundStyle(selected ? StoryTheme.gold : StoryTheme.textMuted)
-                    .font(.system(size: 16))
-            }
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(StoryTheme.surfaceAlt.opacity(selected ? 0.9 : 0.5))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? StoryTheme.gold : StoryTheme.cream.opacity(0.08), lineWidth: 1.5))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
     }
 
     /// A whole-row tappable option with an obvious selected state (gold ring + check).
