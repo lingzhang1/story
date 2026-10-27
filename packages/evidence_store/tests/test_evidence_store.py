@@ -10,16 +10,24 @@ import evidence_store as e
 class _DDB:
     def __init__(self): self.items = {}
     @staticmethod
-    def _k(key): return (key["story_user_id"]["S"], key["evidence_id"]["S"])
+    def _k(key): return (key["story_user_id"]["S"], key["cloud_media_id"]["S"])
     def put_item(self, TableName, Item, ConditionExpression=None):
-        self.items[(Item["story_user_id"]["S"], Item["evidence_id"]["S"])] = dict(Item)
+        self.items[(Item["story_user_id"]["S"], Item["cloud_media_id"]["S"])] = dict(Item)
     def get_item(self, TableName, Key):
         it = self.items.get(self._k(Key)); return {"Item": it} if it else {}
     def delete_item(self, TableName, Key):
         self.items.pop(self._k(Key), None)
     def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues):
         o = ExpressionAttributeValues[":o"]["S"]
-        return {"Items": [v for (ow, _), v in self.items.items() if ow == o]}
+        pfx = ExpressionAttributeValues.get(":pfx", {}).get("S")
+        out = []
+        for (ow, sk), v in self.items.items():
+            if ow != o:
+                continue
+            if pfx is not None and not sk.startswith(pfx):
+                continue
+            out.append(v)
+        return {"Items": out}
 
 
 class _S3:
