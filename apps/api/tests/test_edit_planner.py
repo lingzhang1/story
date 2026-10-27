@@ -174,23 +174,18 @@ def _plan_outside_useful():
     return p
 
 
-def test_useful_range_hard_rejects_when_flag_off(monkeypatch):
+def test_useful_range_outside_is_never_a_hard_error(monkeypatch):
+    # Default (no flag): a RENDERABLE source range that overlaps no useful_segment is EDITORIAL, not technical,
+    # so it never hard-fails (never-block policy). The former STORY_EDITPLAN_USEFUL_RANGE_SOFT flag was removed
+    # and this is now the permanent default — setting any stale env must not change it.
     monkeypatch.delenv("STORY_EDITPLAN_USEFUL_RANGE_SOFT", raising=False)
     errs = validate_plan(_plan_outside_useful(), _inputs())
-    assert any("overlaps NO useful_segment" in e for e in errs)   # strict (unchanged) behavior
-
-
-def test_useful_range_soft_ships_renderable_plan_when_flag_on(monkeypatch):
-    monkeypatch.setenv("STORY_EDITPLAN_USEFUL_RANGE_SOFT", "1")
-    errs = validate_plan(_plan_outside_useful(), _inputs())
-    # never-block: a playable range that merely misses useful_segments is NOT a hard error now.
     assert not any("useful_segment" in e for e in errs), errs
-    # the HARD technical bounds still fire when genuinely violated (real-duration bound stays hard):
+    # the HARD technical bounds still fire (real-duration bound stays hard):
     over = _plan_outside_useful()
     over["segments"][0]["source_end_seconds"] = 99.0   # exceeds M1 duration 11s
     over["segments"][0]["output_duration_seconds"] = 1.0
-    errs2 = validate_plan(over, _inputs())
-    assert any("exceeds Moment duration" in e for e in errs2)
+    assert any("exceeds Moment duration" in e for e in validate_plan(over, _inputs()))
 
 
 # ---- Part A: deterministic structural directive-placement repair ----

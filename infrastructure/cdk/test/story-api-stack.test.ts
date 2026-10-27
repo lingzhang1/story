@@ -288,7 +288,7 @@ describe("StoryApiStack (Milestone A)", () => {
       return (w?.Properties?.Environment?.Variables) || {};
     };
     const V2 = ["STORY_EDITPLAN_OBJECTIVE_DIRECTIVES", "STORY_EDITPLAN_BEST_VALID_RETENTION",
-                "STORY_EDITPLAN_APPROX_DURATION_SOFT", "STORY_EDITPLAN_USEFUL_RANGE_SOFT"];
+                "STORY_EDITPLAN_APPROX_DURATION_SOFT"];
 
     // (a) default test stack: no v2 flags at all.
     for (const k of V2) expect(workerVars(template)[k]).toBeUndefined();
