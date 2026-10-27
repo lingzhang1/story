@@ -4,6 +4,7 @@ import * as cdk from "aws-cdk-lib";
 import { StoryApiStack } from "../lib/story-api-stack";
 import { StoryAuthStack } from "../lib/story-auth-stack";
 import { StoryBetaWafStack } from "../lib/story-beta-waf-stack";
+import { OrgFoundationStack } from "../lib/org-foundation-stack";
 
 const app = new cdk.App();
 
@@ -81,6 +82,30 @@ if (app.node.tryGetContext("deployWaf") === "true") {
     rateBlock: app.node.tryGetContext("rateBlock") === "true" || app.node.tryGetContext("rateBlock") === true,
     env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: "us-east-1" },
     tags: { Project: "Story", Environment: environment, ManagedBy: "CDK", Component: "waf" },
+  });
+}
+
+// B0 Phase 2 — YoTale Organization foundation (OUs, SCPs, budgets). DESIGN/REVIEW ONLY. Instantiated
+// ONLY with `-c deployOrgFoundation=true`, and deployed into the MANAGEMENT account (001188477936),
+// NOT the dev account. Requires `-c orgRootId=r-xxxx` (the YoTale org root). A normal api/auth/waf
+// synth/deploy never touches it. No member accounts are created here. DEPLOYMENT IS DEFERRED — the
+// live Organizations resources (e.g. SCP p-njbqhrap yotale-region-lock-us-east-1) already exist and
+// are authoritative; this stack is retained as reviewed IaC only, to be reconciled (import) before any deploy.
+if (app.node.tryGetContext("deployOrgFoundation") === "true") {
+  const orgRootId = app.node.tryGetContext("orgRootId") as string | undefined;
+  if (!orgRootId) {
+    throw new Error("deployOrgFoundation=true requires -c orgRootId=r-xxxx (the YoTale org root id)");
+  }
+  const budgetAlertEmail =
+    (app.node.tryGetContext("budgetAlertEmail") as string) ?? "alerts@yotale.ai";
+  new OrgFoundationStack(app, "yotale-org-foundation", {
+    orgRootId,
+    budgetAlertEmail,
+    env: {
+      account: process.env.CDK_DEFAULT_ACCOUNT,
+      region: "us-east-1",
+    },
+    tags: { Project: "YoTale", Scope: "org-foundation", ManagedBy: "CDK" },
   });
 }
 
