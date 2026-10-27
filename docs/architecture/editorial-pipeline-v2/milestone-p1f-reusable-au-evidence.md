@@ -1,8 +1,39 @@
 # Milestone — P1-F: Reusable AU Visual Evidence & Editorially-Aligned Planner Frames
 
-**Status: IMPLEMENTED — OFFLINE-TESTED — DEVICE / MERGE / DEV-PERFORMANCE VERIFICATION PENDING.**
-Persistent caching is DISABLED (double-gated, see §10). NOT merged, NOT deployed, NOT device-built, NOT performance-verified.
-**Branch:** `feat/p1f-reusable-au-evidence` (base `05750d9`). **Design:** R1. See `preflight-p1f-reusable-au-evidence.md`.
+**Status: MERGED — DEV-DEPLOYED — DEVICE ACCEPTED — GATE 1 PASS — GATE 2 PASS (development).**
+Owner accepted Gate 1 and Gate 2 on 2026-10-27. Persistence ENABLED on DEV ONLY (`STORY_EVIDENCE_PERSIST_ENABLED=1` for `environment=development`; OFF for beta/gamma/prod). iOS reuse gated by `STORY_REUSABLE_EVIDENCE` (device scheme). EditPlan **v5.3** confirmed active on the dev API **and** worker.
+**Master at closeout:** `73d489c`. **Design:** R1. See `preflight-p1f-reusable-au-evidence.md`. Core functionality is not to be reopened absent a genuine regression.
+
+## 0. Gate acceptance (final)
+
+### Gate 1 — durable / private / correctly-associated packages: **PASS** (owner-tested)
+- AU frame packages persist in development (DynamoDB manifest in the shared media table, sort key `cloud_media_id="evidence#<moment_id>"`; packed blob under `evidence/*`). Dev table currently holds **7 evidence packages, each with a real `content_sha256`**.
+- Authenticated retrieval works (`GET /v1/evidence/{moment}` → presigned GET on a verified match).
+- Source ownership + SHA verification work (claim→authority at retrieval, per R1).
+- User-initiated permanent Moment deletion tested by the owner — removes the manifest row + S3 blob.
+- **No** automatic TTL / expiration / orphan deletion introduced. Account deletion remains **audit/design only** (not implemented).
+
+### Gate 2 — editorial alignment / no duplicate preprocessing / playable output: **PASS**
+- **2A editorial selection (real data):** on the **real IMG_9091** v2 understanding the Highlights mapper selected a frame at **16.62s** (the true face reveal) with **13.85s + 19.39s bracketing** it — NOT collapsed on the historical 12.5s mis-peak; covers all 4 real visual candidates + opening/closing. Highlights vs Full Story select **meaningfully different** frame sets (Full Story is narrative/event-weighted; it can front-load on early-clustered candidates — noted, not a failure).
+- **2B cache-hit skip (device, flag ON — the 08:19 run):** 3 eligible Moments, **3 cache HITS**. All three `GET /v1/evidence/{40cc3653,05b630b0,c87c1ba4}?frame_extraction_version=au_extract/2` returned **200**. Contact sheets built from cached frames with **no duplicate extraction**; planner job submitted with `sheet_count=3`. (Server-side logs cannot observe the device's *absence* of restore/`MomentFrameExtractor`; the positive retrieve→build→plan chain and the per-Moment accounting are the evidence.)
+- **2C performance (measured, device):** cache-hit run = **3 sheets, 321 KB** total planner image payload; **GET→planner-submit ≈ 4 s** (08:19:01→08:19:06). No pre-planning source bytes were downloaded server-side on the hit. These are measured cache-hit figures. **No old-vs-new improvement percentage or total download-savings figure is claimed** — no comparable same-footage baseline was captured this gate.
+- **2D rendered video:** worker outcomes `completed` for the gate's runs; a generated video was observed to **play** on device (`AUDIO-DIAG preview play … status=1`). Playback of the specific Highlights/Full Story MP4s is owner-confirmed; other completions are inferred from worker job state (distinguished here, per the measurement-precision requirement).
+- **Cache-miss fallback (device, flag ON — the 08:27/08:30 explore runs):** 5 eligible Moments whose source is **not** in the 7-package set → **clean misses**. Beacon `evidence-accounting reconciles=true linked=5 eligible=5 sheeted=0 missing=5 sha=unknown`. The accounting **reconciled** and **no Moment crashed or was silently dropped**. **Caveat (verified):** that explore run's fallback submitted **`sheet_count=0` (text-only)** — so the 5 miss Moments were **not** visually represented on *that* run. This is the known visual-first behavior when an evicted Moment's local file is gone and restore has not completed at that instant (see §-reliability), not a P1-F regression. It means cache-MISS *fallback integrity* (no drop, reconciles) is proven, but cache-MISS *visual representation after restore* was not demonstrated on this particular explore run.
+
+### Measurement caveats (explicit, per owner §2)
+- **Measured:** cache-hit latency (~4 s GET→submit) and payload (3 sheets / 321 KB). **Not measured:** improvement vs the old pathway (no comparable baseline) — no percentage invented.
+- **Cache-stage miss ≠ planner omission:** the 5-Moment miss run reconciled with no silent drop, but its *planner* evidence was 0 sheets (text-only) on that explore run — recorded as-is.
+- **Observed playback** (status=1 on device) is distinguished from **inferred** success (worker `completed`).
+
+### Planner-version finding (§3) — cause ESTABLISHED
+Development unexpectedly ran `STORY_EDIT_PLAN_VERSION=5.2`, so `_v53_active()` was false and the backend **stripped the v5.3 editorial TEXT fields** from the planner payload (the device VISUAL mapper was unaffected). **Root cause (established):** v5.3 was set during P1-C by a **manual console/CLI env flip**; App Runner/Lambda env is a **full-replace on every `cdk deploy`**, and the CDK default was still `5.2`, so subsequent deploys silently reverted it. **Not** an intentional rollback. **Fixed** by env-gating the CDK default to `5.3` for `environment=development` on both service + worker (durable across deploys; beta/gamma/prod stay 5.2; `-c editPlanVersion=5.2` rolls back) — PR #69, merged, deployed, **verified live (service=5.3, worker=5.3)**. Relevant to the separate configuration-hardening milestone.
+
+### Deferred / out of scope (unchanged)
+- **Worker-side evidence tiling (Option 8-ii):** DEFERRED (not implemented); packed format is self-describing so it stays possible without redesign.
+- **Account deletion:** audit/design only; not implemented.
+- **Gemini reliability (P1-G):** not started.
+- Beta/gamma/prod: both flags OFF; evidence persistence remains dev-only.
+
 
 ---
 
