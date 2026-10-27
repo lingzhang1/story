@@ -19,7 +19,10 @@ enum StoryAuthConfig {
     /// Developer credentials are provisioned, the UI keeps the Apple button disabled / "unavailable in this
     /// build" rather than showing a nonfunctional button (owner directive, Phase 3).
     static var appleSignInAvailable: Bool {
-        (env("STORY_APPLE_SIGNIN_AVAILABLE") ?? "0") == "1"
+        // Feature flag (NOT part of the baked backend environment): resolve via the durable launch-config
+        // chain (scheme env → persisted → nil). Defaults OFF so the Apple button stays hidden until the
+        // Apple IdP is actually provisioned.
+        (StoryLaunchConfig.value("STORY_APPLE_SIGNIN_AVAILABLE") ?? "0") == "1"
     }
 
     static var domainHost: String { "\(domainPrefix).auth.\(region).amazoncognito.com" }
