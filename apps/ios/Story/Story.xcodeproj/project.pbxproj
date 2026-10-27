@@ -24,13 +24,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		648945628F38366B3E432047 /* Beta.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.xcconfig; name = Beta.xcconfig; path = Config/Beta.xcconfig; sourceTree = SOURCE_ROOT; };
 		CCABE627306F0D9B0089312F /* Story.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Story.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CCABE636306F0D9C0089312F /* StoryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StoryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CCABE640306F0D9C0089312F /* StoryUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StoryUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4114CDB8AFC87364D498D9D /* Development.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.xcconfig; name = Development.xcconfig; path = Config/Development.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CCDF1FCA306F14540027AB1A /* Exceptions for "Story" folder in "Story" target */ = {
+		CCDF1FCA306F14540027AB1A = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -43,7 +45,7 @@
 		CCABE629306F0D9B0089312F /* Story */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				CCDF1FCA306F14540027AB1A /* Exceptions for "Story" folder in "Story" target */,
+				CCDF1FCA306F14540027AB1A,
 			);
 			path = Story;
 			sourceTree = "<group>";
@@ -86,6 +88,8 @@
 				CCABE629306F0D9B0089312F /* Story */,
 				CCABE639306F0D9C0089312F /* StoryTests */,
 				CCABE628306F0D9B0089312F /* Products */,
+				E4114CDB8AFC87364D498D9D /* Development.xcconfig */,
+				648945628F38366B3E432047 /* Beta.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -273,8 +277,100 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		04734CB5A8A2BAC30A995AD1 /* Beta */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.StoryUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Story;
+			};
+			name = Beta;
+		};
+		0BC64CDA8F96B8F826042E1F /* Beta */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.StoryTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Story.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Story";
+			};
+			name = Beta;
+		};
+		167E49CFBE16CE49851C7AA5 /* Beta */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 648945628F38366B3E432047 /* Beta.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Beta;
+		};
 		CCABE648306F0D9C0089312F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E4114CDB8AFC87364D498D9D /* Development.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -338,6 +434,7 @@
 		};
 		CCABE649306F0D9C0089312F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E4114CDB8AFC87364D498D9D /* Development.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -394,6 +491,7 @@
 		};
 		CCABE64B306F0D9C0089312F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E4114CDB8AFC87364D498D9D /* Development.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -429,6 +527,7 @@
 		};
 		CCABE64C306F0D9C0089312F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E4114CDB8AFC87364D498D9D /* Development.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -530,6 +629,42 @@
 			};
 			name = Release;
 		};
+		F73A49AF8A417FF01AF418CD /* Beta */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 648945628F38366B3E432047 /* Beta.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5V43ARGFF2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				GIT_COMMIT_SHA = unknown;
+				INFOPLIST_FILE = Story/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = YoTale;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Story uses the camera to capture your moments.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Story records audio with your video moments.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Story saves a copy of your captured moments to your Photos library so you own them outside Story.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Story can import existing photos and videos.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lingzhang.story;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Beta;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -538,6 +673,7 @@
 			buildConfigurations = (
 				CCABE648306F0D9C0089312F /* Debug */,
 				CCABE649306F0D9C0089312F /* Release */,
+				167E49CFBE16CE49851C7AA5 /* Beta */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -547,6 +683,7 @@
 			buildConfigurations = (
 				CCABE64B306F0D9C0089312F /* Debug */,
 				CCABE64C306F0D9C0089312F /* Release */,
+				F73A49AF8A417FF01AF418CD /* Beta */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -556,6 +693,7 @@
 			buildConfigurations = (
 				CCABE64E306F0D9C0089312F /* Debug */,
 				CCABE64F306F0D9C0089312F /* Release */,
+				0BC64CDA8F96B8F826042E1F /* Beta */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -565,6 +703,7 @@
 			buildConfigurations = (
 				CCABE651306F0D9C0089312F /* Debug */,
 				CCABE652306F0D9C0089312F /* Release */,
+				04734CB5A8A2BAC30A995AD1 /* Beta */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

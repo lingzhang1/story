@@ -79,16 +79,27 @@ final class AuthStore: NSObject {
         state = .signedIn
     }
 
-    // ---- Email OTP -----------------------------------------------------------------------------------
-    func startEmailOTP(email: String) async throws -> OTPChallenge {
+    // ---- Unified email entry (self-signup OR sign-in) -----------------------------------------------
+    /// Begin the one email-first journey. Returns a challenge whose `kind` records whether the subsequent
+    /// code verifies a new registration (ConfirmSignUp) or an existing-user sign-in. The UI treats both the
+    /// same visually.
+    func startEmailAuth(email: String) async throws -> OTPChallenge {
         state = .authenticating
-        do { return try await client.startEmailOTP(email: email) }
-        catch { state = .signedOut; throw error }
+        do { return try await client.startEmailAuth(email: email) }
+        catch { state = .signedOut; lastError = (error as? LocalizedError)?.errorDescription; throw error }
     }
 
-    func verifyEmailOTP(_ code: String, challenge: OTPChallenge) async throws {
+    /// Resend the code for the SAME challenge kind (ResendConfirmationCode for a new-user confirm, or a fresh
+    /// EMAIL_OTP InitiateAuth for an existing-user sign-in).
+    func resendCode(for challenge: OTPChallenge) async throws -> OTPChallenge {
+        do { return try await client.resendCode(for: challenge) }
+        catch { lastError = (error as? LocalizedError)?.errorDescription; throw error }
+    }
+
+    /// Verify the code and finish sign-in. Routes on `challenge.kind` inside the client.
+    func verifyCode(_ code: String, challenge: OTPChallenge) async throws {
         do {
-            let t = try await client.verifyEmailOTP(code, challenge: challenge)
+            let t = try await client.verifyCode(code, challenge: challenge)
             try await finishSignIn(with: t)
         } catch { state = .signedOut; lastError = (error as? LocalizedError)?.errorDescription; throw error }
     }

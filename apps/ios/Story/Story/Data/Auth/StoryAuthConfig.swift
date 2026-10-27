@@ -6,20 +6,23 @@ import Foundation
 /// Dev defaults match the provisioned `story-development-auth` stack; override at launch via environment for
 /// staging/prod. There is NO client secret (the iOS app client is public, PKCE-protected).
 enum StoryAuthConfig {
-    static let region = env("STORY_COGNITO_REGION") ?? "us-east-1"
-    static let userPoolId = env("STORY_COGNITO_USER_POOL_ID") ?? "us-east-1_AzfHOEdA5"
-    static let appClientId = env("STORY_COGNITO_APP_CLIENT_ID") ?? "5rnvp7oq6d7crbt01ldpe89tkh"
+    static let region = StoryEnvironment.current.cognitoRegion
+    static let userPoolId = StoryEnvironment.current.userPoolId
+    static let appClientId = StoryEnvironment.current.appClientId
     /// Cognito hosted domain PREFIX (the full host is `<prefix>.auth.<region>.amazoncognito.com`).
-    static let domainPrefix = env("STORY_COGNITO_DOMAIN_PREFIX") ?? "story-development-auth"
+    static let domainPrefix = StoryEnvironment.current.domainPrefix
     /// Native custom-scheme redirect registered on the app client + in Info.plist URL types.
-    static let redirectURI = env("STORY_COGNITO_REDIRECT_URI") ?? "story://auth"
+    static let redirectURI = StoryEnvironment.current.redirectURI
     static let appleProviderName = "SignInWithApple"
 
     /// Apple sign-in is only offered when the Apple IdP has been configured on the pool. Until the Apple
     /// Developer credentials are provisioned, the UI keeps the Apple button disabled / "unavailable in this
     /// build" rather than showing a nonfunctional button (owner directive, Phase 3).
     static var appleSignInAvailable: Bool {
-        (env("STORY_APPLE_SIGNIN_AVAILABLE") ?? "0") == "1"
+        // Feature flag (NOT part of the baked backend environment): resolve via the durable launch-config
+        // chain (scheme env → persisted → nil). Defaults OFF so the Apple button stays hidden until the
+        // Apple IdP is actually provisioned.
+        (StoryLaunchConfig.value("STORY_APPLE_SIGNIN_AVAILABLE") ?? "0") == "1"
     }
 
     static var domainHost: String { "\(domainPrefix).auth.\(region).amazoncognito.com" }
@@ -38,13 +41,5 @@ enum StoryAuthConfig {
             .init(name: "code_challenge_method", value: "S256"),
         ]
         return c.url!
-    }
-
-    private static func env(_ k: String) -> String? {
-        // Durable resolution: env var (attached launch) → persisted UserDefaults (sticky from a prior attached
-        // launch) → nil (caller's default). This keeps a DETACHED / TestFlight beta build on beta instead of
-        // silently reverting to the dev defaults below, because ProcessInfo.environment is empty when the app
-        // is not launched attached to Xcode. An env var still wins when present.
-        return StoryLaunchConfig.value(k)
     }
 }

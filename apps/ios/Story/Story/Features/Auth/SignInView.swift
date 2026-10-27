@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Passwordless sign-in: Email OTP (primary) + Sign in with Apple (when configured). No passwords.
+/// Passwordless email sign-up AND sign-in in ONE screen (TestFlight self-signup, Option A): enter email →
+/// get a code → enter it → you're in. A brand-new email self-registers (Cognito SignUp + ConfirmSignUp); a
+/// returning email signs in (EMAIL_OTP). The visual journey is identical; the client runs the correct Cognito
+/// operation behind the scenes. No passwords, no invite codes, no separate registration screen.
 struct SignInView: View {
     let auth: AuthStore
     var onSignedIn: () -> Void
@@ -52,11 +55,11 @@ struct SignInView: View {
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
             Button { Task { await requestCode() } } label: {
-                HStack { if busy { ProgressView() }; Text("Email me a code") }.frame(maxWidth: .infinity)
+                HStack { if busy { ProgressView() }; Text("Continue") }.frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .disabled(busy || !AuthHelpers.isPlausibleEmail(email))
-            Text("YoTale is invite-only. Use the email your invite was sent to.")
+            Text("New here or returning — we'll email you a code. No password needed.")
                 .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
         }
     }
@@ -73,12 +76,10 @@ struct SignInView: View {
             }
             .buttonStyle(.borderedProminent).disabled(busy || code.count < 4)
             Button(cooldownLeft > 0 ? "Resend in \(cooldownLeft)s" : "Resend code") {
-                Task { await requestCode() }
+                Task { await resend() }
             }
             .font(.footnote).disabled(busy || cooldownLeft > 0)
-            // Codes can take a minute or two. If none arrives, it's almost always an uninvited email —
-            // say so without confirming whether the account exists (no enumeration).
-            Text("The code can take a minute or two. No code? YoTale is invite-only — make sure you used your invited email.")
+            Text("The code can take a minute or two to arrive. Check your spam folder if you don't see it.")
                 .font(.caption2).foregroundStyle(.tertiary).multilineTextAlignment(.center)
         }
     }
@@ -88,20 +89,26 @@ struct SignInView: View {
         guard cooldown.canRequest() else { startCooldownTimer(); return }
         error = nil; busy = true; defer { busy = false }
         do {
-            challenge = try await auth.startEmailOTP(email: email)
+            challenge = try await auth.startEmailAuth(email: email)
             step = .code
             startCooldownTimer()
-        } catch CognitoAuthError.inviteOnly {
-            // Stay on the email step — no code screen for a path that can't receive a code.
-            error = CognitoAuthError.inviteOnly.errorDescription
         } catch { self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn't send a code." }
+    }
+
+    private func resend() async {
+        guard let current = challenge, cooldown.canRequest() else { startCooldownTimer(); return }
+        error = nil; busy = true; defer { busy = false }
+        do {
+            challenge = try await auth.resendCode(for: current)
+            startCooldownTimer()
+        } catch { self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn't resend the code." }
     }
 
     private func verify() async {
         guard let challenge else { return }
         error = nil; busy = true; defer { busy = false }
         do {
-            try await auth.verifyEmailOTP(code, challenge: challenge)
+            try await auth.verifyCode(code, challenge: challenge)
             onSignedIn()
         } catch CognitoAuthError.badCode {
             code = ""; error = CognitoAuthError.badCode.errorDescription
@@ -112,9 +119,24 @@ struct SignInView: View {
         } catch CognitoAuthError.tooManyAttempts {
             code = ""; self.challenge = nil; step = .email
             error = CognitoAuthError.tooManyAttempts.errorDescription
+        } catch CognitoAuthError.noChallengeSession {
+            // New account was CONFIRMED but Cognito couldn't auto-sign-in from the signup session; a fresh
+            // sign-in code was just sent. Keep the user on the code screen as an EXISTING-user challenge.
+            code = ""
+            self.challenge = OTPChallenge(session: "", email: AuthHelpers.normalizeEmail(email),
+                                          maskedDestination: challenge.maskedDestination, kind: .signIn)
+            Task { await requestFreshSignInCode() }
+            error = "Almost there — enter the new code we just emailed you."
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? "That code didn't work."
         }
+    }
+
+    /// Replace the placeholder post-confirm challenge with a real EMAIL_OTP sign-in challenge (carries the
+    /// Cognito Session needed to verify). Used only on the rare ConfirmSignUp-session fallback.
+    private func requestFreshSignInCode() async {
+        do { challenge = try await auth.startEmailAuth(email: email) }
+        catch { self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn't send a new code." }
     }
 
     private func appleSignIn() async {

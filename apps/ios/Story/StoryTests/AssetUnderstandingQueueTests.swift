@@ -48,7 +48,12 @@ final class AssetUnderstandingQueueTests: XCTestCase {
     private func queue(_ analyzer: AUAnalyzing) -> AssetUnderstandingQueue {
         // relativeMediaPath will be set to a non-"media/" path so the existence guard
         // is bypassed and the injected extractor runs.
-        AssetUnderstandingQueue(context: ctx, service: analyzer, extractFrames: fakeFrames())
+        // isAuthed:{true} — these tests drive the drain state machine directly; the shared auth gate
+        // (sharedIsAuthed defaults to {false}, added with the sign-out defer behavior) would otherwise
+        // silently defer every job (pending, attempts=0, no understanding). The two push-seam tests set
+        // sharedIsAuthed globally instead; this helper opts in locally.
+        AssetUnderstandingQueue(context: ctx, service: analyzer, extractFrames: fakeFrames(),
+                                isAuthed: { true })
     }
 
     private func enqueueTestJob(_ q: AssetUnderstandingQueue, moment: UUID) {

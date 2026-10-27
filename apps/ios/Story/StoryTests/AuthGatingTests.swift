@@ -116,15 +116,23 @@ final class AuthGatingTests: XCTestCase {
         XCTAssertFalse(gate.presentingSignIn)
     }
 
-    // 3. Invite-only (Option D): the inviteOnly error carries a non-enumerating message — it never reveals
-    //    whether the account exists, and points the user at the invite / request-access path.
-    func test_inviteOnly_message_does_not_enumerate() {
-        let msg = CognitoAuthError.inviteOnly.errorDescription ?? ""
-        XCTAssertFalse(msg.isEmpty)
-        XCTAssertTrue(msg.lowercased().contains("invite"), "should state it's invite-only")
-        // Must NOT confirm existence/absence of an account (no enumeration wording).
-        for leak in ["no account", "not found", "doesn't exist", "does not exist", "already exists", "unregistered"] {
-            XCTAssertFalse(msg.lowercased().contains(leak), "invite message must not enumerate (\(leak))")
+    // 3. Unified self-signup/sign-in (Option A): the user-facing error copy no longer says "invite-only"
+    //    and never enumerates whether an account exists. `.noOTPPath` is the "couldn't send a code" case.
+    func test_error_copy_does_not_enumerate_or_mention_invite() {
+        let messages = [
+            CognitoAuthError.noOTPPath.errorDescription ?? "",
+            CognitoAuthError.accountDisabled.errorDescription ?? "",
+            CognitoAuthError.badCode.errorDescription ?? "",
+        ]
+        for msg in messages {
+            XCTAssertFalse(msg.isEmpty)
+            let lower = msg.lowercased()
+            XCTAssertFalse(lower.contains("invite"), "copy must not mention invite-only any more: \(msg)")
+            // Must NOT confirm existence/absence of an account (no enumeration wording).
+            for leak in ["no account", "not found", "doesn't exist", "does not exist",
+                         "already exists", "unregistered", "no such user"] {
+                XCTAssertFalse(lower.contains(leak), "error must not enumerate (\(leak)): \(msg)")
+            }
         }
     }
 }
