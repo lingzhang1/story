@@ -58,13 +58,13 @@ require_user on retrieval + delete; account-scoped composite keys (a wrong owner
 - **iOS retrieval/cache-hit** is separately gated by `STORY_REUSABLE_EVIDENCE` (default OFF).
 - So no durable personal-image package exists in any environment until the owner explicitly enables the server gate.
 
-**Moment deletion:** `DELETE /v1/evidence/{moment}` exists, is tested, account-scoped, idempotent — BUT **it has no caller**: the repo's Moment deletion is a device-local SwiftData operation; there is no server-side Moment-deletion flow that invokes it. Wiring the iOS Moment-delete path to call this endpoint is a small remaining task (device code; no new infra).
+**Moment deletion (WIRED 2026-10-26):** the iOS **permanent** library-delete path (`StoryUseCases.deleteMomentFromLibrary` → `StoryRepository.deleteMomentFromLibrary`) now fires a best-effort `DELETE /v1/evidence/{moment}` for a cloud-backed Moment BEFORE the local cascade. It is account-scoped + idempotent server-side, fire-and-forget (a transport/auth failure never blocks the local delete and never falsely reports cloud deletion), and only fires on **permanent** deletion. The **unlink** path (`removeMoment` — removes a `StoryMomentLink` only) is untouched and deletes NO evidence, so removing a Moment from one Story never destroys shared evidence. Per-Moment evidence is not shared across Moments, so deletion strands no other Moment.
 
-**Account deletion:** `delete_for_owner` exists + is tested, BUT the repository has **NO account-deletion orchestration anywhere** (verified by search). There is no existing deletion workflow for cached evidence to join. A full account-deletion subsystem is explicitly out of this milestone's scope.
+**Honest limitation (device-local delete):** `deleteMomentFromLibrary` is a local SwiftData cascade; it does NOT delete the Moment's cloud **source** original (no cloud-source-delete path exists in the app — `media_store` is non-deleting). P1-F deletes the cloud **evidence** on this action, which is strictly more cleanup than the source gets today. Nothing claims the cloud source is deleted.
 
-**Provisional retention is NOT ENFORCED:** the media table has NO TTL and the media bucket has NO lifecycle expiration on completed objects (both verified in CDK: `TimeToLiveSpecification` undefined; "NO expiration on completed originals"). So a provisional package whose upload never completes would persist **indefinitely**. The manifest's `retention` field is descriptive only — nothing enforces it. There is NO orphan-sweep job yet (only the `delete_for_*` primitives).
+**Account deletion:** `delete_for_owner` exists + is tested, but is UNWIRED — the repo has NO account-deletion orchestration (verified). Audit/design is in §5a; implementation is a separate future milestone (NOT built).
 
-**Conclusion:** persistent caching is SAFE ONLY while the server gate stays OFF. Turning it ON is blocked until (a) provisional expiry is actually enforced and (b) Moment/account deletion reach the evidence store. See §13 blockers.
+**Retention — DELIBERATE owner-approved trade-off (revised policy 2026-10-26):** there is intentionally NO automatic expiry of verified OR provisional evidence, NO DynamoDB TTL, NO S3 lifecycle rule, NO orphan sweep, NO background deletion. A never-verified provisional package and an interrupted-write orphan are RETAINED and simply read as a cache MISS until an explicit deletion or a future separately-approved retention policy. Storage may grow; provisional images are private + unverified + never served as planner evidence without authoritative media verification. This is an explicit decision, not an oversight.
 
 ## 11. Tests (offline)
 
@@ -78,19 +78,35 @@ require_user on retrieval + delete; account-scoped composite keys (a wrong owner
 
 Measure, baseline vs cache-hit separately: AU-time hash duration; cache hit/miss rate; cached-package download bytes; pre-planning source-video restore COUNT + bytes; duplicate frame-extraction count; contact-sheet build latency; Create→planner-submission latency; planner image count + payload bytes; pre-render restore count. Beacons exist (`MediaEngineV1.beacon`: "evidence cache: N of M served", "evidence-accounting…"). **No latency gain is claimed yet** — the key acceptance criterion (a normally imported+uploaded Moment has reusable evidence for its FIRST Create without a second extraction) must be measured on dev after enablement.
 
-## 13. Known limitations & RELEASE BLOCKERS for enabling persistence
+## 13. Known limitations & remaining gates (revised policy)
 
-**Safe to merge now** with both gates OFF (no durable personal images written; iOS path inert). The branch is a no-op in production until the server gate is flipped.
+**Safe to merge** with both gates OFF (production no-op). Under the revised retention policy, automatic expiry is explicitly NOT required, so provisional retention is no longer a release blocker — it is an accepted trade-off (§10).
 
-**BLOCKERS before `STORY_EVIDENCE_PERSIST_ENABLED=1` (owner decisions / new work):**
-1. **Provisional retention enforcement** — the media table/bucket have no TTL/lifecycle; a never-uploaded provisional package would persist forever. Needs EITHER an enforced per-item TTL (a DynamoDB TTL attribute on the evidence rows + an S3 lifecycle rule on an `evidence/` prefix — small CDK change, owner-approved infra) OR a scheduled orphan/expiry sweep. Not built (would touch CDK/IAM → owner approval).
-2. **Moment-deletion wiring** — `DELETE /v1/evidence/{moment}` exists but the iOS Moment-delete path does not call it yet (device code; no infra).
-3. **Account-deletion orchestration** — none exists in the repo; `delete_for_owner` is unwired. A full account-deletion workflow is out of scope; flagged as a pre-beta dependency.
+**Remaining before enabling `STORY_EVIDENCE_PERSIST_ENABLED=1`:**
+- **Device build + acceptance** — iOS is `swiftc -parse`-clean only; the owner's Xcode ⌘U is authoritative (SwiftData macro, cross-file/actor isolation).
+- **On-dev performance measurement** (§12) — confirm the first-Create-no-second-extraction criterion.
+- **Account-deletion** — audit/design only (§5a); a full workflow is a separate future milestone. Not a blocker for enabling reuse, but a pre-beta privacy dependency.
 
-**Other:**
-- **Device build pending** — iOS is `swiftc -parse`-clean only; the owner's Xcode ⌘U is the authoritative gate (SwiftData macro, cross-file/actor isolation).
-- **Performance not verified** (see §12).
-- **Orphan sweep** is a primitive, not a scheduled job.
+**NOT introduced (policy §6, verified):** no DynamoDB TTL, no S3 lifecycle rule, no orphan sweep, no cron/background deletion, no CDK/IAM change (infra diff since merge is empty). `sweep_orphans` is not a method — stale docstring references were corrected.
+
+## 5a. Account-deletion — AUDIT & DESIGN ONLY (not implemented)
+
+**Current state:** the repository has NO account-deletion workflow (no Delete-Account UI/API, no Cognito deletion, no account-wide cleanup). So no existing orchestration exists for evidence to join; `EvidenceStore.delete_for_owner` is a ready primitive with no caller.
+
+**Account-owned data inventory** (what a future deletion must reach): Stories (`story_store`), Moments + source media (`media_store`, media_kind=moment), GeneratedOutputs + rendered MP4s (media_kind=generated), AU understanding JSON (`understanding_store`), **reusable AU frame packages (`evidence_store`, this milestone)**, saved catalog-music references + imported-music metadata/bytes (`music_favorites` + media_kind=music), AI artifacts (media_kind=ai_artifact), pending edit-plan/coverage jobs (`edit_plan_jobs`), rate-limit + quota rows, Cognito identity/claims.
+
+**Proposed architecture (future milestone, for later approval):** reauthenticated user → an authenticated `DELETE /v1/account` that (1) authorizes against the trusted principal, (2) discovers all account-scoped rows by PK query per store (never a Scan), (3) deletes in dependency order (jobs/outputs → stories → links → moments → media + evidence + understanding → music → identity last), (4) is idempotent + resumable (a partial failure re-runs safely; each store's delete is account-scoped + idempotent), (5) cancels in-flight jobs first, (6) records a tombstone so a re-auth cannot resurrect, (7) honors any legal data-retention exception. Minimal additions: one endpoint + a per-store `delete_for_owner` (evidence already has one). Real-device acceptance: create data across every store, delete account, assert each store's PK query returns empty + S3 prefixes gone + a second delete is a no-op. **No part of this is built in this milestone.**
+
+## 9a. Development activation checklist (do NOT enable in this task — both flags stay OFF)
+
+1. Set server `STORY_EVIDENCE_PERSIST_ENABLED=1` (dev service) + client `STORY_REUSABLE_EVIDENCE=1` (Run scheme).
+2. Normal Moment import → AU (now sends `meta.content_sha256`) → upload completes.
+3. Confirm authoritative SHA verification: `GET /v1/evidence/{moment}` returns `available:true` only after the media record is `cloud_verified` with a matching sha.
+4. First Create on that Story → confirm the beacon "evidence cache: N of M served", NO pre-planning full-video restore for served Moments, NO `MomentFrameExtractor` re-extraction.
+5. Confirm one Highlights sheet + one Full Story sheet are editorially different (mapper).
+6. Original / Revise / Explore all still work; rendered MP4 plays.
+7. Permanent-delete a cached Moment → confirm `DELETE /v1/evidence` fired + the package is gone; unlink a Moment from a Story → confirm the package SURVIVES.
+8. Record storage + latency (baseline vs cache-hit) per §12.
 
 ## 14. Frozen contracts / infra
 

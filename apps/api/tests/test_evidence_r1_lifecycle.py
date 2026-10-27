@@ -330,3 +330,25 @@ def test_account_delete_removes_all_owner_evidence(ctx):
     assert n == 2
     assert evid.get_manifest(owner="story-alice", moment_id=MID) is None
     assert evid.get_manifest(owner="story-alice", moment_id=other) is None
+
+
+# ---- §3/§10 retention policy: NO automatic expiry (owner-approved deliberate trade-off) ----------
+def test_no_ttl_or_expiry_attribute_written(ctx):
+    client, s3, media, evid = ctx
+    assert _au(client, "alice").status_code == 200
+    import json as _json
+    raw = evid._ddb.items[("story-alice", MID)]            # the stored DDB item
+    assert "ttl" not in raw and "expires_at" not in raw    # no DynamoDB TTL (policy §6)
+    man = _json.loads(raw["manifest_json"]["S"])
+    assert "ttl" not in man and "expires_at" not in man    # manifest carries no expiry either
+
+
+def test_provisional_and_verified_durable_no_sweep(ctx):
+    client, s3, media, evid = ctx
+    assert _au(client, "alice").status_code == 200
+    # provisional survives (there is no sweep/auto-expiry) — still present before upload completes
+    assert evid.get_manifest(owner="story-alice", moment_id=MID) is not None
+    _upload_verified(client, media, s3, "alice")
+    # verified package is durable across repeated reads (Create/Revise/Explore never consume/expire it)
+    for _ in range(3):
+        assert client.get(f"/v1/evidence/{MID}", headers=_auth("alice")).json()["available"] is True

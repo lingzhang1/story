@@ -30,10 +30,13 @@ ordered + idempotent so a partial write is never presented as complete:
 A reader treats a manifest whose referenced blob is missing/short as a cache MISS (fallback), never a
 hit. A failed evidence write NEVER touches the AU understanding record (the caller persists AU first).
 
-DELETION / ORPHANS (P1-F §10): delete the manifest + packed blob when the source Moment media or the
-account is deleted; `sweep_orphans` reclaims blobs whose manifest is gone (interrupted write) and
-manifests whose blob is gone. Shared media referenced by other Moments is never deleted here (the
-evidence blob is per-(owner, moment, source-sha), so deleting one Moment's evidence cannot strand
+DELETION (P1-F §4, revised policy 2026-10-26): delete the manifest + packed blob ONLY on an EXPLICIT
+user-initiated permanent deletion — `delete_for_moment` (permanent Moment deletion) and `delete_for_owner`
+(account deletion, audit/design only — unwired). There is DELIBERATELY NO automatic expiry, TTL, lifecycle
+rule, or orphan sweep (owner-approved retention trade-off §6): an interrupted write (blob without manifest,
+or a never-verified provisional package) is simply RETAINED and read as a cache MISS until explicit deletion
+or a future separately-approved retention policy. Shared media referenced by other Moments is never deleted
+here (the evidence blob is per-(owner, moment, source-sha), so deleting one Moment's evidence cannot strand
 another Moment's — they have distinct manifests even when the source bytes are shared).
 """
 from __future__ import annotations
@@ -139,7 +142,7 @@ class EvidenceStore:
         """Persist the accepted frames as evidence_package/1. Returns the manifest dict.
 
         Steps (recoverable, idempotent): pack -> put blob (content-addressed) -> put manifest. A
-        partial write (blob written, manifest not) is reclaimed by sweep_orphans and read as a MISS.
+        partial write (blob written, manifest not) is simply RETAINED and read as a MISS (no sweep; §6).
 
         P1-F §4/§5: `owner` is the trusted account; an empty owner is REFUSED (anonymous AU persists
         no account-scoped cache). The blob id is content-addressed by its OWN sha so a repeat AU of the

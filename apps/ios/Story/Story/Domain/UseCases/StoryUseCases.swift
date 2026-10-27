@@ -200,7 +200,20 @@ final class StoryUseCases {
     }
 
     /// Explicit library deletion: destroy the Moment, its owned media, and its AU (cascades its links).
+    /// P1-F §4: this is the ONLY path authorized to delete cached AU evidence — a PERMANENT Moment deletion,
+    /// never an unlink (`unlinkMoment` above leaves the Moment + its evidence intact). We fire a BEST-EFFORT
+    /// account-scoped cloud evidence delete BEFORE the local cascade (capturing the id while the Moment still
+    /// exists), only when the Moment is cloud-backed (else there is no server evidence to remove). The cloud
+    /// delete is fire-and-forget + idempotent: a transport/auth failure never blocks the local deletion and is
+    /// safely re-deletable later — we never block the user's delete on the network, and never falsely claim the
+    /// cloud copy is gone. Per-Moment evidence is not shared across Moments, so this strands no other Moment.
     func deleteMomentFromLibrary(_ moment: MomentModel) throws {
+        let momentId = moment.id
+        let cloudBacked = (moment.cloudMediaId ?? "").isEmpty == false
+        if cloudBacked, AuthStore.shared?.storyUserId != nil {
+            let svc = AUEvidenceService()
+            Task.detached { await svc.deleteEvidence(momentId: momentId) }   // best-effort, non-blocking
+        }
         try repository.deleteMomentFromLibrary(moment)
     }
 

@@ -128,4 +128,21 @@ struct AUEvidenceService {
         guard !out.isEmpty else { throw AUEvidenceError.integrity }
         return out
     }
+
+    /// P1-F §4: delete the caller's cached evidence for one Moment (ONLY from an EXPLICIT permanent Moment
+    /// deletion — never from unlinking a Moment from one Story). Account-scoped + idempotent server-side.
+    /// Returns whether the server confirmed the delete (HTTP 2xx). A transport/auth failure returns false and
+    /// NEVER throws into the local delete flow — so the caller never falsely reports cloud deletion as done.
+    @discardableResult
+    func deleteEvidence(momentId: UUID) async -> Bool {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/evidence/\(momentId.uuidString.lowercased())"))
+        req.httpMethod = "DELETE"
+        StoryBackend.authorize(&req)
+        do {
+            let (_, resp) = try await session.data(for: req)
+            return (resp as? HTTPURLResponse).map { (200...299).contains($0.statusCode) } ?? false
+        } catch {
+            return false   // best-effort: a failed cloud delete is recoverable (idempotent re-delete), never fatal
+        }
+    }
 }
