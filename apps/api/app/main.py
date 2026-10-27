@@ -1280,7 +1280,15 @@ def create_app() -> FastAPI:
                 log.warning("asset_understanding_evidence_cache_failed",
                             extra={"operation": "asset_understanding", "correlation_id": correlation_id,
                                    "success": True, "evidence_cached": False,
-                                   "error": f"{type(_ev_err).__name__}"[:120]})
+                                   "error": f"{type(_ev_err).__name__}"[:120],
+                                   # Privacy-safe boto3 detail: AWS error code + failing operation + a trimmed
+                                   # message (NO image bytes, NO prose). A ClientError's class name is always
+                                   # "ClientError"; the Code (AccessDenied / ValidationException / …) is what
+                                   # actually pinpoints the failure.
+                                   "aws_error_code": getattr(_ev_err, "response", {}).get("Error", {}).get("Code")
+                                       if hasattr(_ev_err, "response") else None,
+                                   "aws_operation": getattr(_ev_err, "operation_name", None),
+                                   "error_detail": str(_ev_err)[:300]})
         log.info("asset_understanding_evidence_cache",
                  extra={"operation": "asset_understanding", "correlation_id": correlation_id,
                         "evidence_cached": evidence_cached, "frame_count": len(au_frames),

@@ -208,13 +208,25 @@ final class StoryUseCases {
     /// safely re-deletable later — we never block the user's delete on the network, and never falsely claim the
     /// cloud copy is gone. Per-Moment evidence is not shared across Moments, so this strands no other Moment.
     func deleteMomentFromLibrary(_ moment: MomentModel) throws {
+        // Capture the values we need as plain Sendables BEFORE the local cascade deletes the managed object
+        // (reading a deleted SwiftData object later would crash). cloudBacked gates whether any server evidence
+        // could exist at all.
         let momentId = moment.id
         let cloudBacked = (moment.cloudMediaId ?? "").isEmpty == false
-        if cloudBacked, AuthStore.shared?.storyUserId != nil {
-            let svc = AUEvidenceService()
-            Task.detached { await svc.deleteEvidence(momentId: momentId) }   // best-effort, non-blocking
-        }
+        let owner = AuthStore.shared?.storyUserId
+
+        // Local delete FIRST (the user-visible action; must always complete). Doing it before the network task
+        // means the best-effort cloud delete can never run concurrently with the SwiftData cascade.
         try repository.deleteMomentFromLibrary(moment)
+
+        // THEN fire the best-effort, account-scoped cloud evidence delete — fire-and-forget + idempotent, so a
+        // transport/auth failure never blocks (the local delete already happened) and is safely re-deletable.
+        // Per-Moment evidence is not shared across Moments, so this strands no other Moment. P1-F §4: this is
+        // the ONLY path authorized to delete cached evidence — a PERMANENT deletion, never an unlink.
+        if cloudBacked, owner != nil {
+            let svc = AUEvidenceService()
+            Task.detached { await svc.deleteEvidence(momentId: momentId) }
+        }
     }
 
     /// Delete a Story and its own dependents (links/outputs/guide). Independent global Moments survive.
