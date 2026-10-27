@@ -509,6 +509,18 @@ export class StoryApiStack extends cdk.Stack {
               // Frozen edit-planner prompt pin + model fallback (so the sync + async paths both use v5.2).
               { name: "STORY_EDIT_PLAN_VERSION", value: "5.2" },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
+              // P1-F reusable AU visual evidence — SERVER persistence gate (default OFF everywhere). This is the
+              // authoritative kill-switch: when "0" the AU endpoint writes NO durable personal-frame package
+              // even if an authed client sends a content_sha256 claim. DURABLE in CDK (an App Runner env is a
+              // full-replace on every deploy, so a manual console/CLI set is wiped by the next `cdk deploy`).
+              // Enable for DEV device testing with `-c evidencePersist=1`; beta/gamma/prod stay OFF until a
+              // retention/account-deletion policy is approved. Pair with the iOS Run-scheme flag
+              // STORY_REUSABLE_EVIDENCE=1 (device-side; this server flag alone only persists, it does not make
+              // the client reuse).
+              { name: "STORY_EVIDENCE_PERSIST_ENABLED",
+                value: ((this.node.tryGetContext("evidencePersist") as string) === "1"
+                        || (environment === "development"
+                            && (this.node.tryGetContext("evidencePersist") as string) !== "0")) ? "1" : "0" },
               // P0 direct-provider mode (Anthropic-Bedrock-revocation contingency). DURABLE in CDK so a
               // redeploy does not silently drop it back to bedrock (that regression broke all dev AI once —
               // a CLI `update-service` env set is wiped by the next `cdk deploy`, which is a FULL env replace).
