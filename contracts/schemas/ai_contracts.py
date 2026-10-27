@@ -702,6 +702,114 @@ class MomentUnderstandingContract(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# AU Visual Evidence Package (P1-F, evidence_package/1) — the REUSABLE, durable
+# manifest for the exact JPEG frames the server ACCEPTED for one AU inference.
+#
+# Purpose (Editorial Pipeline v2 P1-F): the device extracts 24 frames for AU,
+# the server already receives + accepts them, and today they are discarded — so
+# at Create the device restores the full source video and RE-EXTRACTS the same
+# frames to build planner contact sheets. This manifest lets the server persist
+# the accepted frames ONCE (as one packed blob) so editing reuses them instead
+# of re-extracting, and selects editorially-aligned frames per Video Type.
+#
+# This is the MANIFEST only — the packed JPEG bytes live in object storage and
+# are referenced by `frames_ref`. The manifest intentionally does NOT duplicate
+# the AU `observed`/`editorial` JSON (that lives in the understanding store,
+# keyed by the same moment_id); it carries only frame-pixel identity + provenance.
+#
+# FOUR INDEPENDENT versions (P1-F §6 — kept separate on purpose):
+#   1. content_sha256            — source-media fingerprint (pixels' source)
+#   2. frame_extraction_version  — the extractor policy (au_extract/2)
+#   3. (AU prompt version)       — lives on the understanding record, NOT here;
+#                                  a prompt bump must NOT invalidate these pixels
+#   4. package_version           — this manifest's own schema (evidence_package/1)
+# Invalidate the cached JPEGs ONLY when (1) or (2) change, or integrity fails.
+#
+# Designed so a later worker-side tiling path (Option 8-ii, DEFERRED) can consume
+# the SAME packed format without a redesign: the index below is self-describing.
+# ---------------------------------------------------------------------------
+
+
+class EvidenceFrameRef(_Strict):
+    """One cached frame's position in the packed blob + its accepted source timestamp.
+    `t_ms` is the SERVER-MINTED accepted timestamp (same provenance semantics as
+    MomentUnderstandingContract.sampled_frame_ms): which frame existed as input,
+    NOT proof of any semantic/editorial claim. `offset`/`length` locate the JPEG
+    bytes inside the single packed blob (concat-jpeg layout) so a consumer slices
+    them without unpacking 24 separate objects."""
+
+    index: int = Field(..., ge=0, description="0-based position in accepted order")
+    t_ms: int = Field(..., ge=0, description="server-minted accepted source timestamp (ms)")
+    offset: int = Field(..., ge=0, description="byte offset of this JPEG within the packed blob")
+    length: int = Field(..., ge=1, description="byte length of this JPEG within the packed blob")
+
+
+class EvidenceFramesRef(_Strict):
+    """Reference to the single packed-frames blob in authorized, account-scoped
+    object storage. `cloud_media_id` reuses the content-addressed media identity
+    (uuid5(owner + blob sha)); the server resolves bytes through the existing
+    authorized retrieval path — NEVER a client-supplied object key or URL."""
+
+    cloud_media_id: str = Field(..., min_length=1, description="content-addressed storage id of the packed blob")
+    bytes: int = Field(..., ge=1, description="packed-blob size in bytes")
+    sha256: str = Field(..., min_length=64, max_length=64, description="full-file sha256 of the PACKED blob (hex)")
+    layout: str = Field(default="concat-jpeg", description="packing layout; concat-jpeg = JPEGs back-to-back + index")
+
+
+class EvidencePackageContract(_Strict):
+    """evidence_package/1 — the durable manifest of reusable AU frame pixels for one Moment.
+
+    Ownership is SERVER-DERIVED (the authenticated account); a client-supplied owner or
+    object key is NEVER trusted. A client-supplied `content_sha256` is an identity CLAIM
+    about the source media, matched against the account's own cloud-media record — it is
+    not independent proof the pixels came from that source (P1-F §4). An anonymous AU
+    request with no durable owner produces NO package (P1-F §4 signed-in requirement)."""
+
+    schema_version: str = Field(default="evidence_package/1")
+    moment_id: UUID = Field(..., description="stable Moment identity (shared across Stories)")
+    owner: str = Field(..., min_length=1, description="SERVER-DERIVED account scope; never client-trusted")
+    content_sha256: str = Field(
+        ..., min_length=64, max_length=64,
+        description="SOURCE media full-file sha256 (hex) — the pixel-source fingerprint + invalidation anchor",
+    )
+    frame_extraction_version: str = Field(
+        default="au_extract/2",
+        description="extractor policy that produced these pixels; a change INVALIDATES the cached frames",
+    )
+    frame_count: int = Field(..., ge=1, description="number of cached frames (24 for au_frames/1)")
+    frame_encoding: str = Field(default="jpeg")
+    frame_longest_edge: int = Field(default=768, ge=1, description="longest-edge px of each cached frame")
+    sampled_frame_ms: list[int] = Field(
+        ..., description="SERVER-MINTED accepted source timestamps (ms), accepted order; == each ref.t_ms"
+    )
+    frames: list[EvidenceFrameRef] = Field(..., description="per-frame index into the packed blob")
+    frames_ref: EvidenceFramesRef = Field(..., description="the packed-blob storage reference")
+    created_at: datetime = Field(default_factory=_utcnow)
+    retention: str = Field(
+        default="tied-to-source-media",
+        description="lifecycle: deleted with the source Moment media / account (P1-F §10)",
+    )
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "EvidencePackageContract":
+        if self.frame_count != len(self.frames):
+            raise ValueError("frame_count must equal len(frames)")
+        if len(self.sampled_frame_ms) != self.frame_count:
+            raise ValueError("sampled_frame_ms length must equal frame_count")
+        # accepted order == monotonic non-decreasing timestamps; indices 0..n-1 in order
+        last = -1
+        for i, fr in enumerate(self.frames):
+            if fr.index != i:
+                raise ValueError("frames must be in accepted order (index 0..n-1)")
+            if fr.t_ms < last:
+                raise ValueError("frame timestamps must be non-decreasing (accepted order)")
+            if fr.t_ms != self.sampled_frame_ms[i]:
+                raise ValueError("frame.t_ms must match sampled_frame_ms at the same index")
+            last = fr.t_ms
+        return self
+
+
+# ---------------------------------------------------------------------------
 # StoryCoverage (Milestone E, FROZEN 2026-10-06) — "what the collection of
 #   understood Moments MEANS for the Story". DERIVED, RECOMPUTABLE, ADVISORY —
 #   NOT user-authored truth, NOT a checklist. One recomputed snapshot per Story.

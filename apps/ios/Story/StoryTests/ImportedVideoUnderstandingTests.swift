@@ -27,7 +27,8 @@ final class ImportedVideoUnderstandingTests: XCTestCase {
         private(set) var calls = 0
         private(set) var lastContext: [String: Any]?
         func analyze(frames: [AUExtractedFrame], momentId: UUID,
-                     sourceCaptureId: UUID?, captureContext: [String: Any]?) async throws -> MomentUnderstandingDTO {
+                     sourceCaptureId: UUID?, captureContext: [String: Any]?,
+                     contentSha256: String?) async throws -> MomentUnderstandingDTO {
             calls += 1
             lastContext = captureContext
             if let error { throw error }

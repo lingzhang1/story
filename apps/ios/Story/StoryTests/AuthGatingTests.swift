@@ -16,7 +16,7 @@ final class AuthGatingTests: XCTestCase {
     final class CountingAnalyzer: AUAnalyzing {
         var calls = 0
         func analyze(frames: [AUExtractedFrame], momentId: UUID, sourceCaptureId: UUID?,
-                     captureContext: [String: Any]?) async throws -> MomentUnderstandingDTO {
+                     captureContext: [String: Any]?, contentSha256: String?) async throws -> MomentUnderstandingDTO {
             calls += 1
             throw MomentFrameExtractorError.noFrames   // benign; defer behavior is about the call count
         }

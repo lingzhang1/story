@@ -79,6 +79,7 @@ import media_store as _media  # R2/R3: account-owned cloud media ownership + pre
 import story_store as _stories  # R7: account-owned Story document sync (optimistic concurrency)
 import understanding_store as _understanding  # R7-E: account-level Moment Understanding sync
 from understanding_store import music_favorites as _music_favorites  # P1-E: saved catalog-track references
+import evidence_store as _evidence  # P1-F: reusable AU visual-evidence packages (provisional at AU, verified at retrieval)
 
 
 def _edit_planner_prompt_version() -> str:
@@ -758,6 +759,12 @@ def create_app() -> FastAPI:
         ov = getattr(app.state, "_understanding_store_override", None)
         return ov if ov is not None else _understanding.UnderstandingStore()
 
+    def _evidence_store() -> "_evidence.EvidenceStore":
+        # P1-F: test seam mirrors _understanding_store / _media_store. Reuses the EXISTING media bucket+table
+        # env (no new infra). Lazy boto3 clients inside EvidenceStore keep import import-safe without AWS.
+        ov = getattr(app.state, "_evidence_store_override", None)
+        return ov if ov is not None else _evidence.EvidenceStore()
+
     @app.post("/v1/understanding/batch-get", status_code=200)
     def understanding_batch_get(body: UnderstandingGetRequest, principal: Principal = Depends(require_user)):
         """Return the caller's own understanding records for the given moment_ids (account-scoped; a wrong
@@ -785,7 +792,56 @@ def create_app() -> FastAPI:
         return {"written": results}
 
     # ========================================================================================================
-    # P1-E — account-owned My Music FAVORITES (saved catalog-track REFERENCES; never audio bytes). require_user,
+    # P1-F — AU visual-evidence RETRIEVAL (R1 §3). The device asks for a Moment's reusable frame package; the
+    # server turns the AU-time CLAIM into AUTHORITY here by matching the account's VERIFIED cloud-media record.
+    # require_user (no anonymous retrieval). Returns the manifest + a short-lived presigned GET for the packed
+    # blob ONLY when every check passes; otherwise a cache MISS (200 with available=false) so the device falls
+    # back to restore/extract — never an unverified package, never another account's data, never a public URL.
+    # ========================================================================================================
+    @app.get("/v1/evidence/{moment_id}", status_code=200)
+    def evidence_get(moment_id: str, frame_extraction_version: str = "au_extract/2",
+                     principal: Principal = Depends(require_user)):
+        owner = principal.story_user_id
+        store = _evidence_store()
+        manifest = store.get_manifest(owner=owner, moment_id=moment_id)
+        if manifest is None:
+            return {"available": False, "reason": "no_package"}
+
+        # AUTHORITY: the owner must have a VERIFIED cloud-media record for THIS Moment whose full-file sha
+        # matches the package's claimed source sha. This is what promotes a provisional claim to usable — a
+        # client SHA alone never does (R1 §2). list_for_owner is a PK query (account-scoped; no cross-account).
+        media_recs = _media_store().list_for_owner(owner)
+        verified = next((r for r in media_recs
+                         if r.get("source_moment_id") == moment_id
+                         and r.get("state") == _media.STATE_CLOUD_VERIFIED
+                         and r.get("media_kind", "moment") == _media.MEDIA_KIND_MOMENT), None)
+        if verified is None:
+            return {"available": False, "reason": "source_not_verified"}   # upload not done yet -> fallback
+        if verified.get("content_sha256") != manifest.get("content_sha256"):
+            return {"available": False, "reason": "sha_mismatch"}          # replaced/changed source -> fallback
+        if not store.is_valid_for_source(manifest, content_sha256=verified["content_sha256"],
+                                         frame_extraction_version=frame_extraction_version):
+            return {"available": False, "reason": "extractor_version_mismatch"}
+
+        # Integrity: the packed blob must exist and be readable (a missing/short blob reads as a MISS, never
+        # a partial hit). We hand back a short-lived presigned GET to the blob key, not bytes through the API.
+        blob = manifest.get("frames_ref", {})
+        blob_cmid = blob.get("cloud_media_id")
+        if not blob_cmid:
+            return {"available": False, "reason": "no_blob_ref"}
+        presigned = store.presign_packed(owner=owner, blob_cmid=blob_cmid)
+        if presigned is None:
+            return {"available": False, "reason": "blob_missing"}
+        return {"available": True, "manifest": manifest, "download": presigned}
+
+    @app.delete("/v1/evidence/{moment_id}", status_code=200)
+    def evidence_delete(moment_id: str, principal: Principal = Depends(require_user)):
+        """Delete the caller's cached evidence for one Moment (called when the source Moment is permanently
+        deleted). Account-scoped (a wrong owner's composite key simply finds nothing — no cross-account delete).
+        Idempotent: deleting absent evidence returns ok. Reuses the existing media bucket/table — no new infra.
+        Does NOT touch the source media original (media_store's domain) or any OTHER Moment's evidence."""
+        _evidence_store().delete_for_moment(owner=principal.story_user_id, moment_id=moment_id)
+        return {"deleted": True, "moment_id": moment_id}
     # account-scoped. Lets a reinstalled / new device RESTORE the saved-track library. Reuses the R7-E
     # understanding table under a reserved sentinel key — NO new table / CDK / IAM. Licensing-safe: references
     # only; provider audio is never uploaded or stored here.
@@ -1102,6 +1158,15 @@ def create_app() -> FastAPI:
         if isinstance(cap_ctx_raw, dict):
             capture_context = CaptureContext(shot=cap_ctx_raw.get("shot"), beat=cap_ctx_raw.get("beat"))
 
+        # P1-F (R1): OPTIONAL device-supplied source content sha256 CLAIM. Format-validated only here; it is
+        # NOT trusted as cloud-media identity. It lets the server persist a PROVISIONAL evidence package now
+        # (before upload completes); authority is established at RETRIEVAL by matching the account's verified
+        # media record. A missing/malformed value simply means no package is cached this call (AU unaffected).
+        claimed_sha = m.get("content_sha256")
+        if not (isinstance(claimed_sha, str) and len(claimed_sha) == 64
+                and all(c in "0123456789abcdef" for c in claimed_sha.lower())):
+            claimed_sha = None
+
         # --- validate frames + timestamps -------------------------------------
         try:
             fmeta = _json.loads(frames_meta)
@@ -1190,6 +1255,38 @@ def create_app() -> FastAPI:
                    "event_count": len(au.understanding.observed.events),
                    "story_utility": au.understanding.story_context.story_utility.value},
         )
+
+        # P1-F (R1): best-effort PROVISIONAL evidence persistence from the EXACT accepted frames + timestamps.
+        # Gated on: (0) a SERVER env flag STORY_EVIDENCE_PERSIST_ENABLED (DEFAULT OFF) — so NO durable personal-
+        # image package is ever written until the owner turns it on (the iOS client flag does NOT control server
+        # persistence; this is the authoritative kill-switch, §4 activation safety); (a) an authenticated,
+        # non-legacy principal (anonymous AU never creates an account cache); (b) a well-formed source-sha CLAIM.
+        # NEVER breaks AU: any failure is swallowed and only a privacy-safe count/flag is logged (no image bytes,
+        # no prose). No extra model call. The package is PROVISIONAL — authority is established at retrieval by
+        # matching the account's verified media record (R1 §2/§5).
+        evidence_cached = False
+        _persist_enabled = os.environ.get("STORY_EVIDENCE_PERSIST_ENABLED", "0") == "1"
+        if _persist_enabled and claimed_sha is not None and not getattr(principal, "is_legacy", True):
+            try:
+                frame_tuples = [(f.t_ms, f.data) for f in au_frames]
+                _evidence_store().put(
+                    owner=principal.story_user_id, moment_id=str(moment_id),
+                    content_sha256=claimed_sha, frames=frame_tuples,
+                    frame_extraction_version=m.get("frame_extraction_version")
+                        if isinstance(m.get("frame_extraction_version"), str) else "au_extract/2",
+                )
+                evidence_cached = True
+            except Exception as _ev_err:  # noqa: BLE001 — evidence caching must NEVER break AU
+                log.warning("asset_understanding_evidence_cache_failed",
+                            extra={"operation": "asset_understanding", "correlation_id": correlation_id,
+                                   "success": True, "evidence_cached": False,
+                                   "error": f"{type(_ev_err).__name__}"[:120]})
+        log.info("asset_understanding_evidence_cache",
+                 extra={"operation": "asset_understanding", "correlation_id": correlation_id,
+                        "evidence_cached": evidence_cached, "frame_count": len(au_frames),
+                        "persist_enabled": _persist_enabled,
+                        "sha_claim_present": claimed_sha is not None,
+                        "authed": not getattr(principal, "is_legacy", True)})
         return au.understanding
 
     @app.post("/v1/story-coverage", response_model=StoryCoverageContract, status_code=200)

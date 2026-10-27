@@ -609,6 +609,37 @@ final class StoryCreationCoordinator {
             var sheetMissReasons: [String: SheetMissReason] = [:]
             var restoreUnavailableIds: [String] = []
             if wantMultimodal {
+                // P1-F (Option 8-i): FIRST try to satisfy each included Moment from DURABLE cached AU evidence
+                // — on a valid cache hit we build the contact sheet from the cached frames and SKIP both the
+                // full-video restore AND MomentFrameExtractor re-extraction for that Moment. Only the MISSES
+                // fall through to the existing restore+extract path below, so coverage is preserved exactly
+                // while duplicate extraction / pre-planning downloads are eliminated on hits. Pure addition:
+                // flag-gated so it is a no-op (all misses) until enabled, and any failure is a silent miss.
+                let evVideoType: EvidenceVideoType =
+                    (story.editorialMode?.lowercased() == "full") ? .fullStory : .highlights
+                var cachedSheets: [MomentContactSheet] = []
+                var cachedHitIds = Set<UUID>()
+                if StoryReusableEvidence.enabled {
+                    let includedIds0 = Set(build.includedMedia.map { $0.momentId })
+                    let includedMoments0 = story.moments.filter { includedIds0.contains($0.id) }
+                    let perMoment = build.auUsefulRanges   // id(lower) -> ranges, for budget sizing parity
+                    for m in includedMoments0 {
+                        let dur = MomentResolver.plannerDuration(for: m)
+                        let budgetN = ContactSheetBudget.tier1(forDuration: dur)
+                        let cand = Self.editorialCandidates(for: m.id, context: context)
+                        if let sheet = await AUEvidenceCacheHit.buildSheet(
+                            momentId: m.id, videoType: evVideoType,
+                            visualCandidates: cand.visual, narrativeCandidates: cand.narrative,
+                            eventTimesS: cand.events, budget: budgetN) {
+                            cachedSheets.append(sheet); cachedHitIds.insert(m.id)
+                        }
+                        _ = perMoment
+                    }
+                    if !cachedSheets.isEmpty {
+                        MediaEngineV1.beacon("evidence cache: \(cachedSheets.count) of \(includedMoments0.count) Moment(s) served from cached AU frames (no restore/extract)")
+                    }
+                }
+
                 // RELIABILITY (visual-first): a Moment whose local file is evicted (R5) or not-yet-restored is
                 // otherwise SILENTLY skipped by visualBudgetInputs (fileExists -> continue) and planned
                 // text-only — which made an initial create sheet only the Moments that happened to be local at
@@ -616,13 +647,15 @@ final class StoryCreationCoordinator {
                 // Moments to local FIRST (reusing the same R6 path as the render step), so visual-first covers
                 // every Moment regardless of eviction state. A Moment that genuinely cannot be restored still
                 // falls back to text-only (never fabricated), and is counted in momentsTextOnly for diagnostics.
-                let includedIds = Set(build.includedMedia.map { $0.momentId })
+                // P1-F: EXCLUDE Moments already served from cache — they need neither restore nor extraction.
+                let includedIds = Set(build.includedMedia.map { $0.momentId }).subtracting(cachedHitIds)
                 let includedMoments = story.moments.filter { includedIds.contains($0.id) }
                 let restored = await MomentResolver.resolveEnsuringLocal(
                     moments: includedMoments, context: context,
                     activeOwner: AuthStore.shared?.storyUserId,
                     token: { await AuthStore.shared?.validAccessToken() })
-                var mediaById = Dictionary(build.includedMedia.map { ($0.momentId, $0) }) { a, _ in a }
+                var mediaById = Dictionary(build.includedMedia.filter { !cachedHitIds.contains($0.momentId) }
+                    .map { ($0.momentId, $0) }) { a, _ in a }
                 for md in restored.media { mediaById[md.momentId] = md }
                 restoreUnavailableIds = restored.unavailable.map { $0.momentId.uuidString.lowercased() }
                 if !restored.unavailable.isEmpty {
@@ -630,10 +663,12 @@ final class StoryCreationCoordinator {
                 }
                 let budget = await MultimodalVisualBudget.build(
                     Self.visualBudgetInputs(fromMedia: Array(mediaById.values), auUsefulRanges: build.auUsefulRanges))
-                sheets = budget.sheets
+                // Merge cached-hit sheets with the freshly-extracted budget sheets. Cached hits are already
+                // within the per-Moment budget; the global payload ceiling still applies to the extracted set.
+                sheets = cachedSheets + budget.sheets
                 sheetMissReasons = budget.sheetMissReasons
                 budgetDiag = (budget.selectedTier, budget.appliedSteps, budget.momentsTextOnly,
-                              budget.sheets.reduce(0) { $0 + $1.jpeg.count })
+                              sheets.reduce(0) { $0 + $1.jpeg.count })
             }
             // operation_id = idempotency key. Persist BEFORE submit so a crash/restart/retry/dup-tap reuses the
             // SAME job (no duplicate inference). Reuse the Story's existing id on recovery; mint one otherwise.
@@ -993,6 +1028,42 @@ final class StoryCreationCoordinator {
     /// Checks: feasible flag; every referenced Moment resolves to a local file; source ranges valid
     /// (end > start when both present); speed in [0.5, 2.0]; per-segment output duration > 0 and the plan's
     /// total feasible vs the summed source material; transitions in {cut,fade,dissolve}; native_audio in
+    /// P1-F (Option 8-i): parse the editorial candidates + event times for a Moment from its LOCAL
+    /// MomentUnderstanding JSON, for the EvidenceFrameMapper. Reads visual_candidates / narrative_candidates
+    /// (start/end/peak/confidence) + observed.events (start) — all ADVISORY, as persisted. Returns empty
+    /// lists for an absent/older record (the mapper then uses its uniform-overview fallback). Never parses the
+    /// untrusted model `evidence` string.
+    static func editorialCandidates(for momentId: UUID, context: ModelContext)
+        -> (visual: [EvidenceCandidate], narrative: [EvidenceCandidate], events: [Double]) {
+        guard let mu = (try? context.fetch(FetchDescriptor<MomentUnderstandingModel>(
+            predicate: #Predicate { $0.momentId == momentId })))?.first,
+            let data = mu.understandingJSON.data(using: .utf8),
+            let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return ([], [], []) }
+
+        func cands(_ arr: Any?) -> [EvidenceCandidate] {
+            guard let list = arr as? [[String: Any]] else { return [] }
+            return list.compactMap { c in
+                guard let s = (c["start_time"] as? NSNumber)?.doubleValue,
+                      let e = (c["end_time"] as? NSNumber)?.doubleValue else { return nil }
+                return EvidenceCandidate(start: s, end: e,
+                                         peak: (c["peak_time"] as? NSNumber)?.doubleValue,
+                                         confidence: (c["confidence"] as? NSNumber)?.doubleValue)
+            }
+        }
+        var visual: [EvidenceCandidate] = []
+        var narrative: [EvidenceCandidate] = []
+        if let ed = root["editorial"] as? [String: Any] {
+            visual = cands(ed["visual_candidates"]); narrative = cands(ed["narrative_candidates"])
+        }
+        var events: [Double] = []
+        if let observed = root["observed"] as? [String: Any],
+           let evs = observed["events"] as? [[String: Any]] {
+            for ev in evs { if let s = (ev["start_time"] as? NSNumber)?.doubleValue { events.append(s) } }
+        }
+        return (visual, narrative, events)
+    }
+
     /// MVP multimodal: assemble the adaptive-visual-budget inputs for the INCLUDED Moments (those actually in
     /// the planner request). Source URL is resolved from the Moment's local relativePath via MediaStore;
     /// richness uses the SAME AU useful_segments the planner sees (events aren't in the request, so eventCount
