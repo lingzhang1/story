@@ -305,7 +305,12 @@ export class StoryApiStack extends cdk.Stack {
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,
         STORY_WORKER_DEADLINE_S: "840",
-        STORY_EDIT_PLAN_VERSION: "5.2",
+        // EditPlan planner version. DEV runs v5.3 (consumes Rich AU v2 editorial candidates + editorial_type);
+        // beta/gamma/prod stay on v5.2 until promoted. DURABLE in CDK — a manual console/CLI env flip is wiped
+        // by the next `cdk deploy` (App Runner/Lambda env is a full replace), which is exactly how dev silently
+        // reverted 5.3->5.2 after P1-C set it by hand. Override with `-c editPlanVersion=5.2` to roll back.
+        STORY_EDIT_PLAN_VERSION: (this.node.tryGetContext("editPlanVersion") as string)
+          ?? (environment === "development" ? "5.3" : "5.2"),
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
         // P0 direct-provider mode: default DIRECT (OpenAI/Gemini) for ALL envs. Anthropic revoked Bedrock
         // model access on an abuse determination, so Bedrock is no longer a viable default anywhere — the
@@ -518,7 +523,11 @@ export class StoryApiStack extends cdk.Stack {
               { name: "STORY_EPIDEMIC_MODE", value: "prototyping" },
               { name: "STORY_MUSIC_PROVIDER", value: "mcp" },
               // Frozen edit-planner prompt pin + model fallback (so the sync + async paths both use v5.2).
-              { name: "STORY_EDIT_PLAN_VERSION", value: "5.2" },
+              // EditPlan planner version — DEV v5.3, other envs v5.2 (see the worker env note above). Durable
+              // in CDK; `-c editPlanVersion=5.2` rolls dev back.
+              { name: "STORY_EDIT_PLAN_VERSION",
+                value: (this.node.tryGetContext("editPlanVersion") as string)
+                  ?? (environment === "development" ? "5.3" : "5.2") },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
               // P1-F reusable AU visual evidence — SERVER persistence gate (default OFF everywhere). This is the
               // authoritative kill-switch: when "0" the AU endpoint writes NO durable personal-frame package
