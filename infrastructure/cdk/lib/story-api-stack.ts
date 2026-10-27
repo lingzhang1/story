@@ -319,10 +319,12 @@ export class StoryApiStack extends cdk.Stack {
         // only if Bedrock access is restored. Keys are read in-process from Secrets Manager (YoTale-OpenAI-API-Key,
         // YoTale-Gemini-API-Key); both the API instance role and the worker role are granted GetSecretValue.
         STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "direct",
-        ...((this.node.tryGetContext("openaiModel") as string)
-          ? { STORY_OPENAI_MODEL: this.node.tryGetContext("openaiModel") as string } : {}),
-        ...((this.node.tryGetContext("geminiModel") as string)
-          ? { STORY_GEMINI_MODEL: this.node.tryGetContext("geminiModel") as string } : {}),
+        // Model ids MUST match the service defaults (lines below in the App Runner env): in `direct` mode the
+        // async worker needs its own model id or the ModelGateway falls back to a hardcoded gpt-4o — which is
+        // exactly what happened on beta (worker planned on gpt-4o while the service used gpt-5.1). Set the same
+        // unconditional defaults here, still overridable per-deploy via `-c openaiModel=`/`-c geminiModel=`.
+        STORY_OPENAI_MODEL: (this.node.tryGetContext("openaiModel") as string) ?? "gpt-5.1",
+        STORY_GEMINI_MODEL: (this.node.tryGetContext("geminiModel") as string) ?? "gemini-3.8-flash",
         // Reconcile the deployed-vs-source drift (Phase B/C finding): the live dev worker carries the four
         // EditPlan v2 creative-freedom flags = "1". They are part of the FROZEN EditPlan v2 behavior and must
         // not be dropped by this deploy. Context-gated (editplanV2Flags), defaulting ON so the dev deploy
