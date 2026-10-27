@@ -36,6 +36,7 @@ struct MusicPickerView: View {
     @State private var importingFile = false
     @State private var importError: String?
     @State private var myMusicPlayingId: UUID?
+    @State private var resolvingPreviewId: UUID?   // P1-E: a saved favorite whose authorized audio is being re-resolved for preview
     @State private var pickerTab: PickerTab = .songs
 
     // Free-text search + load-more pagination (overlays the recommended list when a query is active).
@@ -350,26 +351,57 @@ struct MusicPickerView: View {
             } label: {
                 Image(systemName: myMusicPlayingId == asset.id ? "pause.circle.fill" : "play.circle")
                     .font(.system(size: 26))
-                    .foregroundStyle(asset.isProviderFavorite ? StoryTheme.gold.opacity(0.3) : StoryTheme.gold)
-            }.buttonStyle(.plain).disabled(asset.isProviderFavorite)   // favorites have no local bytes to preview
+                    .foregroundStyle(Self.canPreview(asset) ? StoryTheme.gold : StoryTheme.gold.opacity(0.3))
+            }.buttonStyle(.plain)
+             .disabled(!Self.canPreview(asset) || resolvingPreviewId == asset.id)   // unavailable/offline track can't preview
+             .accessibilityLabel(myMusicPlayingId == asset.id ? "Pause preview" : "Preview \(asset.displayName)")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(asset.displayName).font(StoryTheme.body(15)).foregroundStyle(StoryTheme.cream).lineLimit(1)
-                Text("\(asset.isProviderFavorite ? "Saved" : "My Music") · \(Self.time(asset.durationSeconds))")
+                Text(Self.subtitle(for: asset))
                     .font(StoryTheme.body(11)).foregroundStyle(StoryTheme.cream.opacity(0.35))
             }
             Spacer()
+            if resolvingPreviewId == asset.id { ProgressView().tint(StoryTheme.gold) }
             Button { stopPreview(); stopMyMusicPreview(); onChoose(.myMusic(asset.id.uuidString)) } label: {
                 Text("Use").font(StoryTheme.body(13, .medium)).foregroundStyle(StoryTheme.ink)
                     .padding(.horizontal, 16).padding(.vertical, 7)
-                    .background(Capsule().fill(StoryTheme.gold))
-            }.buttonStyle(.plain)
+                    .background(Capsule().fill(Self.canUse(asset) ? StoryTheme.gold : StoryTheme.cream.opacity(0.18)))
+            }.buttonStyle(.plain).disabled(!Self.canUse(asset))
         }
         .padding(.vertical, 10).padding(.horizontal, 14)
         .background(RoundedRectangle(cornerRadius: 14).fill(StoryTheme.cream.opacity(0.04)))
         .contextMenu {
             Button("Remove", role: .destructive) { MyMusicStore.shared.remove(asset, from: modelContext) }
         }
+    }
+
+    /// Honest subtitle: distinguishes an imported track's backup/restore state from a saved catalog reference
+    /// (§7 — never claim "backed up" when only metadata exists).
+    private static func subtitle(for asset: MyMusicAssetModel) -> String {
+        let dur = time(asset.durationSeconds)
+        if asset.isProviderFavorite { return "Saved · \(dur)" }
+        switch asset.cloudBackupState {
+        case .cloudVerified: return "My Music · Backed up · \(dur)"
+        case .backingUp:     return "My Music · Backing up… · \(dur)"
+        case .restorePending: return "My Music · Restoring…"
+        case .unavailable:   return "My Music · Unavailable on this device"
+        case .localOnly:     return "My Music · On this device only · \(dur)"
+        }
+    }
+
+    /// Preview is possible for: an imported track whose bytes exist locally, OR a saved catalog favorite (we
+    /// re-resolve its authorized audio on demand). An imported track that is restore_pending/unavailable with
+    /// no local bytes cannot preview yet.
+    private static func canPreview(_ asset: MyMusicAssetModel) -> Bool {
+        if asset.isProviderFavorite { return true }
+        return MyMusicStore.shared.exists(asset)
+    }
+
+    /// "Use" requires a playable local file for an imported track (a favorite is resolved live at create time).
+    private static func canUse(_ asset: MyMusicAssetModel) -> Bool {
+        if asset.isProviderFavorite { return true }
+        return MyMusicStore.shared.exists(asset)
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
@@ -380,6 +412,18 @@ struct MusicPickerView: View {
             do {
                 let asset = try MyMusicStore.shared.importAudio(from: url, into: modelContext)
                 importError = nil
+                // P1-E — back up the imported bytes to the user's account so the track survives reinstall
+                // (owner-approved). Fire-and-forget; honest state lives on the row (backing_up -> cloud_verified).
+                let ctx = modelContext
+                let assetId = asset.id
+                Task {
+                    guard let owner = auth.storyUserId, let tok = await auth.validAccessToken() else { return }
+                    if let a = (try? ctx.fetch(FetchDescriptor<MyMusicAssetModel>(
+                        predicate: #Predicate { $0.id == assetId })))?.first {
+                        try? await MyMusicCloudBackup.backUp(a, owner: owner, accessToken: tok)
+                        try? ctx.save()
+                    }
+                }
                 // A fresh import is usually what the user wants to use right now.
                 stopPreview(); stopMyMusicPreview(); onChoose(.myMusic(asset.id.uuidString))
             } catch {
@@ -390,11 +434,31 @@ struct MusicPickerView: View {
 
     private func startMyMusicPreview(_ asset: MyMusicAssetModel) {
         stopPreview()
-        guard MyMusicStore.shared.exists(asset) else { importError = "That track's file is missing."; return }
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        let p = AVPlayer(url: MyMusicStore.shared.absoluteURL(for: asset.relativePath))
-        player = p; myMusicPlayingId = asset.id; p.play()
+        // Imported track with local bytes: play the managed file directly.
+        if !asset.isProviderFavorite {
+            guard MyMusicStore.shared.exists(asset) else { importError = "That track's file is missing."; return }
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            let p = AVPlayer(url: MyMusicStore.shared.absoluteURL(for: asset.relativePath))
+            player = p; myMusicPlayingId = asset.id; p.play()
+            return
+        }
+        // Saved CATALOG favorite: no local bytes (licensing). Re-resolve the authorized audio on demand through
+        // the EXISTING provider path (never a new player/provider), then play it. If re-resolution fails
+        // (rights/network), show an honest unavailable message rather than silently doing nothing.
+        guard let trackId = asset.providerTrackId else { return }
+        resolvingPreviewId = asset.id
+        Task {
+            let url = try? await MusicCandidatesService().downloadSoundtrack(trackId: trackId)
+            await MainActor.run {
+                resolvingPreviewId = nil
+                guard let url else { importError = "That track can't be previewed right now."; return }
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                let p = AVPlayer(url: url)
+                player = p; myMusicPlayingId = asset.id; p.play()
+            }
+        }
     }
 
     private func stopMyMusicPreview() {
@@ -419,6 +483,12 @@ struct MusicPickerView: View {
             MyMusicStore.shared.saveProviderFavorite(trackId: track.trackId, title: track.title,
                                                      durationSeconds: track.durationSeconds, into: modelContext)
         }
+        // P1-E — propagate the saved-favorite set to the account store so it survives reinstall / syncs across
+        // devices (references only; loss-safe merge handled in MyMusicFavoritesSync). Fire-and-forget.
+        let ctx = modelContext
+        Task { await MyMusicFavoritesSync.shared.pushLocal(
+            context: ctx, activeOwner: auth.storyUserId,
+            token: { [weak auth] in await auth?.validAccessToken() }) }
     }
 
     private var header: some View {

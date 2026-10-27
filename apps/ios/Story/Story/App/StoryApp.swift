@@ -197,6 +197,14 @@ struct StoryApp: App {
                         Task { await UnderstandingSync.shared.push(
                             context: ctx, activeOwner: owner,
                             token: { [weak auth] in await auth?.validAccessToken() }) }
+                        // P1-E — restore account-owned My Music: imported-audio bytes (download+verify) and
+                        // saved catalog-track references. Loss-safe (empty remote never clears local); idempotent.
+                        Task { await MyMusicCloudBackup.restore(
+                            context: ctx, owner: owner ?? "",
+                            accessToken: (await auth.validAccessToken()) ?? "") }
+                        Task { await MyMusicFavoritesSync.shared.reconcile(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
                     }
                 }
         }
@@ -232,6 +240,13 @@ struct StoryApp: App {
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                     Task { await UnderstandingSync.shared.push(
+                        context: ctx, activeOwner: owner,
+                        token: { [weak auth] in await auth?.validAccessToken() }) }
+                    // P1-E — on foreground, restore + reconcile My Music (imported bytes + saved references).
+                    Task { await MyMusicCloudBackup.restore(
+                        context: ctx, owner: owner ?? "",
+                        accessToken: (await auth.validAccessToken()) ?? "") }
+                    Task { await MyMusicFavoritesSync.shared.reconcile(
                         context: ctx, activeOwner: owner,
                         token: { [weak auth] in await auth?.validAccessToken() }) }
                 }

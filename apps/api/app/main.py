@@ -78,6 +78,7 @@ import edit_plan_jobs as _jobs
 import media_store as _media  # R2/R3: account-owned cloud media ownership + presigned upload/download
 import story_store as _stories  # R7: account-owned Story document sync (optimistic concurrency)
 import understanding_store as _understanding  # R7-E: account-level Moment Understanding sync
+from understanding_store import music_favorites as _music_favorites  # P1-E: saved catalog-track references
 
 
 def _edit_planner_prompt_version() -> str:
@@ -253,6 +254,23 @@ class UnderstandingPutRequest(BaseModel):
 class UnderstandingGetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     moment_ids: list[str] = Field(..., min_length=1, max_length=400)
+
+
+class MusicFavorite(BaseModel):
+    """One saved catalog-track reference (P1-E). LICENSING: a reference only — never audio bytes."""
+    model_config = ConfigDict(extra="forbid")
+    track_id: str = Field(..., min_length=1)
+    title: str = Field(default="")
+    duration_seconds: float = Field(default=0.0)
+    saved_at: int = Field(default=0)
+
+
+class MusicFavoritesPutRequest(BaseModel):
+    """PUT /v1/music/favorites body (P1-E). Optimistic concurrency: base_revision is the revision the client
+    last observed (0 to create). The whole list is replaced (the client sends its merged set)."""
+    model_config = ConfigDict(extra="forbid")
+    base_revision: int = Field(..., ge=0)
+    favorites: list[MusicFavorite] = Field(default_factory=list, max_length=2000)
 
 
 class StoryCoverageRequest(BaseModel):
@@ -765,6 +783,35 @@ def create_app() -> FastAPI:
                                     detail={"error": "understanding_too_large", "moment_id": r.moment_id,
                                             "size": e.size, "max": _understanding.MAX_UNDERSTANDING_BYTES})
         return {"written": results}
+
+    # ========================================================================================================
+    # P1-E — account-owned My Music FAVORITES (saved catalog-track REFERENCES; never audio bytes). require_user,
+    # account-scoped. Lets a reinstalled / new device RESTORE the saved-track library. Reuses the R7-E
+    # understanding table under a reserved sentinel key — NO new table / CDK / IAM. Licensing-safe: references
+    # only; provider audio is never uploaded or stored here.
+    # ========================================================================================================
+    def _music_favorites_store() -> "_music_favorites.MusicFavoritesStore":
+        ov = getattr(app.state, "_music_favorites_store_override", None)
+        return ov if ov is not None else _music_favorites.MusicFavoritesStore(_understanding_store())
+
+    @app.get("/v1/music/favorites", status_code=200)
+    def music_favorites_get(principal: Principal = Depends(require_user)):
+        """The caller's saved catalog-track references + the current revision. A never-written account returns
+        an empty list at revision 0 (NOT an error) — a fresh client shows an empty library, never a failure."""
+        return _music_favorites_store().get(principal.story_user_id)
+
+    @app.put("/v1/music/favorites", status_code=200)
+    def music_favorites_put(body: MusicFavoritesPutRequest, principal: Principal = Depends(require_user)):
+        """Replace the caller's saved favorites with optimistic concurrency. base_revision must equal the
+        server's current revision (0 to create); a mismatch returns 409 with the server's current {favorites,
+        revision} so the client MERGES (never a silent overwrite — req §5 two-device safety). References only."""
+        favs = [{"track_id": f.track_id, "title": f.title,
+                 "duration_seconds": f.duration_seconds, "saved_at": f.saved_at} for f in body.favorites]
+        try:
+            return _music_favorites_store().put(
+                owner=principal.story_user_id, base_revision=body.base_revision, favorites=favs)
+        except _music_favorites.FavoritesConflict as c:
+            raise HTTPException(status_code=409, detail={"conflict": True, "current": c.current})
 
     # ---- R4-B: large-file MULTIPART (all require_user; account-scoped; no bytes via App Runner) -----
     @app.post("/v1/media/multipart/initiate", status_code=200)

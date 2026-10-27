@@ -78,6 +78,10 @@ enum CloudMediaKind {
     // R7 Phase 4 — an externalized immutable AI blob (oversized validated EditPlan) uploaded through this SAME
     // pipeline so version history is never capped when a Story doc would exceed the 350 KB server limit.
     static let aiArtifact = "ai_artifact"
+    // P1-E (pre-beta) — a USER-IMPORTED My Music audio file backed up to the user's own account via the SAME
+    // account-owned pipeline (content-addressed, SHA256-verified, account-scoped). Catalog/provider tracks are
+    // NEVER uploaded (licensing); only user-owned imports carry this kind.
+    static let music = "music"
 }
 
 // Back-compat defaults: existing R4 moment callers keep their exact call shape (moment kind, quicktime,
