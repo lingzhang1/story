@@ -64,7 +64,8 @@ final class AuthGatingTests: XCTestCase {
         let queue = AssetUnderstandingQueue(
             context: ctx, service: analyzer,
             extractFrames: { _ in [AUExtractedFrame(jpeg: Data([0xFF]), tMs: 0)] },
-            isAuthed: { authed })
+            isAuthed: { authed },
+            fileExists: { _ in true })                 // seam: don't depend on the device filesystem
 
         let mid = UUID()
         queue.enqueue(momentId: mid, relativeMediaPath: "media/x.mov", sourceCaptureId: nil, captureContext: nil)
