@@ -846,7 +846,17 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
                 errs.append(f"seg{i}: source_end {b} exceeds Moment duration {dur}")
             us = _useful_ranges(moments[aid])  # robust: pairs OR dicts; MalformedPlanError on junk
             if us and not any(not (b <= u[0] or a >= u[1]) for u in us):
-                errs.append(f"seg{i}: source range [{a},{b}] overlaps NO useful_segment {us}")
+                # A source range overlapping NO useful_segment is still fully RENDERABLE (valid range, within
+                # duration, valid speed) — it is an EDITORIAL judgement ("not the useful part"), not a technical
+                # defect. Under the never-block policy (P0: a technically valid, playable video is never
+                # discarded for an unmet creative/editorial objective) this must NOT hard-fail when the
+                # useful-range check is SOFT. The flag (STORY_EDITPLAN_USEFUL_RANGE_SOFT, enabled in dev CDK)
+                # was defined but never consulted here, so the check kept hard-rejecting and surfaced as
+                # invalid_after_repair -> a user error on a playable video (observed on dev job 73978a95).
+                # Soft => a deterministic nudge target, not a validator error (real-duration bound stays HARD
+                # above). Off => unchanged strict behavior.
+                if not _useful_range_soft_on():
+                    errs.append(f"seg{i}: source range [{a},{b}] overlaps NO useful_segment {us}")
         od = tl.declared_output
         if od <= 0:
             errs.append(f"seg{i}: non-positive output_duration {od}")

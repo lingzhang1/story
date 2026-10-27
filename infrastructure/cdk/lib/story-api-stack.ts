@@ -409,6 +409,19 @@ export class StoryApiStack extends cdk.Stack {
       resources: [mediaBucket.arnForObjects("media/*")],
     }));
 
+    // P1-F reusable AU visual evidence: the service persists packed frame blobs under the evidence/ prefix of
+    // the SAME media bucket (evidence/{owner}/{cmid}/frames.pack). The MediaObjectAccess statement above is
+    // scoped to media/* only, so without this the AU accept-point write fails with AccessDenied (observed on
+    // dev: evidence_cached=false error=AccessDenied). Grant Put/Get on evidence/* and — unlike media originals,
+    // which are deliberately non-deleting — DeleteObject on evidence/* so an EXPLICIT permanent Moment deletion
+    // can remove its cached evidence (DELETE /v1/evidence/{moment}). Least-privilege: evidence/* prefix only.
+    instanceRole.addToPolicy(new iam.PolicyStatement({
+      sid: "EvidenceObjectAccess",
+      effect: iam.Effect.ALLOW,
+      actions: ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      resources: [mediaBucket.arnForObjects("evidence/*")],
+    }));
+
     // P0 Beta Auth Increment 3: scoped access to the identity tables owned by the SEPARATE story-<env>-auth
     // stack. Referenced by NAME (cross-stack string, not a hard CDK dependency) so the api stack deploys
     // independently; IAM is scoped to exactly these two tables (read + write + transactions for atomic claims).
