@@ -1,11 +1,18 @@
 # Editorial Pipeline v2 — P1-D: Simplified Highlights / Full Story Create Experience
 
-## Status: **IMPLEMENTED — OFFLINE PARSE-CLEAN — DEVICE ⌘U / MERGE / DEPLOY PENDING**
+## Status: **IMPLEMENTED — DEVICE ⌘U CLEAN — DEVICE UX VERIFIED — MERGED (PR #61, squash `dca1d62`, 2026-10-27)**
 
 Redesigns the **Customize Your Story** sheet around two consumer Video Types (Highlights / Full Story),
 removes the legacy Editing-Approach and Story-Length pickers, and makes Editing v2 reliably ON across normal
-launches. Branch `feat/editorial-p1d-create-ux` off master `306ab69`. Backend planner, AU, renderer, provider
-routing UNCHANGED. NOT merged, NOT deployed, NOT device-verified.
+launches. Branch `feat/editorial-p1d-create-ux` off master `306ab69`; squash-merged to protected master as
+[PR #61](https://github.com/lingzhang1/story/pull/61), merge commit `dca1d62`. Owner verified the full
+`StoryTests` suite green on device (⌘U) and confirmed the Highlights-default UX on device.
+
+**Deploy note:** P1-D is **iOS-only** — no backend/worker/CDK change — so there is no server-side dev deploy
+for this milestone; the iOS changes reach the device via a local Xcode build. The P1-C temporary worker
+diagnostics were already reverted and the clean worker redeployed in the P1-D session.
+
+Backend planner, AU, renderer, provider routing UNCHANGED.
 
 Evidence legend: `[CONFIRMED]` code · `[PARSE]` swiftc -parse only · `[PENDING]` device/CI.
 

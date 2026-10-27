@@ -38,6 +38,16 @@ final class AssetUnderstandingQueue {
     /// sets it on launch before the first drain, and in dev optional-auth AuthStore reports signed-in state
     /// honestly (a restored session = true).
     nonisolated(unsafe) static var sharedIsAuthed: () -> Bool = { false }
+
+    /// P1-E (AU durability): fired ONCE after a drain batch that completed at least one understanding, so a
+    /// result produced MID-SESSION is pushed to the account store without waiting for the next foreground /
+    /// sign-in (the previous push cadence). Wired by StoryApp to a coalesced, idempotent
+    /// `UnderstandingSync.shared.push(...)`; default no-op so the queue stays pure/testable and construction
+    /// sites that never set it (incl. unit tests) do nothing. Same static-seam pattern as `sharedIsAuthed` /
+    /// `MediaUploadQueue.sharedAutoEnroll`. The push itself is cheap + idempotent (PUT), and already skips any
+    /// understanding whose media is not yet cloud-backed — so a Moment whose sha is not ready is simply retried
+    /// by the upload-complete hook later, never lost.
+    nonisolated(unsafe) static var sharedPushUnderstanding: () -> Void = { }
     private let framePolicy = MomentFrameExtractor.framePolicy
     private let promptVersion = "au_prompt/2"
     private let schemaVersion = "moment_understanding/2"
@@ -126,13 +136,21 @@ final class AssetUnderstandingQueue {
         defer { draining = false }
 
         var processed = 0
+        var completedAny = false
         while processed < maxJobs, let job = nextEligibleJob() {
             processed += 1
             // R7-F: do NOT analyze a Moment while its Story's cloud state is still hydrating — a restore may
             // be about to supply a reusable understanding (restore first, regenerate only if missing).
             if CloudHydrationGate.shared.isHydrating(momentId: job.momentId) { continue }
+            let before = job.stateRaw
             await run(job)
+            if before != "complete" && job.stateRaw == "complete" { completedAny = true }
         }
+        // P1-E (AU durability): a result produced in THIS session is pushed now (coalesced: one push for the
+        // whole batch, not one per Moment) instead of waiting for the next foreground/sign-in. No-op until
+        // StoryApp wires the seam; idempotent PUT; media-not-yet-backed understandings are retried by the
+        // upload-complete hook, never lost.
+        if completedAny { Self.sharedPushUnderstanding() }
     }
 
     // MARK: - One job

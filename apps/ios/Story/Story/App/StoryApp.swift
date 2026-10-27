@@ -90,6 +90,20 @@ struct StoryApp: App {
                     // only when this returns true. In dev optional-auth a restored/real session reports true;
                     // signed out, AU jobs stay PENDING and resume on sign-in (no model call meanwhile).
                     AssetUnderstandingQueue.sharedIsAuthed = { [weak auth] in auth?.isSignedIn ?? false }
+                    // P1-E (AU durability): push a completed understanding to the account store as soon as it
+                    // is produced (AU drain) OR as soon as its media becomes cloud-backed (upload verified),
+                    // instead of only on the next foreground/sign-in. Bound here to the live AuthStore +
+                    // container context; the push is idempotent (PUT) and already skips understandings whose
+                    // media is not yet cloud-backed, so firing it on both edges never loses or duplicates data.
+                    let pushUnderstanding: () -> Void = { [weak auth] in
+                        let ctx = container.mainContext
+                        let owner = auth?.storyUserId
+                        Task { await UnderstandingSync.shared.push(
+                            context: ctx, activeOwner: owner,
+                            token: { [weak auth] in await auth?.validAccessToken() }) }
+                    }
+                    AssetUnderstandingQueue.sharedPushUnderstanding = pushUnderstanding
+                    MediaUploadQueue.sharedPushUnderstanding = pushUnderstanding
                     // R4-A.1 — the capture/import sites call this after persisting a new Moment; it auto-enrolls
                     // + drains ONLY when the active account has Auto Backup ON (no-op otherwise). Bound here to
                     // the live AuthStore so capture code needn't hold it.
