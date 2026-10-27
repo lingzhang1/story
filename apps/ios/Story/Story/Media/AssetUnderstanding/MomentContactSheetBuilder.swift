@@ -63,6 +63,22 @@ struct MomentContactSheetBuilder {
         return MomentContactSheet(momentId: momentId, jpeg: jpeg, frameCount: picked.count)
     }
 
+    /// P1-F (Option 8-i): build the SAME-shape contact sheet from frames ALREADY in hand (decoded from a
+    /// cached AU evidence package), with the caller's editorially-selected subset — NO video, NO
+    /// MomentFrameExtractor, NO full-source restore. `frames` are the already-selected AUExtractedFrames (the
+    /// mapper picked them); we tile them exactly as the extraction path tiles its subsample, so the planner
+    /// payload is byte-shape-identical to today's. Deterministic; pure UIKit.
+    static func buildFromFrames(momentId: UUID, frames: [AUExtractedFrame], durationSeconds: Double,
+                                budget: ContactSheetBudget) throws -> MomentContactSheet {
+        guard !frames.isEmpty else { throw ContactSheetError.noFrames }
+        // Respect the budget frame cap (the mapper already honors it, but clamp defensively).
+        let picked = frames.count <= budget.framesPerMoment
+            ? frames : evenlySubsample(frames, count: budget.framesPerMoment)
+        guard let jpeg = tile(frames: picked, momentId: momentId, durationSeconds: durationSeconds,
+                              budget: budget) else { throw ContactSheetError.encodeFailed }
+        return MomentContactSheet(momentId: momentId, jpeg: jpeg, frameCount: picked.count)
+    }
+
     /// Pick `count` evenly-spaced frames from an ordered list (keeps first and last).
     static func evenlySubsample(_ frames: [AUExtractedFrame], count: Int) -> [AUExtractedFrame] {
         let n = frames.count

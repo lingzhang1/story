@@ -175,11 +175,17 @@ final class AssetUnderstandingQueue {
             if let j = job.captureContextJSON, let d = j.data(using: .utf8) {
                 ctx = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
             }
+            // P1-F (R1): compute the SOURCE file sha256 (full-file) off the main thread for the SAME file the
+            // frames were just extracted from (so sha + frames refer to one file version). Best-effort — a
+            // hash failure (missing/replaced file, read error) simply yields nil and AU proceeds WITHOUT an
+            // evidence claim (caching unavailable this run; never blocks AU). Reuses the streaming upload hasher.
+            let contentSha: String? = await Self.hashSource(url: url)
             let dto = try await service.analyze(
                 frames: frames,
                 momentId: job.momentId,
                 sourceCaptureId: job.sourceCaptureId,
-                captureContext: ctx
+                captureContext: ctx,
+                contentSha256: contentSha
             )
             try upsertUnderstanding(dto)
             job.state = .complete
@@ -269,5 +275,15 @@ final class AssetUnderstandingQueue {
     private func backoff(for attempts: Int) -> TimeInterval {
         let exp = baseBackoff * pow(4.0, Double(max(0, attempts - 1)))
         return min(exp, maxBackoff)
+    }
+
+    /// P1-F (R1): full-file sha256 of the source clip, computed OFF the main actor on a background task so the
+    /// AU drain (which is @MainActor) never blocks the UI hashing a large video. Best-effort: any failure
+    /// (missing/replaced file, read error) returns nil and AU proceeds without an evidence claim. Reuses the
+    /// streaming upload hasher (never loads the whole file into memory) so there is no second hashing subsystem.
+    nonisolated private static func hashSource(url: URL) async -> String? {
+        await Task.detached(priority: .utility) {
+            try? MediaUploadService.sha256Hex(fileURL: url)
+        }.value
     }
 }

@@ -172,8 +172,22 @@ protocol AUAnalyzing {
         frames: [AUExtractedFrame],
         momentId: UUID,
         sourceCaptureId: UUID?,
-        captureContext: [String: Any]?
+        captureContext: [String: Any]?,
+        contentSha256: String?
     ) async throws -> MomentUnderstandingDTO
+}
+
+extension AUAnalyzing {
+    // Back-compat default so existing callers/tests that omit the P1-F sha claim keep compiling unchanged.
+    func analyze(
+        frames: [AUExtractedFrame],
+        momentId: UUID,
+        sourceCaptureId: UUID?,
+        captureContext: [String: Any]?
+    ) async throws -> MomentUnderstandingDTO {
+        try await analyze(frames: frames, momentId: momentId, sourceCaptureId: sourceCaptureId,
+                          captureContext: captureContext, contentSha256: nil)
+    }
 }
 
 struct AssetUnderstandingService: AUAnalyzing {
@@ -184,7 +198,8 @@ struct AssetUnderstandingService: AUAnalyzing {
         frames: [AUExtractedFrame],
         momentId: UUID,
         sourceCaptureId: UUID?,
-        captureContext: [String: Any]?
+        captureContext: [String: Any]?,
+        contentSha256: String?
     ) async throws -> MomentUnderstandingDTO {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/asset-understanding"))
         StoryBackend.authorize(&req)  // P0 auth seam: bearer token when signed in
@@ -193,7 +208,7 @@ struct AssetUnderstandingService: AUAnalyzing {
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = try makeBody(
             frames: frames, momentId: momentId, sourceCaptureId: sourceCaptureId,
-            captureContext: captureContext, boundary: boundary
+            captureContext: captureContext, contentSha256: contentSha256, boundary: boundary
         )
 
         let data: Data
@@ -224,6 +239,7 @@ struct AssetUnderstandingService: AUAnalyzing {
         momentId: UUID,
         sourceCaptureId: UUID?,
         captureContext: [String: Any]?,
+        contentSha256: String?,
         boundary: String
     ) throws -> Data {
         var body = Data()
@@ -233,6 +249,11 @@ struct AssetUnderstandingService: AUAnalyzing {
         var meta: [String: Any] = ["moment_id": momentId.uuidString]
         if let sourceCaptureId { meta["source_capture_id"] = sourceCaptureId.uuidString }
         if let captureContext { meta["capture_context"] = captureContext }
+        // P1-F (R1): the device-supplied source sha CLAIM + the extractor policy that produced these frames.
+        // Both optional + additive; the backend format-validates the sha and NEVER treats it as verified
+        // identity (authority is established at retrieval against the account's media record).
+        if let contentSha256, contentSha256.count == 64 { meta["content_sha256"] = contentSha256 }
+        meta["frame_extraction_version"] = MomentFrameExtractor.extractionPolicy
         let metaData = try JSONSerialization.data(withJSONObject: meta)
         append("--\(boundary)\(crlf)")
         append("Content-Disposition: form-data; name=\"meta\"\(crlf)")

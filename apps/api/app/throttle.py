@@ -107,6 +107,9 @@ ROUTE_CLASS: dict[tuple[str, str], str] = {
     ("GET", "/v1/media/{cloud_media_id}/download"): "read",
     ("GET", "/v1/media/{cloud_media_id}/parts/uploaded"): "read",
     ("POST", "/v1/understanding/batch-get"): "read",   # a READ despite POST (body carries id list)
+    # --- P1-F evidence: GET issues a presigned blob GET (presign tier, fail-open); DELETE is cheap metadata ---
+    ("GET", "/v1/evidence/{moment_id}"): "presign",
+    ("DELETE", "/v1/evidence/{moment_id}"): "writes",
     ("GET", "/v1/music/favorites"): "read",            # P1-E: saved catalog references (cheap read)
     ("GET", "/v1/edit-plan-jobs/{job_id}"): "read",
     ("GET", "/v1/story-coverage/v2/jobs/{job_id}"): "read",

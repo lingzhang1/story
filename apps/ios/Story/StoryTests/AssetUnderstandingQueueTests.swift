@@ -24,7 +24,8 @@ final class AssetUnderstandingQueueTests: XCTestCase {
         var error: Error?
         var calls = 0
         func analyze(frames: [AUExtractedFrame], momentId: UUID,
-                     sourceCaptureId: UUID?, captureContext: [String: Any]?) async throws -> MomentUnderstandingDTO {
+                     sourceCaptureId: UUID?, captureContext: [String: Any]?,
+                     contentSha256: String?) async throws -> MomentUnderstandingDTO {
             calls += 1
             if let error { throw error }
             return MomentUnderstandingDTO(
