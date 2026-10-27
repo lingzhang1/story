@@ -163,6 +163,36 @@ def test_validator_catches_speed_inconsistency():
     assert any("inconsistent" in e for e in errs)
 
 
+# ---- never-block policy: source-range-outside-useful is EDITORIAL, not technical (P1-F dev regression) ----
+def _plan_outside_useful():
+    # A RENDERABLE plan whose seg0 source range [9.5,10.5] is within M1's duration (11s) + valid speed, but
+    # overlaps NONE of M1's useful_segments ([1,9]). Technically playable; only an editorial miss.
+    p = _good_plan()
+    p["segments"][0]["source_start_seconds"] = 9.5
+    p["segments"][0]["source_end_seconds"] = 10.5
+    p["segments"][0]["output_duration_seconds"] = 1.0
+    return p
+
+
+def test_useful_range_hard_rejects_when_flag_off(monkeypatch):
+    monkeypatch.delenv("STORY_EDITPLAN_USEFUL_RANGE_SOFT", raising=False)
+    errs = validate_plan(_plan_outside_useful(), _inputs())
+    assert any("overlaps NO useful_segment" in e for e in errs)   # strict (unchanged) behavior
+
+
+def test_useful_range_soft_ships_renderable_plan_when_flag_on(monkeypatch):
+    monkeypatch.setenv("STORY_EDITPLAN_USEFUL_RANGE_SOFT", "1")
+    errs = validate_plan(_plan_outside_useful(), _inputs())
+    # never-block: a playable range that merely misses useful_segments is NOT a hard error now.
+    assert not any("useful_segment" in e for e in errs), errs
+    # the HARD technical bounds still fire when genuinely violated (real-duration bound stays hard):
+    over = _plan_outside_useful()
+    over["segments"][0]["source_end_seconds"] = 99.0   # exceeds M1 duration 11s
+    over["segments"][0]["output_duration_seconds"] = 1.0
+    errs2 = validate_plan(over, _inputs())
+    assert any("exceeds Moment duration" in e for e in errs2)
+
+
 # ---- Part A: deterministic structural directive-placement repair ----
 from edit_planner import repair_directive_placement, _errors_are_order_only  # noqa: E402
 
