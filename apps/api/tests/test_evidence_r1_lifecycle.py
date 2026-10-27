@@ -123,7 +123,15 @@ class FakeDDB:
         it["verified_at"] = ExpressionAttributeValues[":t"]; it["updated_at"] = ExpressionAttributeValues[":t"]
     def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues):
         owner = ExpressionAttributeValues[":o"]["S"]
-        return {"Items": [v for (o, _), v in self.items.items() if o == owner]}
+        pfx = ExpressionAttributeValues.get(":pfx", {}).get("S")
+        out = []
+        for (o, sk), v in self.items.items():
+            if o != owner:
+                continue
+            if pfx is not None and not sk.startswith(pfx):
+                continue
+            out.append(v)
+        return {"Items": out}
 
 
 _GOOD = {
@@ -337,7 +345,7 @@ def test_no_ttl_or_expiry_attribute_written(ctx):
     client, s3, media, evid = ctx
     assert _au(client, "alice").status_code == 200
     import json as _json
-    raw = evid._ddb.items[("story-alice", MID)]            # the stored DDB item
+    raw = evid._ddb.items[("story-alice", _evidence.evidence_sort_key(MID))]   # the stored DDB item
     assert "ttl" not in raw and "expires_at" not in raw    # no DynamoDB TTL (policy §6)
     man = _json.loads(raw["manifest_json"]["S"])
     assert "ttl" not in man and "expires_at" not in man    # manifest carries no expiry either

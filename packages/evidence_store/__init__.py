@@ -96,6 +96,15 @@ def evidence_object_key(owner: str, blob_cmid: str) -> str:
     return f"evidence/{owner}/{blob_cmid}/frames.pack"
 
 
+def evidence_sort_key(moment_id: str) -> str:
+    """The manifest row's DynamoDB RANGE key. We reuse the SHARED media table, whose key schema is
+    (story_user_id HASH, cloud_media_id RANGE) — so the manifest MUST be keyed on the `cloud_media_id`
+    attribute, NOT a separate `evidence_id` (writing a foreign sort-key attribute raises ValidationException,
+    the ClientError observed on dev). The `evidence#` prefix namespaces the row so it never collides with a
+    real media record's cloud_media_id (a bare uuid5), and media_kind=au_evidence tags it for readers."""
+    return f"evidence#{moment_id}"
+
+
 def pack_frames(frames: list[tuple[int, bytes]]) -> tuple[bytes, list[dict]]:
     """Pack ordered (t_ms, jpeg) frames into ONE concat-jpeg blob + a byte index.
     Returns (packed_bytes, [{index,t_ms,offset,length}, ...]). Deterministic; no model call."""
@@ -181,11 +190,12 @@ class EvidenceStore:
             "media_kind": EVIDENCE_MEDIA_KIND,
         }
         item = {
-            "story_user_id": {"S": owner}, "evidence_id": {"S": moment_id},
+            "story_user_id": {"S": owner}, "cloud_media_id": {"S": evidence_sort_key(moment_id)},
             "manifest_json": {"S": json.dumps(manifest)},
             "content_sha256": {"S": content_sha256},
             "frame_extraction_version": {"S": frame_extraction_version},
             "blob_cmid": {"S": blob_cmid}, "blob_key": {"S": key},
+            "media_kind": {"S": EVIDENCE_MEDIA_KIND},
             "updated_at": {"N": str(now)},
         }
         self._ddb_c().put_item(TableName=self.cfg.table, Item=item)
@@ -197,7 +207,7 @@ class EvidenceStore:
         wrong owner simply finds nothing (no cross-account leak, P1-F §9/§10)."""
         resp = self._ddb_c().get_item(
             TableName=self.cfg.table,
-            Key={"story_user_id": {"S": owner}, "evidence_id": {"S": moment_id}})
+            Key={"story_user_id": {"S": owner}, "cloud_media_id": {"S": evidence_sort_key(moment_id)}})
         it = resp.get("Item")
         if not it:
             return None
@@ -261,7 +271,7 @@ class EvidenceStore:
         try:
             self._ddb_c().delete_item(
                 TableName=self.cfg.table,
-                Key={"story_user_id": {"S": owner}, "evidence_id": {"S": moment_id}})
+                Key={"story_user_id": {"S": owner}, "cloud_media_id": {"S": evidence_sort_key(moment_id)}})
         except Exception:
             return False
         if man:
@@ -271,19 +281,22 @@ class EvidenceStore:
                     self._s3_c().delete_object(Bucket=self.cfg.bucket,
                                                Key=evidence_object_key(owner, blob_cmid))
                 except Exception:
-                    pass  # best-effort; sweep_orphans is the backstop
+                    pass  # best-effort (no sweep; a dangling blob is simply unreferenced per the retention policy)
         return True
 
     def delete_for_owner(self, *, owner: str) -> int:
         """Delete all evidence for an account (account deletion). Returns how many were removed.
-        Query on the PK (never a Scan) so it is inherently account-scoped."""
+        Scoped to EVIDENCE rows only (cloud_media_id begins_with 'evidence#') so it never deletes the owner's
+        media / music / ai_artifact records that share this table. Query on the PK + RANGE prefix (never a
+        Scan) so it is inherently account-scoped."""
         resp = self._ddb_c().query(
             TableName=self.cfg.table,
-            KeyConditionExpression="story_user_id = :o",
-            ExpressionAttributeValues={":o": {"S": owner}})
+            KeyConditionExpression="story_user_id = :o AND begins_with(cloud_media_id, :pfx)",
+            ExpressionAttributeValues={":o": {"S": owner}, ":pfx": {"S": "evidence#"}})
         n = 0
         for it in resp.get("Items", []):
-            mid = it.get("evidence_id", {}).get("S", "")
+            sk = it.get("cloud_media_id", {}).get("S", "")
+            mid = sk[len("evidence#"):] if sk.startswith("evidence#") else ""
             if mid and self.delete_for_moment(owner=owner, moment_id=mid):
                 n += 1
         return n
