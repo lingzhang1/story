@@ -86,18 +86,35 @@ enum DurationChoice: String, Equatable {
 /// P1-A feature flag. OFF by default: when off, nothing new influences planning and the pipeline behaves
 /// EXACTLY as v5.2 today (the new fields are recorded for provenance but never change a request's
 /// `editorial_mode`, which keeps flowing from the legacy `StoryModel.editorialMode` as before). When on, the
-/// new EditorialType becomes the source the request derives `editorial_mode` from. P1-A ships with it OFF;
-/// P1-B/P1-C flip it after the quality gate. Env/UserDefaults override for incident control, mirroring
-/// StoryMultimodalPlanning.
+/// new EditorialType becomes the source the request derives `editorial_mode` from. P1-A shipped it OFF;
+/// P1-D (post device/dev acceptance of EditPlan v5.3, PR #60 / master 306ab69) flips the DEFAULT ON so a
+/// normal detached / home-screen / TestFlight launch gets Editing v2 WITHOUT any Xcode scheme attach.
+///
+/// Resolution order (highest precedence first) — overrides are preserved, the baseline default changed:
+///   1. env `STORY_EDITORIAL_TYPE_V2` == "1"/"0"  — explicit per-launch override (attached dev run).
+///   2. UserDefaults override (setOverride) — incident control / dev toggle, survives relaunch.
+///   3. DEFAULT ON — normal launch with no override. Editing v2 is the product default.
+///
+/// WHY default-ON rather than persisting the scheme bool: the P1-C finding was that the scheme env is only
+/// present on an attached ⌘R launch and was never persisted, so detached/TestFlight launches silently
+/// reverted to OFF. We deliberately do NOT auto-persist the scheme value (that would let a stale dev toggle
+/// contaminate a later beta build on the same device). Instead the baseline is ON, and env=0 / an explicit
+/// UserDefaults override remain the ways to force v5.2-shaped client behavior for testing. This is a CLIENT
+/// activation only; the independent v5.2 BACKEND rollback is `STORY_EDIT_PLAN_VERSION` (unchanged).
 enum EditorialTypeFlag {
     static let key = "STORY_EDITORIAL_TYPE_V2"
     static var enabled: Bool {
         if ProcessInfo.processInfo.environment[key] == "1" { return true }
         if ProcessInfo.processInfo.environment[key] == "0" { return false }
         if UserDefaults.standard.object(forKey: key) != nil { return UserDefaults.standard.bool(forKey: key) }
-        return false   // P1-A default OFF — v5.2 behavior unchanged
+        return true   // P1-D default ON — Editing v2 is the product default (v5.3 accepted on dev)
     }
-    static func setOverride(_ on: Bool) { UserDefaults.standard.set(on, forKey: key) }
+    /// Explicit override (incident control / dev v5.2 testing). Pass nil to CLEAR it and fall back to the
+    /// default-ON baseline, so a stale dev toggle never persists unintentionally.
+    static func setOverride(_ on: Bool?) {
+        if let on { UserDefaults.standard.set(on, forKey: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
+    }
 }
 
 // MARK: - Model read accessors (additive, non-mutating)
