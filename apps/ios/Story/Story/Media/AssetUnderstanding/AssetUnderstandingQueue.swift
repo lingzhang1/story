@@ -25,6 +25,11 @@ final class AssetUnderstandingQueue {
     private let context: ModelContext
     private let service: AUAnalyzing
     private let extractFrames: (URL) async throws -> [AUExtractedFrame]
+    /// Injectable media-presence check (defaults to the real MediaStore). A seam so tests don't depend on the
+    /// device filesystem: the `run()` guard that DROPS a job when its media file is gone otherwise reads the
+    /// real disk, making a fake "media/x.mov" job order/filesystem-dependent (the pre-existing
+    /// AuthGatingTests flake). Same injection pattern as `extractFrames`/`isAuthed`.
+    private let fileExists: (String) -> Bool
     /// Whether an authenticated session exists. Asset Understanding is a PAID cloud call, so draining is
     /// DEFERRED until this returns true (Increment 4, Phase 4): the Moment and its PENDING job are preserved;
     /// no model call is made while signed out. On sign-in the app calls `drain()` and the existing idempotent
@@ -62,12 +67,14 @@ final class AssetUnderstandingQueue {
         context: ModelContext,
         service: AUAnalyzing = AssetUnderstandingService(),
         extractFrames: @escaping (URL) async throws -> [AUExtractedFrame] = { try await MomentFrameExtractor.extract(from: $0) },
-        isAuthed: @escaping () -> Bool = { AssetUnderstandingQueue.sharedIsAuthed() }
+        isAuthed: @escaping () -> Bool = { AssetUnderstandingQueue.sharedIsAuthed() },
+        fileExists: @escaping (String) -> Bool = { MediaStore.shared.fileExists(relativePath: $0) }
     ) {
         self.context = context
         self.service = service
         self.extractFrames = extractFrames
         self.isAuthed = isAuthed
+        self.fileExists = fileExists
     }
 
     // MARK: - Enqueue (called AFTER the Moment is persisted; never blocks it)
@@ -161,8 +168,9 @@ final class AssetUnderstandingQueue {
         try? context.save()
 
         let url = MediaStore.shared.absoluteURL(for: job.relativeMediaPath)
-        // If the media file is gone (Moment deleted), drop the job — no retry.
-        if !MediaStore.shared.fileExists(relativePath: job.relativeMediaPath),
+        // If the media file is gone (Moment deleted), drop the job — no retry. Uses the injectable seam so a
+        // test is not coupled to the device filesystem.
+        if !fileExists(job.relativeMediaPath),
            job.relativeMediaPath.hasPrefix("media/") {
             context.delete(job)
             try? context.save()
