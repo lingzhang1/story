@@ -1,6 +1,11 @@
 # YoTale — TestFlight Email Self-Sign-up / Sign-in (Option A)
 
-**Status: IMPLEMENTED on branch `feat/testflight-email-self-signup` — OFFLINE-TESTED — NOT MERGED — NOT DEPLOYED — DEVICE ACCEPTANCE PENDING — BETA-ARCHIVE CONFIG BLOCKER OPEN (§Beta configuration).**
+**Status: IMPLEMENTED on branch `feat/testflight-email-self-signup` — OFFLINE-TESTED — BETA COGNITO/SES LIVE-CONFIG-VERIFIED — BETA BUILD-CONFIG IMPLEMENTED (pbxproj wiring is an owner Xcode-UI step) — NOT DEVICE-TESTED — NOT BETA-ARCHIVE-VERIFIED — NOT MERGED — NOT DEPLOYED — NOT LIVE-SIGNUP-VERIFIED.**
+
+Status vocabulary (per owner request): *Implemented* = code written. *Offline-tested* = unit tests pass
+(sandbox cannot build the SwiftData target). *Device-tested* = owner Xcode `Cmd-U` / device run. *Beta
+archive-verified* = `verify_beta_archive.sh` passed against a real Beta archive. *Live beta signup-verified*
+= a real external email registered and signed in against beta. Only the first two are claimed here.
 
 Milestone: let any valid email self-register for the YoTale beta through the existing passwordless
 EMAIL_OTP experience, with **no manual admin provisioning**, while existing users sign in unchanged and
@@ -43,9 +48,29 @@ code+PKCE unchanged.
 - Admin-provisioned accounts remain compatible — they are ordinary CONFIRMED users and take the existing-user
   branch unchanged. ✅
 
-**No pool-plan, SES, or infrastructure change is required** for the mechanism. (Beta pool not re-verified
-live this session — `yotale-beta` SSO token was expired; the beta `StoryAuthStack` CDK encodes the same
-ESSENTIALS + self-signup + USER_AUTH shape. Re-verify against the live beta pool before beta archive.)
+**No pool-plan, SES, or infrastructure change is required** for the mechanism.
+
+### 3a. Beta environment — LIVE CONFIGURATION VERIFIED (2026-10-27, account `224033508028`)
+Inspected the actual live beta resources (not inferred from CDK). **LIVE CONFIGURATION VERIFIED** — this does
+NOT assert live signup, OTP delivery, or a successful login, which remain a separate device acceptance gate.
+
+Beta Cognito (pool `us-east-1_3cPNfbrUl`, client `4f3dtn9d0nk5uq1hcvbdc7m73c`):
+- Self-signup allowed (`AllowAdminCreateUserOnly=false`). ✅
+- Tier **ESSENTIALS**. ✅
+- Email as username (`UsernameAttributes=[email]`, no alias). ✅
+- Email auto-verification (`AutoVerifiedAttributes=[email]`). ✅
+- `EMAIL_OTP` present in `AllowedFirstAuthFactors=[PASSWORD, EMAIL_OTP]`. ✅
+- App-client flows `[ALLOW_USER_AUTH, ALLOW_REFRESH_TOKEN_AUTH]`. ✅
+- `PreventUserExistenceErrors=ENABLED`. ✅
+- No app-client secret (public PKCE). ✅
+
+Beta SES (us-east-1, account `224033508028`):
+- Production sending access enabled (`ProductionAccessEnabled=true`). ✅ (previously sandbox — testers no
+  longer need a pre-verified recipient identity.)
+- Sending enabled (`SendingEnabled=true`). ✅
+- 24-hour sending quota reported **50,000**. ✅
+
+**No new Cognito or SES infrastructure change is currently required** for beta.
 
 ## 4. Account-status semantics (backend, unchanged)
 New backend accounts are created `account_status=active`, `beta_access_status=invited`, and `_enforce_status`
@@ -65,41 +90,87 @@ No security control changed. Backend auth suite GREEN
 (`test_central_auth_boundary.py`, `test_paid_endpoint_protection.py`, `test_auth_and_job_ownership.py` — 45
 tests). Enumeration-safe copy; removed all "invite-only" user-facing strings.
 
-## 7. Beta configuration — RELEASE BLOCKER (open, minimal fix identified)
-`StoryLaunchConfig` resolves `env var → persisted UserDefaults → nil → dev default`. For a **TestFlight
-archive**, `ProcessInfo.environment` is empty (not an attached Xcode run) and a tester's fresh install has
-nothing persisted, so the app falls through to the **dev** pool/API defaults. The Xcode scheme env rows
-cannot fix this (they inject only on attached launch). The project has only `Debug`/`Release` configs and no
-compile-time environment flag.
+## 7. Beta build configuration — IMPLEMENTED (code gate + xcconfig + archive validator)
+A TestFlight **archive** previously resolved to **dev** defaults: `StoryLaunchConfig` read `env → persisted →
+dev default`, and an archive has no scheme env vars and a tester's install has no persisted values. Fixed
+without a remote config service and without P1-G0.
 
-**Minimal correction to propose (not yet implemented, pending owner go-ahead):** add a dedicated **Beta**
-build configuration (or an archive scheme) that sets a compile-time flag (e.g.
-`SWIFT_ACTIVE_COMPILATION_CONDITIONS = BETA_RELEASE`), and make `StoryAuthConfig`/`StoryBackend` resolve
-their final default from that flag (beta identifiers under `#if BETA_RELEASE`, dev otherwise). This removes
-all reliance on env rows / persisted state for an archive and is verifiable independently of an attached
-run. This is **not** the deferred P1-G0 consolidation — it is the single release-blocking default.
+### 7a. Single resolved environment object
+`apps/ios/Story/Story/Data/Auth/StoryEnvironment.swift` is now THE source of truth. `StoryAuthConfig.*` and
+`StoryBackend.baseURL` read `StoryEnvironment.current` (one object, not independently-mutable keys), so no
+caller can assemble a half-dev/half-beta mix.
+
+### 7b. Resolution rules
+- **DEBUG build:** unchanged developer flexibility — `scheme env → persisted UserDefaults → dev default`
+  (via the existing `StoryLaunchConfig` chain). Attached dev runs and scheme toggles behave exactly as before.
+- **RELEASE / Archive / TestFlight build (`#if !DEBUG`):** the environment is read **only** from values
+  **baked into `Info.plist`** at build time (`StoryBuildEnv` + `StoryEnv*` keys, populated via
+  `$(STORY_BUILD_ENV)` / `$(STORY_ENV_*)` substitution from the selected xcconfig). **`ProcessInfo.environment`
+  and persisted `UserDefaults` are IGNORED.** So a stale dev override on a tester's device can never redirect
+  a beta build.
+
+### 7c. Runtime-override isolation (§5 — the core safety property)
+In a release build: beta config comes only from the baked values; a persisted dev `STORY_API_BASE_URL` or
+dev Cognito values from a prior dev install **cannot** override it; no Xcode Run env values are needed; and —
+fail-closed — if `StoryBuildEnv=beta` but any required value is **missing**, an unresolved `$(...)` token, or
+**mismatched** (beta API with dev pool, or vice-versa), the app **`fatalError`s at launch** rather than
+silently selecting development. A release build labelled `development` (local/simulator release) is allowed
+and resolves dev; it can never masquerade as beta (the consistency guard rejects a dev-labelled build that
+carries non-dev Cognito). No unrelated UserDefaults or app data is touched — signed-in user data and local
+SwiftData models are preserved.
+
+### 7d. Build-time wiring (xcconfig — values baked, not code)
+- `apps/ios/Story/Config/Development.xcconfig` → `STORY_BUILD_ENV=development` + dev identifiers.
+- `apps/ios/Story/Config/Beta.xcconfig` → `STORY_BUILD_ENV=beta` + the **live-verified** beta identifiers.
+- `Story/Info.plist` carries `$(STORY_*)` substitution keys (same pattern as the existing `GitCommitSHA`).
+
+### 7e. Owner Xcode-UI step (the ONE thing not done in-repo — see §6)
+Adding the **Beta build configuration** + setting each target's `baseConfigurationReference` to the xcconfigs
+requires editing `project.pbxproj`, which currently also holds the owner's uncommitted `DEVELOPMENT_TEAM`
+signing lines. Per the stop condition, this was NOT hand-edited. Apply in Xcode (safe, native):
+1. Project → Info → Configurations → duplicate **Release** → name it **Beta**.
+2. Set the app target's **Based on Configuration File**: Debug/Release → `Development.xcconfig`, Beta →
+   `Beta.xcconfig` (add the `Config/` group as a folder reference first).
+3. Duplicate the shared scheme as **Story (Beta)**; set its **Archive** action to the **Beta** configuration.
+4. Archive with the **Story (Beta)** scheme.
+
+Until this is done, an archive is a dev-labelled release (resolves dev — safe, just not beta). The code gate
+guarantees it can never be a silent-dev **beta**.
+
+### 7f. Pre-archive validator (§7 automation, fail-closed)
+`scripts/verify_beta_archive.sh <Story.app|Info.plist>` inspects the BUILT app's baked `Info.plist` and exits
+non-zero unless `StoryBuildEnv=beta` with all beta identifiers present, no unresolved tokens, and **no dev
+identifier leaked**. Smoke-tested: a beta plist passes; a beta-label-with-dev-pool plist fails. Run it
+post-archive before any upload.
 
 ## 8. Regression tests (offline)
 - `apps/ios/Story/StoryTests/CognitoSelfSignUpTests.swift` (new, 14 cases): new-user signup, existing-user
   fallthrough, ConfirmSignUp→session sign-in, no-session fallback, existing OTP verify, wrong/expired code,
   throttling, resend routing (confirm vs initiate), disabled account, unknown-email `noOTPPath`, network
   failure — via a target-routing URLProtocol stub (network-free).
+- `apps/ios/Story/StoryTests/StoryEnvironmentTests.swift` (new, 5 cases): dev default is consistent;
+  beta-label-with-dev-pool rejected; beta-label-with-dev-API rejected; fully-beta consistent;
+  `StoryEnvironment.current` is internally consistent. (The release-only fatalError paths cannot run in a
+  unit process; they are covered by `verify_beta_archive.sh` + device step E.)
 - `apps/ios/Story/StoryTests/AuthGatingTests.swift`: replaced the obsolete invite-only enumeration test with
   a unified-copy non-enumeration test; existing AU-defer / AuthGate tests unchanged.
-- Backend auth tests unchanged and green.
+- `scripts/verify_beta_archive.sh` smoke-tested (beta plist passes; dev-leak plist fails).
+- Backend auth tests unchanged and green (45).
 - **iOS tests compile only on a device `Cmd-U`** (no CI iOS job; sandbox cannot build the SwiftData macro).
   `swiftc -parse` ran clean on the edited sources but is NOT a build gate.
 
-## 9. Device acceptance plan (owner runs on dev scheme)
-- **A. Existing account** — sign in; prior Stories/Moments/GeneratedOutputs/AU/music preserved.
-- **B. New account** — a genuinely new email registers, gets a real code, confirms, reaches YoTale with no
-  admin provisioning.
+## 9. Device acceptance plan (owner runs)
+- **A. Existing account** (dev scheme) — sign in; prior Stories/Moments/GeneratedOutputs/AU/music preserved.
+- **B. New account** (dev scheme) — a genuinely new email registers, gets a real code, confirms, reaches
+  YoTale with no admin provisioning.
 - **C. Interrupted registration** — kill the app between SignUp and code entry; relaunch; complete/recover
   (account exists in Cognito → resolves as existing-user OTP; no duplicate).
 - **D. Reinstall** — sign in again with the same email; cloud-owned data re-associates with the same
   `story_user_id`.
-- **E. Beta archive config** — archived build points at beta resources without Run-scheme vars (BLOCKED
-  until §7 fix lands).
+- **E. Beta build** — after wiring the Beta configuration (§7e), install a **Beta-configured** build and
+  confirm `STORY_ACTIVE_BACKEND` logs the beta pool/API **without any attached Xcode scheme**, and
+  `verify_beta_archive.sh` passes on the archive. Do NOT create a live beta test user until separately
+  authorized.
 
 ## 10. Cleanup status
 - Invite-only user-facing copy removed (SignInView, error strings). ✅
@@ -115,8 +186,12 @@ upload a beta-distributable build, complete external Beta App Review, configure 
 an initial tester limit, and record how to disable the link / stop testing. **A TestFlight invitation does
 NOT authenticate a user to the YoTale backend** — Cognito EMAIL_OTP sign-up/sign-in is the only backend auth.
 
-## 12. Remaining owner approvals
-1. Approve the §7 minimal Beta-build-configuration fix (required before any beta archive).
-2. Re-verify the live **beta** Cognito pool prerequisites (needs a fresh `yotale-beta` SSO session).
-3. Run the device acceptance matrix (A–E).
-4. Authorize PR merge / beta deploy / TestFlight submission (all currently STOPPED per the task).
+## 12. Remaining owner approvals / actions
+1. **Wire the Beta build configuration in Xcode** (§7e) — duplicate Release → Beta, point configs at the
+   xcconfigs, add a Story (Beta) archive scheme. (Not hand-edited in the pbxproj to avoid clobbering the
+   uncommitted `DEVELOPMENT_TEAM` signing lines.)
+2. Run the device acceptance matrix **A–E** (owner device `Cmd-U` / installs).
+3. Run `scripts/verify_beta_archive.sh` against the first Beta archive (must print OK).
+4. Authorize PR #71 merge / beta deploy / live beta signup / TestFlight submission (all currently STOPPED).
+
+Beta Cognito/SES prerequisites are **LIVE CONFIGURATION VERIFIED** (§3a) — no infra change required.

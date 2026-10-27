@@ -16,11 +16,10 @@ enum StoryBackend {
     /// App Runner service. Configuration-driven; no provider assumptions on
     /// the client.
     static var baseURL: URL {
-        // Durable resolution (env var → persisted UserDefaults → dev default). ProcessInfo.environment is
-        // EMPTY on a detached/TestFlight launch, so reading it directly reverted a beta build to the dev API
-        // below; StoryLaunchConfig persists the beta URL from an attached launch so detached stays on beta.
-        if let s = StoryLaunchConfig.value("STORY_API_BASE_URL"), let u = URL(string: s) { return u }
-        return URL(string: "https://ydmju5wdps.us-east-1.awsapprunner.com")!
+        // Single source of truth: StoryEnvironment.current. In a DEBUG build this still honours the
+        // scheme-env → persisted → dev-default chain (via the resolver); in a RELEASE/TestFlight archive it
+        // is the fail-closed BAKED beta value — a stale persisted dev URL can no longer redirect a beta build.
+        return StoryEnvironment.current.apiBaseURL
     }
 
     /// A URLSession with a GENEROUS timeout for slow model-backed calls. The Edit Planner is one ~28s Opus

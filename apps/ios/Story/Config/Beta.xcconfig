@@ -1,0 +1,21 @@
+// Beta.xcconfig — TestFlight Option A beta-archive safety gate.
+//
+// Baked environment for BETA / TestFlight archives. Select this xcconfig for the Beta build configuration's
+// app target so StoryEnvironment resolves the beta backend from Info.plist with ZERO reliance on Xcode Run
+// scheme env vars or persisted UserDefaults. Values VERIFIED LIVE against beta account 224033508028 on
+// 2026-10-27 (pool us-east-1_3cPNfbrUl, client 4f3dtn9d0nk5uq1hcvbdc7m73c). NON-SECRET identifiers only.
+//
+// If any value here is wrong/empty, StoryEnvironment FAILS CLOSED at launch in a release build rather than
+// falling back to development — that is the intended safety behavior.
+//
+// xcconfig note: `//` starts a comment, so the redirect URI is assembled from a SLASH helper.
+
+SLASH = /
+
+STORY_BUILD_ENV = beta
+STORY_ENV_API_BASE_URL = https://asxtxgjiis.us-east-1.awsapprunner.com
+STORY_ENV_COGNITO_REGION = us-east-1
+STORY_ENV_USER_POOL_ID = us-east-1_3cPNfbrUl
+STORY_ENV_APP_CLIENT_ID = 4f3dtn9d0nk5uq1hcvbdc7m73c
+STORY_ENV_DOMAIN_PREFIX = story-beta-auth
+STORY_ENV_REDIRECT_URI = story:$(SLASH)$(SLASH)auth

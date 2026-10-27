@@ -8,6 +8,26 @@
          runtime by BuildProvenance.current(); "unknown" when not populated. -->
     <key>GitCommitSHA</key>
     <string>$(GIT_COMMIT_SHA)</string>
+    <!-- TestFlight Option A beta-archive safety gate: the resolved environment is BAKED here at build time
+         via build-setting substitution from the selected xcconfig (Development.xcconfig / Beta.xcconfig).
+         StoryEnvironment reads ONLY these in a RELEASE/Archive build (ignoring ProcessInfo env + persisted
+         UserDefaults) and FAILS CLOSED if StoryBuildEnv=beta but any value is missing/mismatched. A DEBUG
+         build ignores these and keeps the scheme-env override chain. STORY_BUILD_ENV defaults to
+         "development" in the project so an un-wired build is a dev build, never a half-configured beta. -->
+    <key>StoryBuildEnv</key>
+    <string>$(STORY_BUILD_ENV)</string>
+    <key>StoryEnvApiBaseURL</key>
+    <string>$(STORY_ENV_API_BASE_URL)</string>
+    <key>StoryEnvCognitoRegion</key>
+    <string>$(STORY_ENV_COGNITO_REGION)</string>
+    <key>StoryEnvUserPoolId</key>
+    <string>$(STORY_ENV_USER_POOL_ID)</string>
+    <key>StoryEnvAppClientId</key>
+    <string>$(STORY_ENV_APP_CLIENT_ID)</string>
+    <key>StoryEnvDomainPrefix</key>
+    <string>$(STORY_ENV_DOMAIN_PREFIX)</string>
+    <key>StoryEnvRedirectURI</key>
+    <string>$(STORY_ENV_REDIRECT_URI)</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Story can tag the Moments you record with where you captured them, so your travel memories remember the place. Location is optional and never added to the videos you share.</string>
     <key>UIAppFonts</key>
