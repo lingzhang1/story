@@ -305,12 +305,13 @@ export class StoryApiStack extends cdk.Stack {
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,
         STORY_WORKER_DEADLINE_S: "840",
-        // EditPlan planner version. DEV runs v5.3 (consumes Rich AU v2 editorial candidates + editorial_type);
-        // beta/gamma/prod stay on v5.2 until promoted. DURABLE in CDK — a manual console/CLI env flip is wiped
-        // by the next `cdk deploy` (App Runner/Lambda env is a full replace), which is exactly how dev silently
-        // reverted 5.3->5.2 after P1-C set it by hand. Override with `-c editPlanVersion=5.2` to roll back.
+        // EditPlan planner version. DEV + BETA run v5.3 (consumes Rich AU v2 editorial candidates +
+        // editorial_type); gamma/prod stay on v5.2 until promoted. DURABLE in CDK — a manual console/CLI env
+        // flip is wiped by the next `cdk deploy` (App Runner/Lambda env is a full replace), which is exactly
+        // how dev silently reverted 5.3->5.2 after P1-C set it by hand. Override with `-c editPlanVersion=5.2`
+        // to roll a given env back.
         STORY_EDIT_PLAN_VERSION: (this.node.tryGetContext("editPlanVersion") as string)
-          ?? (environment === "development" ? "5.3" : "5.2"),
+          ?? ((environment === "development" || environment === "beta") ? "5.3" : "5.2"),
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
         // P0 direct-provider mode: default DIRECT (OpenAI/Gemini) for ALL envs. Anthropic revoked Bedrock
         // model access on an abuse determination, so Bedrock is no longer a viable default anywhere — the
@@ -527,19 +528,21 @@ export class StoryApiStack extends cdk.Stack {
               // in CDK; `-c editPlanVersion=5.2` rolls dev back.
               { name: "STORY_EDIT_PLAN_VERSION",
                 value: (this.node.tryGetContext("editPlanVersion") as string)
-                  ?? (environment === "development" ? "5.3" : "5.2") },
+                  ?? ((environment === "development" || environment === "beta") ? "5.3" : "5.2") },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
               // P1-F reusable AU visual evidence — SERVER persistence gate (default OFF everywhere). This is the
               // authoritative kill-switch: when "0" the AU endpoint writes NO durable personal-frame package
               // even if an authed client sends a content_sha256 claim. DURABLE in CDK (an App Runner env is a
               // full-replace on every deploy, so a manual console/CLI set is wiped by the next `cdk deploy`).
-              // Enable for DEV device testing with `-c evidencePersist=1`; beta/gamma/prod stay OFF until a
-              // retention/account-deletion policy is approved. Pair with the iOS Run-scheme flag
+              // Enable for DEV + BETA (owner promoted beta 2026-10-27 for TestFlight reusable-evidence
+              // testing); gamma/prod stay OFF until a retention/account-deletion policy is approved. NOTE:
+              // account-deletion is still design-only — beta now durably stores testers' personal frames.
+              // Override a given env with `-c evidencePersist=0` to roll back. Pair with the iOS Run-scheme flag
               // STORY_REUSABLE_EVIDENCE=1 (device-side; this server flag alone only persists, it does not make
               // the client reuse).
               { name: "STORY_EVIDENCE_PERSIST_ENABLED",
                 value: ((this.node.tryGetContext("evidencePersist") as string) === "1"
-                        || (environment === "development"
+                        || ((environment === "development" || environment === "beta")
                             && (this.node.tryGetContext("evidencePersist") as string) !== "0")) ? "1" : "0" },
               // P0 direct-provider mode (Anthropic-Bedrock-revocation contingency). DURABLE in CDK so a
               // redeploy does not silently drop it back to bedrock (that regression broke all dev AI once —
