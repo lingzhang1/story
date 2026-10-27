@@ -184,12 +184,6 @@ def _approx_duration_soft_on() -> bool:
     return _flag("STORY_EDITPLAN_APPROX_DURATION_SOFT")
 
 
-def _useful_range_soft_on() -> bool:
-    # source-range-outside-useful becomes a deterministic nudge target, not a hard reject (real-duration
-    # bound stays HARD).
-    return _flag("STORY_EDITPLAN_USEFUL_RANGE_SOFT")
-
-
 # When the approximate-duration band is soft, we still refuse a RUNAWAY plan (a safety/quality guard, not an
 # editorial nicety): generous beyond the normal overshoot band so a longer-but-watchable video still ships.
 DURATION_RUNAWAY_GUARD = 1.00   # reject only if >+100% of an APPROXIMATE target (degenerate/runaway)
@@ -844,19 +838,14 @@ def validate_plan(plan: dict, inputs: EditPlanInputs) -> list[str]:
                 errs.append(f"seg{i}: invalid source range [{a},{b}]")
             if b > dur + 0.05:
                 errs.append(f"seg{i}: source_end {b} exceeds Moment duration {dur}")
-            us = _useful_ranges(moments[aid])  # robust: pairs OR dicts; MalformedPlanError on junk
-            if us and not any(not (b <= u[0] or a >= u[1]) for u in us):
-                # A source range overlapping NO useful_segment is still fully RENDERABLE (valid range, within
-                # duration, valid speed) — it is an EDITORIAL judgement ("not the useful part"), not a technical
-                # defect. Under the never-block policy (P0: a technically valid, playable video is never
-                # discarded for an unmet creative/editorial objective) this must NOT hard-fail when the
-                # useful-range check is SOFT. The flag (STORY_EDITPLAN_USEFUL_RANGE_SOFT, enabled in dev CDK)
-                # was defined but never consulted here, so the check kept hard-rejecting and surfaced as
-                # invalid_after_repair -> a user error on a playable video (observed on dev job 73978a95).
-                # Soft => a deterministic nudge target, not a validator error (real-duration bound stays HARD
-                # above). Off => unchanged strict behavior.
-                if not _useful_range_soft_on():
-                    errs.append(f"seg{i}: source range [{a},{b}] overlaps NO useful_segment {us}")
+            # Validate the useful_segments SHAPE (junk raises MalformedPlanError -> clean 422, never a 500).
+            # But a source range overlapping NO useful_segment is intentionally NOT a validator error: such a
+            # range is still fully RENDERABLE (valid bounds, within duration, valid speed); "outside the useful
+            # part" is an EDITORIAL judgement, not a technical defect, and the never-block policy (P0) ships a
+            # technically valid, playable video rather than erroring on an unmet editorial objective. (This was
+            # formerly gated by STORY_EDITPLAN_USEFUL_RANGE_SOFT; the soft behavior is now the permanent default
+            # and the flag was removed.) The HARD real-duration + range-validity bounds above still apply.
+            _ = _useful_ranges(moments[aid])   # shape guard only (MalformedPlanError on junk); overlap not enforced
         od = tl.declared_output
         if od <= 0:
             errs.append(f"seg{i}: non-positive output_duration {od}")

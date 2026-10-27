@@ -329,7 +329,6 @@ export class StoryApiStack extends cdk.Stack {
               STORY_EDITPLAN_OBJECTIVE_DIRECTIVES: "1",
               STORY_EDITPLAN_BEST_VALID_RETENTION: "1",
               STORY_EDITPLAN_APPROX_DURATION_SOFT: "1",
-              STORY_EDITPLAN_USEFUL_RANGE_SOFT: "1",
             }
           : {}),
         // P0 Beta Security Phase 4: the worker settles/releases the AI quota reservation on terminal. It
@@ -351,7 +350,6 @@ export class StoryApiStack extends cdk.Stack {
               STORY_EDITPLAN_OBJECTIVE_DIRECTIVES: "1",
               STORY_EDITPLAN_BEST_VALID_RETENTION: "1",
               STORY_EDITPLAN_APPROX_DURATION_SOFT: "1",
-              STORY_EDITPLAN_USEFUL_RANGE_SOFT: "1",
             }
           : {}),
       },
