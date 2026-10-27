@@ -1,6 +1,6 @@
 # YoTale — TestFlight Email Self-Sign-up / Sign-in (Option A)
 
-**Status: IMPLEMENTED on branch `feat/testflight-email-self-signup` — OFFLINE-TESTED — BETA COGNITO/SES LIVE-CONFIG-VERIFIED — BETA BUILD-CONFIG IMPLEMENTED (pbxproj wiring is an owner Xcode-UI step) — NOT DEVICE-TESTED — NOT BETA-ARCHIVE-VERIFIED — NOT MERGED — NOT DEPLOYED — NOT LIVE-SIGNUP-VERIFIED.**
+**Status: IMPLEMENTED on branch `feat/testflight-email-self-signup` — OFFLINE-TESTED — BETA COGNITO/SES LIVE-CONFIG-VERIFIED — BETA BUILD-CONFIG + ARCHIVE SCHEME TRACKED (reproducible from clean checkout) — BETA ARCHIVE INFO.PLIST VERIFIED (baked beta, validator passed) — NOT DEVICE-TESTED (sandbox cannot run the Swift macro plugin; owner Xcode required) — NOT MERGED — NOT DEPLOYED — NOT LIVE-SIGNUP-VERIFIED.**
 
 Status vocabulary (per owner request): *Implemented* = code written. *Offline-tested* = unit tests pass
 (sandbox cannot build the SwiftData target). *Device-tested* = owner Xcode `Cmd-U` / device run. *Beta
@@ -124,24 +124,40 @@ SwiftData models are preserved.
 - `apps/ios/Story/Config/Beta.xcconfig` → `STORY_BUILD_ENV=beta` + the **live-verified** beta identifiers.
 - `Story/Info.plist` carries `$(STORY_*)` substitution keys (same pattern as the existing `GitCommitSHA`).
 
-### 7e. Owner Xcode-UI step (the ONE thing not done in-repo — see §6)
-Adding the **Beta build configuration** + setting each target's `baseConfigurationReference` to the xcconfigs
-requires editing `project.pbxproj`, which currently also holds the owner's uncommitted `DEVELOPMENT_TEAM`
-signing lines. Per the stop condition, this was NOT hand-edited. Apply in Xcode (safe, native):
-1. Project → Info → Configurations → duplicate **Release** → name it **Beta**.
-2. Set the app target's **Based on Configuration File**: Debug/Release → `Development.xcconfig`, Beta →
-   `Beta.xcconfig` (add the `Config/` group as a folder reference first).
-3. Duplicate the shared scheme as **Story (Beta)**; set its **Archive** action to the **Beta** configuration.
-4. Archive with the **Story (Beta)** scheme.
+### 7e. Tracked project integration — DONE (reproducible from a clean checkout)
+The Beta build configuration and archive scheme are now COMMITTED, so a clean checkout archives beta without
+any local Xcode state:
+- `project.pbxproj`: a **Beta** build configuration on the project + all three targets; the app target's
+  Debug/Release use `Config/Development.xcconfig` and **Beta** uses `Config/Beta.xcconfig`
+  (`baseConfigurationReference`). Purely additive — the owner's uncommitted `DEVELOPMENT_TEAM` signing lines
+  were stashed during the edit and restored, never staged.
+- `xcshareddata/xcschemes/Story (Beta).xcscheme`: shared scheme whose **Archive** (and Launch/Profile/Analyze)
+  action uses the **Beta** configuration, with **no EnvironmentVariables block** — the beta backend is baked,
+  not injected by Run-scheme rows.
+- `xcodebuild -list` shows configurations Debug/Release/**Beta** and schemes Story + **Story (Beta)**.
 
-Until this is done, an archive is a dev-labelled release (resolves dev — safe, just not beta). The code gate
-guarantees it can never be a silent-dev **beta**.
+### 7f. Resolved build settings + real archive — VERIFIED
+- `xcodebuild -showBuildSettings -scheme "Story (Beta)" -configuration Beta` resolves: `STORY_BUILD_ENV=beta`,
+  API `https://asxtxgjiis.us-east-1.awsapprunner.com`, pool `us-east-1_3cPNfbrUl`, client
+  `4f3dtn9d0nk5uq1hcvbdc7m73c`, domain `story-beta-auth`, redirect `story://auth`, region `us-east-1`.
+  **Debug** resolves the dev identifiers. (Confirmed in the resolved config, not just the xcconfig — §4.)
+- A real `xcodebuild archive` was run with the Story (Beta) scheme. Its `ProcessInfoPlistFile` step produced
+  the app `Info.plist` with every `$(STORY_*)` substitution resolved to the beta values, and
+  `scripts/verify_beta_archive.sh` passed against that **archive-produced** Info.plist (no dev identifiers, no
+  unresolved tokens). **xcconfig `//` truncation bug found and fixed** (a `//` starts an xcconfig comment) by
+  assembling URLs via a `SLASH` helper.
+- The archive's Swift **compile could not complete in the agent sandbox**: the Swift macro plugin
+  (`@Observable` / SwiftData `@Model`) fails here with "external macro implementation ... could not be found /
+  swift-plugin-server produced malformed response" — and the SAME failure hits the untouched existing
+  `Story`/Debug build (198 occurrences), so it is the known sandbox macro limitation, NOT a defect in this
+  change or the Beta config. A full compiled+signed archive requires the owner's Xcode (where macros run).
 
-### 7f. Pre-archive validator (§7 automation, fail-closed)
-`scripts/verify_beta_archive.sh <Story.app|Info.plist>` inspects the BUILT app's baked `Info.plist` and exits
-non-zero unless `StoryBuildEnv=beta` with all beta identifiers present, no unresolved tokens, and **no dev
-identifier leaked**. Smoke-tested: a beta plist passes; a beta-label-with-dev-pool plist fails. Run it
-post-archive before any upload.
+### 7g. Pre-archive validator (fail-closed)
+`scripts/verify_beta_archive.sh <Story.app|Info.plist|.xcarchive app>` inspects the BUILT app's baked
+`Info.plist` and exits non-zero unless `StoryBuildEnv=beta` with all beta identifiers present, no unresolved
+tokens, and **no dev identifier leaked**. Passed against the real archive Info.plist; a synthetic
+beta-label-with-dev-pool plist fails as expected. The runtime `StoryEnvironment` fail-closed check remains as
+defense in depth.
 
 ## 8. Regression tests (offline)
 - `apps/ios/Story/StoryTests/CognitoSelfSignUpTests.swift` (new, 14 cases): new-user signup, existing-user
