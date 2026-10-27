@@ -131,4 +131,44 @@ final class AssetUnderstandingQueueTests: XCTestCase {
         await q.drain()                                   // immediately: still backed off
         XCTAssertEqual(fa.calls, callsAfterFirst)         // not retried before nextEligibleAt
     }
+
+    // P1-E (§9) — AU completion QUEUES synchronization: a drain batch that completes at least one
+    // understanding fires the push seam exactly once (coalesced), so a mid-session result is pushed without
+    // waiting for the next foreground/sign-in. A drain with NO completion fires nothing.
+    func testDrainCompletionFiresPushSeamOnce() async {
+        let prevAuthed = AssetUnderstandingQueue.sharedIsAuthed
+        let prevPush = AssetUnderstandingQueue.sharedPushUnderstanding
+        defer { AssetUnderstandingQueue.sharedIsAuthed = prevAuthed
+                AssetUnderstandingQueue.sharedPushUnderstanding = prevPush }
+        AssetUnderstandingQueue.sharedIsAuthed = { true }
+        var pushCount = 0
+        AssetUnderstandingQueue.sharedPushUnderstanding = { pushCount += 1 }
+
+        let q = queue(FakeAnalyzer())
+        enqueueTestJob(q, moment: UUID())
+        enqueueTestJob(q, moment: UUID())
+        await q.drain()
+        XCTAssertEqual(pushCount, 1, "two completed understandings coalesce into ONE push, not two")
+
+        // A second drain with nothing eligible completes nothing -> no extra push.
+        await q.drain()
+        XCTAssertEqual(pushCount, 1)
+    }
+
+    func testDrainWithNoCompletionDoesNotPush() async {
+        let prevAuthed = AssetUnderstandingQueue.sharedIsAuthed
+        let prevPush = AssetUnderstandingQueue.sharedPushUnderstanding
+        defer { AssetUnderstandingQueue.sharedIsAuthed = prevAuthed
+                AssetUnderstandingQueue.sharedPushUnderstanding = prevPush }
+        AssetUnderstandingQueue.sharedIsAuthed = { true }
+        var pushCount = 0
+        AssetUnderstandingQueue.sharedPushUnderstanding = { pushCount += 1 }
+
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.unavailableRetryable   // every job fails -> no completion
+        let q = queue(fa)
+        enqueueTestJob(q, moment: UUID())
+        await q.drain()
+        XCTAssertEqual(pushCount, 0, "a drain that completes nothing must not push")
+    }
 }

@@ -378,7 +378,7 @@ struct MusicPickerView: View {
 
     /// Honest subtitle: distinguishes an imported track's backup/restore state from a saved catalog reference
     /// (§7 — never claim "backed up" when only metadata exists).
-    private static func subtitle(for asset: MyMusicAssetModel) -> String {
+    static func subtitle(for asset: MyMusicAssetModel) -> String {
         let dur = time(asset.durationSeconds)
         if asset.isProviderFavorite { return "Saved · \(dur)" }
         switch asset.cloudBackupState {
@@ -393,7 +393,7 @@ struct MusicPickerView: View {
     /// Preview is possible for: an imported track whose bytes exist locally, OR a saved catalog favorite (we
     /// re-resolve its authorized audio on demand). An imported track that is restore_pending/unavailable with
     /// no local bytes cannot preview yet.
-    private static func canPreview(_ asset: MyMusicAssetModel) -> Bool {
+    static func canPreview(_ asset: MyMusicAssetModel) -> Bool {
         if asset.isProviderFavorite { return true }
         return MyMusicStore.shared.exists(asset)
     }
