@@ -157,6 +157,7 @@ SRC_SIZE = 4096
 def ctx(monkeypatch):
     monkeypatch.setenv("STORY_ENVIRONMENT", "development")
     monkeypatch.setenv("STORY_REQUIRE_AUTH", "0")
+    monkeypatch.setenv("STORY_EVIDENCE_PERSIST_ENABLED", "1")   # P1-F: enable server persistence under test
     app = create_app()
     app.state._jwt_verifier_override = FakeVerifier()
     app.state._identity_store_override = FakeIdentityStore()
@@ -291,7 +292,12 @@ def test_missing_blob_is_miss(ctx):
     assert r["available"] is False and r["reason"] == "blob_missing"
 
 
-# ---- §5/§7 deletion: Moment delete removes the package + blob; idempotent; account-scoped ---------
+# ---- §4 activation safety: server flag OFF -> NO durable package written -----------------------
+def test_server_persist_flag_off_writes_nothing(ctx, monkeypatch):
+    client, s3, media, evid = ctx
+    monkeypatch.setenv("STORY_EVIDENCE_PERSIST_ENABLED", "0")   # authoritative server kill-switch
+    assert _au(client, "alice").status_code == 200              # AU still succeeds
+    assert evid.get_manifest(owner="story-alice", moment_id=MID) is None   # but NOTHING persisted
 def test_moment_delete_removes_evidence(ctx):
     client, s3, media, evid = ctx
     assert _au(client, "alice").status_code == 200

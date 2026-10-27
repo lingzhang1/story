@@ -1257,12 +1257,16 @@ def create_app() -> FastAPI:
         )
 
         # P1-F (R1): best-effort PROVISIONAL evidence persistence from the EXACT accepted frames + timestamps.
-        # Gated on (a) an authenticated, non-legacy principal (anonymous AU never creates an account cache) and
-        # (b) a well-formed source-sha CLAIM. NEVER breaks AU: any failure is swallowed and only a privacy-safe
-        # count/flag is logged (no image bytes, no prose). No extra model call. The package is PROVISIONAL —
-        # authority is established at retrieval by matching the account's verified media record (R1 §2/§5).
+        # Gated on: (0) a SERVER env flag STORY_EVIDENCE_PERSIST_ENABLED (DEFAULT OFF) — so NO durable personal-
+        # image package is ever written until the owner turns it on (the iOS client flag does NOT control server
+        # persistence; this is the authoritative kill-switch, §4 activation safety); (a) an authenticated,
+        # non-legacy principal (anonymous AU never creates an account cache); (b) a well-formed source-sha CLAIM.
+        # NEVER breaks AU: any failure is swallowed and only a privacy-safe count/flag is logged (no image bytes,
+        # no prose). No extra model call. The package is PROVISIONAL — authority is established at retrieval by
+        # matching the account's verified media record (R1 §2/§5).
         evidence_cached = False
-        if claimed_sha is not None and not getattr(principal, "is_legacy", True):
+        _persist_enabled = os.environ.get("STORY_EVIDENCE_PERSIST_ENABLED", "0") == "1"
+        if _persist_enabled and claimed_sha is not None and not getattr(principal, "is_legacy", True):
             try:
                 frame_tuples = [(f.t_ms, f.data) for f in au_frames]
                 _evidence_store().put(
@@ -1280,6 +1284,7 @@ def create_app() -> FastAPI:
         log.info("asset_understanding_evidence_cache",
                  extra={"operation": "asset_understanding", "correlation_id": correlation_id,
                         "evidence_cached": evidence_cached, "frame_count": len(au_frames),
+                        "persist_enabled": _persist_enabled,
                         "sha_claim_present": claimed_sha is not None,
                         "authed": not getattr(principal, "is_legacy", True)})
         return au.understanding
