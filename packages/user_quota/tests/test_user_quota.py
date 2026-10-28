@@ -366,3 +366,125 @@ def test_daily_gens_resets_each_utc_day(monkeypatch):
     it = q._ddb.items[("u1", uq._period(t1))]
     assert float(it[uq._day(t1)]["N"]) == 2   # day 1 bucket unchanged
     assert float(it[uq._day(t2)]["N"]) == 1   # day 2 fresh bucket
+
+
+# =========================================================================================================
+# P0 CONCURRENCY RACE (fix/prebeta-concurrency-readiness §3). The old reserve_slot read `active_jobs`, checked
+# the cap in Python, then wrote with ONLY an idempotency guard (attribute_not_exists(#sm)). Two concurrent
+# submits with DIFFERENT job_ids both read the same count and both wrote distinct markers -> over-admission.
+#
+# The pre-existing `test_slots_concurrent_distinct_jobs_cap_respected` did NOT catch this: FakeDDB.update_item
+# holds a lock across the WHOLE read-check-write, collapsing it into one atomic step the real store does not
+# provide (real DynamoDB does the Python get_item OUTSIDE the conditional UpdateItem). The test below models
+# the REAL semantics with a barrier so BOTH reservers complete their get_item BEFORE either conditional write,
+# exactly the production interleave. It passes ONLY because the cap now lives in the ConditionExpression
+# (`#aj < :max`), not in the Python pre-check. Reverting reserve_slot to the idempotency-only guard fails it.
+# =========================================================================================================
+
+def test_reserve_slot_emits_atomic_cap_condition_in_enforce():
+    """STRUCTURAL guard: in enforce mode the slot reserve MUST carry the cap INSIDE the ConditionExpression
+    (`#aj < :max`), not only in the Python pre-check. This is the single line that makes the write atomic;
+    a regression that drops it back to an idempotency-only guard (`attribute_not_exists(#sm)` alone) is
+    caught here regardless of whether an in-process fake can reproduce the distributed interleave."""
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+
+    class CapturingDDB(FakeDDB):
+        def __init__(self): super().__init__(); self.conds = []
+        def update_item(self, **kw):
+            self.conds.append(kw.get("ConditionExpression"))
+            return super().update_item(**kw)
+
+    ddb = CapturingDDB()
+    q = UserQuota(ddb=ddb, usage_table="t", cfg=_cfg(max_active_jobs=2))
+    q.reserve_slot("u1", "j1")
+    assert ddb.conds, "no conditional write emitted"
+    cond = ddb.conds[-1]
+    assert "#aj < :max" in cond, f"cap is NOT in the condition (race!): {cond!r}"
+    assert "attribute_not_exists(#sm)" in cond, "idempotency guard lost"
+
+    # OBSERVE mode must NOT carry the cap condition (it never denies).
+    os.environ["STORY_QUOTA_MODE"] = "observe"
+    ddb2 = CapturingDDB()
+    q2 = UserQuota(ddb=ddb2, usage_table="t", cfg=_cfg(max_active_jobs=1))
+    q2.reserve_slot("u1", "a"); q2.reserve_slot("u1", "b")   # both admitted in observe
+    assert all("#aj < :max" not in (c or "") for c in ddb2.conds), "observe must not enforce the cap"
+    assert float(ddb2.items[("u1", _P())]["active_jobs"]["N"]) == 2
+
+
+def test_slot_race_interleaved_reads_cannot_over_admit():
+    """FAITHFUL interleave model of real DynamoDB: both reservers run their Python `get_item` + cap pre-check
+    against a STALE snapshot (active_jobs=1) BEFORE either conditional write commits, then the writes commit
+    one after another. Real DynamoDB evaluates each ConditionExpression against the LATEST committed item, not
+    the caller's stale read — so the second write sees active_jobs already at the cap and is rejected.
+
+    The `DeferredWriteDDB` reproduces exactly that: `get_item` returns the pre-write snapshot for BOTH racers
+    (so both pass the Python pre-check on the stale count), while `update_item` evaluates the condition and
+    mutates against the live item under a lock (so the committed state advances between the two writes). With
+    the atomic guard the second reserve is denied; WITHOUT it (idempotency-only) both commit and active_jobs
+    reaches 3 — i.e. this test FAILS against the pre-fix code, which is what makes it a real regression guard."""
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+
+    class DeferredWriteDDB(FakeDDB):
+        """Forces the stale-read interleave: the first get_item per racer returns a FROZEN snapshot taken
+        before any racer wrote, so both racers' Python pre-checks see active_jobs=1. Writes still evaluate
+        the condition against the LIVE item (real DynamoDB semantics), so the cap condition is the only thing
+        that can stop over-admission."""
+        def __init__(self):
+            super().__init__()
+            self._frozen = None
+            self._freeze_for = set()
+        def arm(self, racers):
+            # Snapshot the current state; every racer's first user-item read returns this frozen view.
+            import copy as _copy
+            self._frozen = _copy.deepcopy(self.items.get(("u1", _P())))
+            self._freeze_for = set(racers)
+        def get_item(self, TableName, Key):
+            if (self._frozen is not None and Key["story_user_id"]["S"] == "u1"):
+                import copy as _copy
+                return {"Item": _copy.deepcopy(self._frozen)}
+            return super().get_item(TableName=TableName, Key=Key)
+
+    ddb = DeferredWriteDDB()
+    q = UserQuota(ddb=ddb, usage_table="t", cfg=_cfg(max_active_jobs=2))
+    q.reserve_slot("u1", "seed")    # active_jobs -> 1 (not frozen yet)
+    ddb.arm(racers={"raceA", "raceB"})   # from here, every u1 read returns the active_jobs=1 snapshot
+
+    results = {}
+    for j in ("raceA", "raceB"):
+        try:
+            q.reserve_slot("u1", j)
+            results[j] = "granted"
+        except QuotaDenied:
+            results[j] = "denied"
+
+    final = float(ddb.items[("u1", _P())]["active_jobs"]["N"])
+    assert final == 2, f"over-admitted past cap: active_jobs={final} (expected 2)"
+    assert sorted(results.values()) == ["denied", "granted"], results
+
+
+def test_slot_failed_submit_after_reservation_releases(monkeypatch):
+    """§3: a submit that reserves a slot then fails downstream (enqueue error) must not leak the slot. The
+    worker_release / release_slot path reverses it; here we assert release after a held reserve frees it."""
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_cfg(max_active_jobs=1))
+    assert q.reserve_slot("u1", "j1") is True
+    # downstream failure -> release (worker_release on FAILED, or the submit path on an enqueue error)
+    q.release_slot("u1", "j1")
+    assert float(q._ddb.items[("u1", _P())]["active_jobs"]["N"]) == 0
+    assert q.reserve_slot("u1", "j2") is True   # the freed slot is reusable (no permanent block)
+
+
+def test_slot_redelivery_then_terminal_never_negative():
+    """§3 worker retry/redelivery + concurrent release: a slot decrements at most once even under a double
+    terminal transition racing a redelivered reserve. Final count is non-negative and correct."""
+    os.environ["STORY_QUOTA_MODE"] = "enforce"
+    q = _q(_cfg(max_active_jobs=2))
+    q.reserve_slot("u1", "j1")
+    q.reserve_slot("u1", "j1")   # SQS redelivery of the same job -> still 1 (idempotent)
+    assert float(q._ddb.items[("u1", _P())]["active_jobs"]["N"]) == 1
+    # concurrent terminal transitions (completion racing a cancel) both call release_slot
+    def rel(): q.release_slot("u1", "j1")
+    ts = [threading.Thread(target=rel) for _ in range(4)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert float(q._ddb.items[("u1", _P())]["active_jobs"]["N"]) == 0   # exactly once, never negative
