@@ -202,11 +202,58 @@ final class AssetUnderstandingQueue {
             try? context.save()
             // Transient derived frames are released here (never persisted).
         } catch {
-            // Failure / interruption -> back to PENDING with bounded backoff.
-            job.attempts += 1
+            // Classify the failure to decide RETRY vs STOP (pre-beta AU-429 hardening). All state uses the
+            // EXISTING persisted fields (attempts / nextEligibleAt / lastError / state) so the SwiftData
+            // @Model shape is UNCHANGED (no migration; honors the FROZEN model + device-build gate).
             job.lastError = String(describing: error).prefix(300).description
-            job.state = .pending
-            job.nextEligibleAt = Date().addingTimeInterval(backoff(for: job.attempts))
+            let auErr = error as? AssetUnderstandingServiceError
+
+            if case let .quotaExhausted(scope)? = auErr {
+                // An ALLOWANCE is spent (daily gens / monthly USD / global breaker). Retrying now cannot
+                // succeed — the cap clears when the PERIOD rolls over. Park the job PENDING but ineligible
+                // until the next UTC-day boundary (the daily cap's reset; monthly/global clear later, re-checked
+                // cheaply once a day). Do NOT burn an attempt — this is not a failure of the work, and we must
+                // not let an exhausted cap push the job toward a hard-error ceiling.
+                job.state = .pending
+                job.nextEligibleAt = Self.nextUtcDayBoundary(after: Date())
+                job.lastError = "quota_exhausted:\(scope) (deferred to next day)"
+                job.updatedAt = .now
+                try? context.save()
+                return
+            }
+
+            if case let .rateLimited(retryAfter)? = auErr {
+                // TEMPORARY per-user rate cap (ai_sync 20/min window). Retryable: wait at least the server's
+                // Retry-After, but never less than our own exponential backoff, plus jitter to avoid a
+                // thundering-herd re-fire of a bulk import all coming eligible at the same instant. We reuse
+                // the EXISTING `attempts` counter for the backoff curve (no new @Model field -> no migration);
+                // a rate limit advancing `attempts` only lengthens its own backoff, which is the desired
+                // self-throttling under sustained 429s and still clears to COMPLETE on the first 200.
+                job.attempts += 1
+                let serverWait = TimeInterval(max(0, retryAfter ?? 0))
+                let base = max(serverWait, backoff(for: job.attempts))
+                job.state = .pending
+                job.nextEligibleAt = Date().addingTimeInterval(Self.withJitter(base))
+                job.updatedAt = .now
+                try? context.save()
+                return
+            }
+
+            // Transient (503 / transport) OR a hard error (badStatus / decoding). Transient errors are
+            // retryable with bounded exponential backoff + jitter. A hard error is NOT expected to clear by
+            // retrying; bound it by attempts so the queue stops hammering it (parks far out once the ceiling
+            // is reached) while still surviving a restart (state persists).
+            job.attempts += 1
+            let retryable = auErr?.isRetryable ?? true   // unknown (non-AU) error -> treat as transient
+            if !retryable && job.attempts >= Self.maxHardAttempts {
+                // Permanent-looking failure that exhausted its bounded attempts: park far out (no terminal
+                // state exists in the FROZEN model, so a distant nextEligibleAt is the no-migration stop).
+                job.state = .pending
+                job.nextEligibleAt = Date().addingTimeInterval(Self.hardErrorParkInterval)
+            } else {
+                job.state = .pending
+                job.nextEligibleAt = Date().addingTimeInterval(Self.withJitter(backoff(for: job.attempts)))
+            }
             job.updatedAt = .now
             try? context.save()
         }
@@ -283,6 +330,32 @@ final class AssetUnderstandingQueue {
     private func backoff(for attempts: Int) -> TimeInterval {
         let exp = baseBackoff * pow(4.0, Double(max(0, attempts - 1)))
         return min(exp, maxBackoff)
+    }
+
+    // MARK: - AU-429 retry policy helpers (pre-beta hardening; no @Model change)
+
+    /// Hard (non-retryable) errors — a bad status or an undecodable body — are not expected to clear by
+    /// retrying. Bound them so the queue stops hammering after a few attempts, then parks the job far out.
+    static let maxHardAttempts = 4
+    /// Where a hard error parks once its bounded attempts are spent (effectively "stop, but survive a restart
+    /// and allow a much-later re-check" — there is no terminal-fail state in the FROZEN model to migrate to).
+    static let hardErrorParkInterval: TimeInterval = 24 * 60 * 60
+
+    /// Full-jitter on a backoff interval: a uniform random in [base/2, base]. Prevents a bulk import whose
+    /// jobs all fail a rate-limit window at once from coming eligible on the same instant and re-bursting.
+    static func withJitter(_ base: TimeInterval) -> TimeInterval {
+        guard base > 0 else { return 0 }
+        return base / 2 + Double.random(in: 0...(base / 2))
+    }
+
+    /// The next 00:00:00 UTC boundary strictly after `date`. A quota-exhausted job defers to here because the
+    /// per-user DAILY generation allowance resets on the UTC day; monthly/global caps clear later but a daily
+    /// re-check is a cheap, bounded way to resume without spinning.
+    static func nextUtcDayBoundary(after date: Date) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let start = cal.startOfDay(for: date)
+        return cal.date(byAdding: .day, value: 1, to: start) ?? date.addingTimeInterval(24 * 60 * 60)
     }
 
     /// P1-F (R1): full-file sha256 of the source clip, computed OFF the main actor on a background task so the
