@@ -177,4 +177,149 @@ final class AssetUnderstandingQueueTests: XCTestCase {
         await q.drain()
         XCTAssertEqual(pushCount, 0, "a drain that completes nothing must not push")
     }
+
+    // =====================================================================================================
+    // Pre-beta AU-429 hardening: a TEMPORARY rate limit is retried (honoring Retry-After + jitter); an
+    // EXHAUSTED allowance is NOT retried this session (deferred to the next UTC day); a HARD error is bounded.
+    // All state uses the existing persisted fields, so these also prove retry state survives a restart.
+    // =====================================================================================================
+
+    func testRateLimited429ReturnsToPendingAndRetries() async {
+        // A 429 rate_limited -> PENDING with a future nextEligibleAt (>= server Retry-After), NOT a terminal
+        // failure and NOT a fabricated understanding. Then a later eligible drain succeeds.
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.rateLimited(retryAfter: 30)
+        let q = queue(fa)
+        let m = UUID()
+        enqueueTestJob(q, moment: m)
+        let t0 = Date()
+        await q.drain()
+        let job = jobs().first { $0.momentId == m }!
+        XCTAssertEqual(job.state, .pending)
+        XCTAssertTrue(understandings().isEmpty)
+        // Honored Retry-After: eligible no sooner than ~Retry-After/2 (full-jitter lower bound of base=30).
+        XCTAssertGreaterThanOrEqual(job.nextEligibleAt.timeIntervalSince(t0), 15 - 1)
+        // Now simulate the window passing and the rate limit clearing -> completes.
+        fa.error = nil
+        job.nextEligibleAt = .distantPast
+        try? ctx.save()
+        await q.drain()
+        XCTAssertEqual(jobs().first { $0.momentId == m }?.state, .complete)
+        XCTAssertEqual(understandings().filter { $0.momentId == m }.count, 1)
+    }
+
+    func testRateLimited429WithoutRetryAfterStillUsesBackoff() async {
+        // No Retry-After header -> fall back to our own exponential backoff (never 0, so it can't hot-loop).
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.rateLimited(retryAfter: nil)
+        let q = queue(fa)
+        let m = UUID()
+        enqueueTestJob(q, moment: m)
+        let t0 = Date()
+        await q.drain()
+        let job = jobs().first { $0.momentId == m }!
+        XCTAssertEqual(job.state, .pending)
+        XCTAssertGreaterThan(job.nextEligibleAt.timeIntervalSince(t0), 0)  // bounded, non-zero
+    }
+
+    func testQuotaExhausted429IsNotRetriedThisSession() async {
+        // 429 quota_exceeded -> PENDING but deferred to the NEXT UTC DAY (the daily allowance reset), NOT
+        // retried immediately, and WITHOUT burning a hard-error attempt. Retrying a spent cap can never
+        // succeed until the period rolls over, so an immediate re-drain must NOT call the analyzer again.
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.quotaExhausted(scope: "user_daily_gens")
+        let q = queue(fa)
+        let m = UUID()
+        enqueueTestJob(q, moment: m)
+        await q.drain()
+        let callsAfterFirst = fa.calls
+        let job = jobs().first { $0.momentId == m }!
+        XCTAssertEqual(job.state, .pending)
+        XCTAssertEqual(job.attempts, 0, "a spent allowance must not count as a work-failure attempt")
+        XCTAssertEqual(job.nextEligibleAt, AssetUnderstandingQueue.nextUtcDayBoundary(after: job.updatedAt))
+        XCTAssertTrue(understandings().isEmpty)
+        // Immediate re-drain: still deferred (eligibility is tomorrow) -> analyzer NOT called again.
+        await q.drain()
+        XCTAssertEqual(fa.calls, callsAfterFirst, "exhausted-quota job must not be retried this session")
+    }
+
+    func testHardErrorIsBoundedByAttempts() async {
+        // A non-retryable hard error (badStatus) retries a bounded number of times then parks far out, so the
+        // queue never hammers a permanently-bad job. Each eligible drain advances attempts; after the ceiling
+        // the next-eligible jumps to the long park interval.
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.badStatus(400)
+        let q = queue(fa)
+        let m = UUID()
+        enqueueTestJob(q, moment: m)
+        for _ in 0..<AssetUnderstandingQueue.maxHardAttempts {
+            let job = jobs().first { $0.momentId == m }!
+            job.nextEligibleAt = .distantPast   // force eligible each iteration
+            try? ctx.save()
+            await q.drain()
+        }
+        let job = jobs().first { $0.momentId == m }!
+        XCTAssertGreaterThanOrEqual(job.attempts, AssetUnderstandingQueue.maxHardAttempts)
+        // Parked far out (>= ~ the hard-error park interval), not re-firing immediately.
+        XCTAssertGreaterThan(job.nextEligibleAt.timeIntervalSinceNow,
+                             AssetUnderstandingQueue.hardErrorParkInterval - 60)
+        XCTAssertTrue(understandings().isEmpty)
+    }
+
+    func testRetryStateSurvivesRestart() async {
+        // A rate-limited job's PENDING + nextEligibleAt persists; a FRESH queue over the SAME store (models an
+        // app restart) sees it and does not lose it or re-run it before it is eligible.
+        let fa = FakeAnalyzer()
+        fa.error = AssetUnderstandingServiceError.rateLimited(retryAfter: 60)
+        let q1 = queue(fa)
+        let m = UUID()
+        enqueueTestJob(q1, moment: m)
+        await q1.drain()
+        let before = jobs().first { $0.momentId == m }!
+        XCTAssertEqual(before.state, .pending)
+        let eligibleAt = before.nextEligibleAt
+
+        // "Restart": a brand-new queue instance over the same ModelContext/store.
+        let fa2 = FakeAnalyzer()   // would succeed, but the job is not yet eligible
+        let q2 = AssetUnderstandingQueue(context: ctx, service: fa2, extractFrames: fakeFrames(),
+                                         isAuthed: { true })
+        q2.recoverOrphans()
+        await q2.drain()
+        let after = jobs().first { $0.momentId == m }!
+        XCTAssertEqual(after.state, .pending)                 // preserved, not lost
+        XCTAssertEqual(after.nextEligibleAt, eligibleAt)      // same scheduled time
+        XCTAssertEqual(fa2.calls, 0, "not retried before its persisted nextEligibleAt")
+    }
+
+    // Pure deterministic helpers / classifier (no SwiftData needed).
+
+    func testErrorIsRetryableClassification() {
+        XCTAssertTrue(AssetUnderstandingServiceError.rateLimited(retryAfter: 1).isRetryable)
+        XCTAssertTrue(AssetUnderstandingServiceError.unavailableRetryable.isRetryable)
+        XCTAssertTrue(AssetUnderstandingServiceError.transport(URLError(.timedOut)).isRetryable)
+        XCTAssertFalse(AssetUnderstandingServiceError.quotaExhausted(scope: "user_daily_gens").isRetryable)
+        XCTAssertFalse(AssetUnderstandingServiceError.badStatus(400).isRetryable)
+    }
+
+    func testWithJitterStaysInHalfToFullRange() {
+        for base in [4.0, 30.0, 600.0] {
+            for _ in 0..<50 {
+                let j = AssetUnderstandingQueue.withJitter(base)
+                XCTAssertGreaterThanOrEqual(j, base / 2 - 0.0001)
+                XCTAssertLessThanOrEqual(j, base + 0.0001)
+            }
+        }
+        XCTAssertEqual(AssetUnderstandingQueue.withJitter(0), 0)
+    }
+
+    func testNextUtcDayBoundaryIsStrictlyAfterAndMidnight() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date()
+        let b = AssetUnderstandingQueue.nextUtcDayBoundary(after: now)
+        XCTAssertGreaterThan(b, now)
+        let comps = cal.dateComponents([.hour, .minute, .second], from: b)
+        XCTAssertEqual(comps.hour, 0); XCTAssertEqual(comps.minute, 0); XCTAssertEqual(comps.second, 0)
+        XCTAssertLessThanOrEqual(b.timeIntervalSince(now), 24 * 60 * 60 + 1)
+    }
 }
