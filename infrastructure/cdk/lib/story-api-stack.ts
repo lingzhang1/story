@@ -305,12 +305,13 @@ export class StoryApiStack extends cdk.Stack {
         STORY_JOBS_QUEUE_URL: jobsQueue.queueUrl,
         STORY_STAGING_BUCKET: stagingBucket.bucketName,
         STORY_WORKER_DEADLINE_S: "840",
-        // EditPlan planner version. DEV runs v5.3 (consumes Rich AU v2 editorial candidates + editorial_type);
-        // beta/gamma/prod stay on v5.2 until promoted. DURABLE in CDK — a manual console/CLI env flip is wiped
-        // by the next `cdk deploy` (App Runner/Lambda env is a full replace), which is exactly how dev silently
-        // reverted 5.3->5.2 after P1-C set it by hand. Override with `-c editPlanVersion=5.2` to roll back.
+        // EditPlan planner version. DEV + BETA run v5.3 (consumes Rich AU v2 editorial candidates +
+        // editorial_type); gamma/prod stay on v5.2 until promoted. DURABLE in CDK — a manual console/CLI env
+        // flip is wiped by the next `cdk deploy` (App Runner/Lambda env is a full replace), which is exactly
+        // how dev silently reverted 5.3->5.2 after P1-C set it by hand. Override with `-c editPlanVersion=5.2`
+        // to roll a given env back.
         STORY_EDIT_PLAN_VERSION: (this.node.tryGetContext("editPlanVersion") as string)
-          ?? (environment === "development" ? "5.3" : "5.2"),
+          ?? ((environment === "development" || environment === "beta") ? "5.3" : "5.2"),
         STORY_LLM_FALLBACK_MODEL: "us.anthropic.claude-sonnet-4-6",
         // P0 direct-provider mode: default DIRECT (OpenAI/Gemini) for ALL envs. Anthropic revoked Bedrock
         // model access on an abuse determination, so Bedrock is no longer a viable default anywhere — the
@@ -318,10 +319,12 @@ export class StoryApiStack extends cdk.Stack {
         // only if Bedrock access is restored. Keys are read in-process from Secrets Manager (YoTale-OpenAI-API-Key,
         // YoTale-Gemini-API-Key); both the API instance role and the worker role are granted GetSecretValue.
         STORY_MODEL_PROVIDER: (this.node.tryGetContext("modelProvider") as string) ?? "direct",
-        ...((this.node.tryGetContext("openaiModel") as string)
-          ? { STORY_OPENAI_MODEL: this.node.tryGetContext("openaiModel") as string } : {}),
-        ...((this.node.tryGetContext("geminiModel") as string)
-          ? { STORY_GEMINI_MODEL: this.node.tryGetContext("geminiModel") as string } : {}),
+        // Model ids MUST match the service defaults (lines below in the App Runner env): in `direct` mode the
+        // async worker needs its own model id or the ModelGateway falls back to a hardcoded gpt-4o — which is
+        // exactly what happened on beta (worker planned on gpt-4o while the service used gpt-5.1). Set the same
+        // unconditional defaults here, still overridable per-deploy via `-c openaiModel=`/`-c geminiModel=`.
+        STORY_OPENAI_MODEL: (this.node.tryGetContext("openaiModel") as string) ?? "gpt-5.1",
+        STORY_GEMINI_MODEL: (this.node.tryGetContext("geminiModel") as string) ?? "gemini-3.8-flash",
         // Reconcile the deployed-vs-source drift (Phase B/C finding): the live dev worker carries the four
         // EditPlan v2 creative-freedom flags = "1". They are part of the FROZEN EditPlan v2 behavior and must
         // not be dropped by this deploy. Context-gated (editplanV2Flags), defaulting ON so the dev deploy
@@ -527,19 +530,21 @@ export class StoryApiStack extends cdk.Stack {
               // in CDK; `-c editPlanVersion=5.2` rolls dev back.
               { name: "STORY_EDIT_PLAN_VERSION",
                 value: (this.node.tryGetContext("editPlanVersion") as string)
-                  ?? (environment === "development" ? "5.3" : "5.2") },
+                  ?? ((environment === "development" || environment === "beta") ? "5.3" : "5.2") },
               { name: "STORY_LLM_FALLBACK_MODEL", value: "us.anthropic.claude-sonnet-4-6" },
               // P1-F reusable AU visual evidence — SERVER persistence gate (default OFF everywhere). This is the
               // authoritative kill-switch: when "0" the AU endpoint writes NO durable personal-frame package
               // even if an authed client sends a content_sha256 claim. DURABLE in CDK (an App Runner env is a
               // full-replace on every deploy, so a manual console/CLI set is wiped by the next `cdk deploy`).
-              // Enable for DEV device testing with `-c evidencePersist=1`; beta/gamma/prod stay OFF until a
-              // retention/account-deletion policy is approved. Pair with the iOS Run-scheme flag
+              // Enable for DEV + BETA (owner promoted beta 2026-10-27 for TestFlight reusable-evidence
+              // testing); gamma/prod stay OFF until a retention/account-deletion policy is approved. NOTE:
+              // account-deletion is still design-only — beta now durably stores testers' personal frames.
+              // Override a given env with `-c evidencePersist=0` to roll back. Pair with the iOS Run-scheme flag
               // STORY_REUSABLE_EVIDENCE=1 (device-side; this server flag alone only persists, it does not make
               // the client reuse).
               { name: "STORY_EVIDENCE_PERSIST_ENABLED",
                 value: ((this.node.tryGetContext("evidencePersist") as string) === "1"
-                        || (environment === "development"
+                        || ((environment === "development" || environment === "beta")
                             && (this.node.tryGetContext("evidencePersist") as string) !== "0")) ? "1" : "0" },
               // P0 direct-provider mode (Anthropic-Bedrock-revocation contingency). DURABLE in CDK so a
               // redeploy does not silently drop it back to bedrock (that regression broke all dev AI once —

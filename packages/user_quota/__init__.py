@@ -397,13 +397,25 @@ class UserQuota:
                 return True  # already holds a slot — idempotent
             names = {"#sm": marker, "#aj": "active_jobs"}
             values = {":held": {"M": {"state": {"S": "held"}}}, ":one": {"N": "1"}}
+            # ATOMIC CAP (P0 concurrency fix). The old code checked `cur_active + 1 > max` in Python and then
+            # wrote with ONLY an idempotency guard (`attribute_not_exists(#sm)`). Two concurrent submits with
+            # DIFFERENT job_ids both read the same `active_jobs=N`, both passed the Python check, and both wrote
+            # distinct markers -> `active_jobs` over-admitted past the cap (the race §3 describes). The fix folds
+            # the cap INTO the conditional write as a COMPARISON (`#aj < :max`), which DynamoDB DOES support —
+            # only ARITHMETIC (`#aj + :one`) is rejected with a ValidationException. Because the counter moves
+            # by exactly +1 per slot, `#aj < :max` BEFORE the `ADD :one` is equivalent to `(#aj + 1) <= :max`
+            # AFTER, so the single-item conditional update serializes concurrent reservers and admits at most
+            # `max` slots. The Python pre-check is KEPT as a cheap early-out (avoids a wasted write when the
+            # user is clearly at the cap) but is no longer the authoritative guard — the condition is.
+            cond = "attribute_not_exists(#sm)"  # idempotency guard (per-job exactly-once)
             if enforce:
-                # Cap check in APP CODE — DynamoDB conditions cannot contain arithmetic (`+`). The old
-                # `(if_not_exists(#aj,:z) + :one) <= :max` was rejected with a ValidationException at runtime.
                 cur_active = float(item.get("active_jobs", {}).get("N", "0"))
                 if cur_active + 1 > c.max_active_jobs:
-                    raise QuotaDenied("active_jobs")
-            cond = "attribute_not_exists(#sm)"  # idempotency guard only
+                    raise QuotaDenied("active_jobs")  # early-out; the condition below is the real guard
+                # Authoritative atomic cap: admit only if the stored counter is still below max. A missing
+                # attribute (first ever slot) counts as 0 via attribute_not_exists.
+                cond = "attribute_not_exists(#sm) AND (attribute_not_exists(#aj) OR #aj < :max)"
+                values[":max"] = {"N": str(int(c.max_active_jobs))}
             self._c().update_item(
                 TableName=self.usage_table, Key=self._key(story_user_id, period),
                 UpdateExpression="ADD #aj :one SET #sm = :held",
@@ -414,6 +426,10 @@ class UserQuota:
             raise
         except Exception as e:  # noqa: BLE001
             if _is_conditional_failure(e):
+                # The conditional write was rejected. Distinguish the two reasons: (a) this job already holds a
+                # slot (idempotent success — a redelivery/retry raced the first write), vs (b) the cap guard
+                # `#aj < :max` failed (genuine over-cap denial). Re-read and decide; NEVER report a cap denial
+                # for a job that in fact holds its slot.
                 again = self._c().get_item(
                     TableName=self.usage_table, Key=self._key(story_user_id, period)).get("Item") or {}
                 if again.get(marker, {}).get("M", {}).get("state", {}).get("S") == "held":
