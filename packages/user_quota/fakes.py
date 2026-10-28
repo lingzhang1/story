@@ -58,6 +58,14 @@ class FakeDDB:
                 raise Cancel()
             if "attribute_not_exists(#gm)" in cond and names.get("#gm", "") in it:
                 raise Cancel()
+            # Atomic active-job cap (P0 concurrency fix): the reserve emits
+            # `attribute_not_exists(#sm) AND (attribute_not_exists(#aj) OR #aj < :max)`.
+            # `#aj < :max` is a COMPARISON (valid in a DynamoDB condition); model it so a concurrent
+            # over-admission is rejected here exactly as real DynamoDB would reject it.
+            if "#aj < :max" in cond and ":max" in vals:
+                mx = float(vals[":max"]["N"])
+                if num("active_jobs") >= mx:
+                    raise Cancel()
             for mk in ("#r", "#sm", "#gm"):
                 if f"{mk}.#st = :reserved" in cond:
                     st = it.get(names[mk], {}).get("M", {}).get("state", {}).get("S")
