@@ -187,19 +187,33 @@ def price_lookup(
     return (0.0, False)
 
 
-# USD per 1M tokens (in, out). ESTIMATE ONLY — keep in sync with Bedrock pricing; drift is an
-# accepted limitation (amendment 2). Substring match against the full model id.
+# USD per 1M tokens (in, out). ESTIMATE ONLY — keep in sync with each provider's published list price;
+# drift is an accepted limitation (amendment 2). Substring match against the full model id, FIRST match
+# wins (dict insertion order) — so list the MORE SPECIFIC id before a prefix that would also match it
+# (e.g. "gpt-5.1" before any "gpt-5", "gpt-4o" distinct from gpt-5). Direct-provider models (OpenAI/Gemini)
+# are the live default under STORY_MODEL_PROVIDER=direct; before they were added here every direct-provider
+# generation priced to $0.0 + priced=False (MissingModelPricing) and under-reported real spend.
 _DEFAULT_PRICING: dict[str, tuple[float, float]] = {
+    # --- Bedrock Anthropic (fallback / legacy) ---
     "opus-4": (15.0, 75.0),
     "sonnet-4": (3.0, 15.0),
     "haiku": (0.80, 4.0),
+    # --- OpenAI direct (GPT-5-era; published list price USD/Mtok) ---
+    "gpt-5.1": (1.25, 10.0),
+    "gpt-5": (1.25, 10.0),          # any other gpt-5.x variant
+    "gpt-4o": (2.50, 10.0),         # legacy direct default (still seen as served_by in older jobs)
+    # --- Google Gemini direct (published list price USD/Mtok, standard <=200k context tier) ---
+    "gemini-3.8-flash": (0.30, 2.50),
+    "gemini-3": (0.30, 2.50),       # other gemini-3.x flash variants
+    "gemini-1.5-pro": (1.25, 5.0),  # legacy routing default
+    "gemini": (0.30, 2.50),         # catch-all flash-class fallback (keep LAST so specific ids win)
 }
 
 # Versioned pricing assumptions (Phase 1 requirement "versioned pricing assumptions"). Bump this whenever
 # _DEFAULT_PRICING changes so a cost figure in CloudWatch is traceable to the assumption that produced it.
 # Emitted on the AI metric line as `pricing_version` (a LOG field, not a metric dimension — it is not
 # low-cardinality-bounded the way a dimension must be, and cost is already dimensioned by model_id).
-PRICING_VERSION = "beta-pricing/2026-10-21"
+PRICING_VERSION = "beta-pricing/2026-11-01-direct-providers"
 
 
 # PII / sensitive keys that must NEVER appear in a structured log line (amendment 5 + Phase 2 "do not emit raw

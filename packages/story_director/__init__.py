@@ -37,6 +37,7 @@ from model_gateway import (
     StructuredOutputError,
     StructuredRequest,
     StructuredResult,
+    Usage,
 )
 
 PROMPT_VERSION = "story_director/v1"
@@ -129,6 +130,14 @@ class RealStoryDirectorEngine:
         self._system = _load_system_prompt()
         self._schema = _envelope_schema()
         self._max_repair_attempts = max_repair_attempts
+        # Token/cost accounting surface for the "AI Idea" (Director) capability. Mirrors the
+        # `last_diagnostics` pattern used by the edit planner / AU engines: the frozen DirectorOutput
+        # contract carries no usage, so the last call's usage is exposed HERE for the API layer to log
+        # (privacy-safe token COUNTS + served model only). Populated by _to_output on every call; None
+        # until the first call. Without this, direct-provider Director spend was never measured.
+        self.last_usage: Usage | None = None
+        self.last_model: str | None = None
+        self.last_provider: str | None = None
 
     # ---- requests ----------------------------------------------------------
 
@@ -219,6 +228,11 @@ class RealStoryDirectorEngine:
     # ---- validation --------------------------------------------------------
 
     def _to_output(self, result: StructuredResult) -> DirectorOutput:
+        # Capture the call's token usage + served model for cost accounting BEFORE validation,
+        # so even a validation failure's spend is attributable from the engine instance.
+        self.last_usage = result.usage
+        self.last_model = result.model
+        self.last_provider = result.provider
         data = self._mint_ids(dict(result.data))
         try:
             out = DirectorOutput.model_validate(data)

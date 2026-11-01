@@ -2300,17 +2300,24 @@ def create_app() -> FastAPI:
                    "has_story_idea": cov.story_idea is not None})
         return cov
 
-    def _director_log(op: str, out, started, correlation_id):
-        log.info(
-            "director_resolved",
-            extra={
-                "operation": op, "correlation_id": correlation_id,
-                "prompt_version": DIR_PROMPT_VERSION, "schema_version": DIR_SCHEMA_VERSION,
-                "latency_ms": round((time.monotonic() - started) * 1000), "success": True,
-                "decision_action": out.decision.action.value,
-                "beat_count": len(out.plan.beats), "shot_count": len(out.plan.shots),
-            },
-        )
+    def _director_log(op: str, out, started, correlation_id, engine=None):
+        # AI-Idea (Director) token usage + served model for cost accounting — the sync counterpart of the
+        # AU `input_tokens`/`output_tokens`/`model` log line and the worker's `bedrock_usage`. Privacy-safe:
+        # token COUNTS + model id only (both on the observability PII allow-list), never prompts/media.
+        # Read from the engine's `last_usage`/`last_model` (the frozen DirectorOutput carries no usage).
+        usage = getattr(engine, "last_usage", None) if engine is not None else None
+        extra = {
+            "operation": op, "correlation_id": correlation_id,
+            "prompt_version": DIR_PROMPT_VERSION, "schema_version": DIR_SCHEMA_VERSION,
+            "latency_ms": round((time.monotonic() - started) * 1000), "success": True,
+            "decision_action": out.decision.action.value,
+            "beat_count": len(out.plan.beats), "shot_count": len(out.plan.shots),
+            "model": getattr(engine, "last_model", None) if engine is not None else None,
+            "served_provider": getattr(engine, "last_provider", None) if engine is not None else None,
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+        }
+        log.info("director_resolved", extra=extra)
 
     def _director_fail(op, e, started, correlation_id, kind):
         log.warning(
@@ -2339,7 +2346,7 @@ def create_app() -> FastAPI:
             _director_fail("initialize", e, started, cid, "structured_output_failed")
         except ProviderError as e:
             _director_fail("initialize", e, started, cid, "provider_error")
-        _director_log("initialize", out, started, cid)
+        _director_log("initialize", out, started, cid, engine)
         return out
 
     @app.post("/v1/director/next", response_model=DirectorOutput, status_code=200)
@@ -2357,7 +2364,7 @@ def create_app() -> FastAPI:
             _director_fail("next", e, started, cid, "structured_output_failed")
         except ProviderError as e:
             _director_fail("next", e, started, cid, "provider_error")
-        _director_log("next", out, started, cid)
+        _director_log("next", out, started, cid, engine)
         return out
 
     @app.post("/v1/stories", response_model=StoryDTO, status_code=201)
